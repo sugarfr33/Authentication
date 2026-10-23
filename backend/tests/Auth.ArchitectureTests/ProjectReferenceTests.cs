@@ -13,7 +13,7 @@ public class ProjectReferenceTests
     [InlineData("Auth.Contracts", new string[0])]
     public void Project_references_match_dependency_rules(string project, string[] expected)
     {
-        var actual = ReadProjectReferences(project);
+        IEnumerable<string> actual = ReadProjectReferences(project);
 
         Assert.Equal(expected.Order(StringComparer.Ordinal), actual.Order(StringComparer.Ordinal));
     }
@@ -25,7 +25,7 @@ public class ProjectReferenceTests
     [InlineData("Auth.Contracts")]
     public void Only_DAL_references_EntityFrameworkCore_packages(string project)
     {
-        var packages = XDocument.Load(RepoPaths.ProjectFile(project))
+        IEnumerable<string> packages = XDocument.Load(RepoPaths.ProjectFile(project))
             .Descendants("PackageReference")
             .Select(p => (string?)p.Attribute("Include") ?? string.Empty);
 

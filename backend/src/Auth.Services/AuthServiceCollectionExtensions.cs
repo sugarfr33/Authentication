@@ -14,7 +14,7 @@ public static class AuthServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var connectionString = configuration.GetConnectionString("CentralAuth")
+        string connectionString = configuration.GetConnectionString("CentralAuth")
             ?? throw new InvalidOperationException("Connection string 'CentralAuth' is not configured.");
 
         services.AddDataAccess(connectionString);

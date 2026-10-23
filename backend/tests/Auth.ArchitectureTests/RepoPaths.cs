@@ -10,7 +10,7 @@ internal static class RepoPaths
 
     private static string FindBackendRoot()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        DirectoryInfo? dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Auth.sln")))
         {
             dir = dir.Parent;

@@ -27,7 +27,7 @@ public class LayerDependencyTests
     [MemberData(nameof(ForbiddenDependencies))]
     public void Types_do_not_depend_on_forbidden_layers(string assemblyName, string[] forbidden)
     {
-        var result = Types.InAssembly(Resolve(assemblyName))
+        TestResult result = Types.InAssembly(Resolve(assemblyName))
             .ShouldNot()
             .HaveDependencyOnAny(forbidden)
             .GetResult();
@@ -39,7 +39,7 @@ public class LayerDependencyTests
     [MemberData(nameof(ForbiddenDependencies))]
     public void Assembly_does_not_reference_forbidden_assemblies(string assemblyName, string[] forbidden)
     {
-        var referenced = Resolve(assemblyName).GetReferencedAssemblies().Select(a => a.Name ?? string.Empty);
+        IEnumerable<string> referenced = Resolve(assemblyName).GetReferencedAssemblies().Select(a => a.Name ?? string.Empty);
 
         Assert.DoesNotContain(referenced, r => forbidden.Any(f => r.StartsWith(f, StringComparison.Ordinal)));
     }

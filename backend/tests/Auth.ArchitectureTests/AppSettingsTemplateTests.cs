@@ -11,7 +11,7 @@ public class AppSettingsTemplateTests
     [Fact]
     public void Example_appsettings_is_valid_json()
     {
-        using var document = JsonDocument.Parse(File.ReadAllText(TemplatePath));
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(TemplatePath));
 
         Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
     }
@@ -19,9 +19,9 @@ public class AppSettingsTemplateTests
     [Fact]
     public void Example_connection_string_targets_local_SQLEXPRESS_instance()
     {
-        using var document = JsonDocument.Parse(File.ReadAllText(TemplatePath));
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(TemplatePath));
 
-        var connectionString = document.RootElement
+        string? connectionString = document.RootElement
             .GetProperty("ConnectionStrings")
             .GetProperty("CentralAuth")
             .GetString();
