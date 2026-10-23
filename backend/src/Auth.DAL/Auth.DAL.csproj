@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- EF compile assets stay private to DAL (no EF in Services); runtime assets still flow to the host. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" PrivateAssets="compile;contentfiles;analyzers;build" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Auth.Entities\Auth.Entities.csproj" />
+  </ItemGroup>
+
+</Project>

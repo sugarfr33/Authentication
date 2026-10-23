@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <UserSecretsId>central-auth-api</UserSecretsId>
+  </PropertyGroup>
+
+  <!--
+    Api -> Services + Contracts only. Auth.DAL / Auth.Entities still flow transitively so they ship in
+    deps.json and the publish output; Auth.ArchitectureTests fails the build if Api code uses them.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Auth.Services\Auth.Services.csproj" />
+    <ProjectReference Include="..\Auth.Contracts\Auth.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>
