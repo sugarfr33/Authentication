@@ -390,6 +390,10 @@ dotnet_naming_style.s_camelcase.word_separator =
 dotnet_naming_style.s_camelcase.capitalization = camel_case
 
 
+# Entities: class name must equal the table name (Permission, RolePermission), so the CA1711 suffix rule does not apply.
+[backend/src/Auth.Entities/**.cs]
+dotnet_diagnostic.CA1711.severity = none
+
 # Test projects: Given_When_Then style method names are intentional.
 [backend/tests/**.cs]
 dotnet_diagnostic.CA1707.severity = none
