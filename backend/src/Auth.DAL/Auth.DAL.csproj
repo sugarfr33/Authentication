@@ -10,4 +10,9 @@
     <ProjectReference Include="..\Auth.Entities\Auth.Entities.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- AuthDbContext and the configurations are internal; the mapping tests inspect them. -->
+    <InternalsVisibleTo Include="Auth.UnitTests" />
+  </ItemGroup>
+
 </Project>
