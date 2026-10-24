@@ -1,5 +1,6 @@
 using System.Data.Common;
 using Auth.DAL;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,6 +16,8 @@ public sealed class SqlServerDatabaseFixture : IAsyncLifetime
 {
     public const string ConnectionStringVariable = "CENTRALAUTH_TEST_CONNECTION";
 
+    public const string ThrowawaySuffix = "_Test";
+
     private const string LocalConnectionString =
         @"Server=.\SQLEXPRESS;Database=CentralAuth_Test;Trusted_Connection=True;TrustServerCertificate=True;";
 
@@ -29,6 +32,7 @@ public sealed class SqlServerDatabaseFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        EnsureThrowawayDatabase(ConnectionString);
         ServiceCollection collection = new();
         collection.AddDataAccess(ConnectionString, options => options.AddInterceptors(Commands));
         services = collection.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
@@ -46,6 +50,8 @@ public sealed class SqlServerDatabaseFixture : IAsyncLifetime
             return;
         }
 
+        EnsureThrowawayDatabase(ConnectionString);
+
         await using (AsyncServiceScope scope = services.CreateAsyncScope())
         {
             await scope.ServiceProvider.GetRequiredService<AuthDbContext>().Database.EnsureDeletedAsync();
@@ -55,6 +61,20 @@ public sealed class SqlServerDatabaseFixture : IAsyncLifetime
     }
 
     public AsyncServiceScope CreateScope() => Services.CreateAsyncScope();
+
+    /// <summary>
+    /// Safety guard: the fixture drops its database, so it refuses any target whose database name does not end with
+    /// <c>_Test</c> (for example the real <c>CentralAuth</c>), including one supplied through <see cref="ConnectionStringVariable"/>.
+    /// </summary>
+    public static void EnsureThrowawayDatabase(string connectionString)
+    {
+        string database = new SqlConnectionStringBuilder(connectionString).InitialCatalog;
+        if (!database.EndsWith(ThrowawaySuffix, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Refusing to create or drop database '" + database + "': test databases must end with '" + ThrowawaySuffix + "'.");
+        }
+    }
 
     private static string ResolveConnectionString()
     {

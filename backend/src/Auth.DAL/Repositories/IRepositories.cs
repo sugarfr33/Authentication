@@ -17,7 +17,12 @@ public interface IUserRepository
 
     Task AddAsync(User user, CancellationToken cancellationToken);
 
-    /// <summary>Attaches a detached user as modified.</summary>
+    /// <summary>
+    /// Attaches a <b>detached</b> user (one not loaded in this scope) and marks every column modified.
+    /// Only for detached entities: entities returned by this repository are already tracked, so just change them and
+    /// call <see cref="Auth.DAL.IUnitOfWork.SaveChangesAsync"/>. Calling Update on a tracked entity is unnecessary,
+    /// and calling it with a second instance of an already-tracked row throws.
+    /// </summary>
     void Update(User user);
 }
 
@@ -74,7 +79,12 @@ public interface IClientApplicationRepository
 
     Task AddAsync(ClientApplication application, CancellationToken cancellationToken);
 
-    /// <summary>Attaches a detached application as modified.</summary>
+    /// <summary>
+    /// Attaches a <b>detached</b> application (one not loaded in this scope) and marks every column modified.
+    /// Only for detached entities: entities returned by this repository are already tracked, so just change them and
+    /// call <see cref="Auth.DAL.IUnitOfWork.SaveChangesAsync"/>. Calling Update on a tracked entity is unnecessary,
+    /// and calling it with a second instance of an already-tracked row throws.
+    /// </summary>
     void Update(ClientApplication application);
 }
 
