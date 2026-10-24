@@ -40,6 +40,32 @@ public class DalSurfaceTests
     }
 
     [Fact]
+    public void Public_DAL_types_are_only_interfaces_exceptions_and_static_classes()
+    {
+        IEnumerable<string> offenders = Dal.GetExportedTypes()
+            .Where(t => !t.IsInterface && !typeof(Exception).IsAssignableFrom(t) && !(t.IsAbstract && t.IsSealed))
+            .Select(t => t.FullName ?? t.Name);
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>T04: every query is LINQ or interpolated FromSql/ExecuteSql (parameterized); the raw-string APIs are banned.</summary>
+    [Fact]
+    public void DAL_source_uses_no_raw_SQL_APIs()
+    {
+        string[] banned = ["FromSqlRaw", "ExecuteSqlRaw", "SqlQueryRaw"];
+        string dalSource = Path.Combine(RepoPaths.BackendRoot, "src", "Auth.DAL");
+        char separator = Path.DirectorySeparatorChar;
+
+        IEnumerable<string> offenders = Directory.EnumerateFiles(dalSource, "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains(separator + "obj" + separator, StringComparison.Ordinal) && !f.Contains(separator + "bin" + separator, StringComparison.Ordinal))
+            .SelectMany(f => banned.Where(api => File.ReadAllText(f).Contains(api, StringComparison.Ordinal)).Select(api => Path.GetFileName(f) + ": " + api));
+
+        Assert.NotEmpty(Directory.EnumerateFiles(dalSource, "*Repository.cs", SearchOption.AllDirectories));
+        Assert.Empty(offenders);
+    }
+
+    [Fact]
     public void No_pluralizer_is_referenced()
     {
         IEnumerable<string> pluralizers = Dal.GetReferencedAssemblies()

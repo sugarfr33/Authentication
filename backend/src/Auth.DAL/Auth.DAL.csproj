@@ -13,6 +13,7 @@
   <ItemGroup>
     <!-- AuthDbContext and the configurations are internal; the mapping tests inspect them. -->
     <InternalsVisibleTo Include="Auth.UnitTests" />
+    <InternalsVisibleTo Include="Auth.IntegrationTests" />
   </ItemGroup>
 
 </Project>
