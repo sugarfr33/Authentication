@@ -26,20 +26,21 @@ public interface IAuthTimingGuard
     /// <param name="password">The submitted password.</param>
     /// <param name="storedHash">The account's stored hash, or null when there is no account.</param>
     /// <param name="accountUsable">False for unknown, inactive or locked accounts: a dummy hash is verified instead.</param>
-    CredentialCheck CheckPassword(string password, string? storedHash, bool accountUsable);
+    /// <param name="cancellationToken">Request cancellation.</param>
+    /// <exception cref="PasswordHashingBusyException">No hashing slot freed up in time (the host answers 503).</exception>
+    Task<CredentialCheck> CheckPasswordAsync(string password, string? storedHash, bool accountUsable, CancellationToken cancellationToken);
 }
 
 internal sealed class AuthTimingGuard(IPasswordHasher hasher) : IAuthTimingGuard
 {
     /// <summary>
-    /// Hash of a random secret with the current parameters, made once on first use. Verifying against it costs the
-    /// same as verifying against a real account.
+    /// Hash of a random secret with the current parameters, made on first need. A failure (for example
+    /// PasswordHashingBusyException) is NOT cached: the next call simply tries again, so a busy moment can never turn
+    /// into a permanent 503 for unknown accounts. Concurrent first calls may each compute one; the first stored wins.
     /// </summary>
-    private readonly Lazy<string> dummyHash = new(
-        () => hasher.Hash(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))),
-        LazyThreadSafetyMode.ExecutionAndPublication);
+    private string? dummyHash;
 
-    public CredentialCheck CheckPassword(string password, string? storedHash, bool accountUsable)
+    public async Task<CredentialCheck> CheckPasswordAsync(string password, string? storedHash, bool accountUsable, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(password);
 
@@ -50,7 +51,8 @@ internal sealed class AuthTimingGuard(IPasswordHasher hasher) : IAuthTimingGuard
         }
 
         bool real = accountUsable && !string.IsNullOrEmpty(storedHash);
-        PasswordVerifyResult result = hasher.Verify(password, real ? storedHash! : dummyHash.Value);
+        string target = real ? storedHash! : await GetDummyHashAsync(cancellationToken);
+        PasswordVerifyResult result = await hasher.VerifyAsync(password, target, cancellationToken);
 
         if (!real)
         {
@@ -63,5 +65,17 @@ internal sealed class AuthTimingGuard(IPasswordHasher hasher) : IAuthTimingGuard
             PasswordVerifyResult.SuccessNeedsRehash => CredentialCheck.ValidNeedsRehash,
             _ => CredentialCheck.Invalid,
         };
+    }
+
+    private async Task<string> GetDummyHashAsync(CancellationToken cancellationToken)
+    {
+        string? existing = Volatile.Read(ref dummyHash);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        string created = await hasher.HashAsync(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)), cancellationToken);
+        return Interlocked.CompareExchange(ref dummyHash, created, null) ?? created;
     }
 }

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text.Json;
+using Auth.Contracts.Requests;
 using Microsoft.Extensions.Options;
 
 namespace Auth.Api.RateLimiting;
@@ -13,6 +14,9 @@ namespace Auth.Api.RateLimiting;
 internal sealed class AccountKeyMiddleware(RequestDelegate next, IOptions<AuthRateLimitOptions> options)
 {
     public const string ItemKey = "Auth.RateLimit.Account";
+
+    /// <summary>Shared bucket for bodies whose email field is ambiguous (duplicated, non-string or empty).</summary>
+    internal const string AmbiguousAccount = "(ambiguous)";
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -62,7 +66,13 @@ internal sealed class AccountKeyMiddleware(RequestDelegate next, IOptions<AuthRa
         }
     }
 
-    private static string? FindEmail(ReadOnlySpan<byte> json)
+    /// <summary>
+    /// Finds the account email the way the endpoint's System.Text.Json web-default binding will see it: the property
+    /// name matches case-insensitively and the last occurrence wins. When the field is ambiguous (present more than
+    /// once, not a string, or empty) every such request shares one constant bucket, so ambiguity cannot be used to
+    /// dodge the per-account limit. No email field, or malformed JSON, gives no account key (still IP-limited).
+    /// </summary>
+    internal static string? FindEmail(ReadOnlySpan<byte> json)
     {
         try
         {
@@ -72,27 +82,48 @@ internal sealed class AccountKeyMiddleware(RequestDelegate next, IOptions<AuthRa
                 return null;
             }
 
+            int matches = 0;
+            bool allStrings = true;
+            string? last = null;
             while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
             {
-                bool isEmail = reader.ValueTextEquals("email"u8) || reader.ValueTextEquals("Email"u8);
+                bool isEmail = string.Equals(reader.GetString(), AuthRequestFields.Email, StringComparison.OrdinalIgnoreCase);
                 if (!reader.Read())
                 {
-                    return null;
+                    return matches > 0 ? AmbiguousAccount : null;
                 }
 
-                if (isEmail && reader.TokenType == JsonTokenType.String)
+                if (isEmail)
                 {
-                    string? email = reader.GetString()?.Trim();
-                    return string.IsNullOrEmpty(email) || email.Length > 256 ? null : email.ToUpperInvariant();
+                    matches++;
+                    if (reader.TokenType == JsonTokenType.String)
+                    {
+                        last = reader.GetString();
+                        continue;
+                    }
+
+                    allStrings = false;
                 }
 
                 reader.Skip();
             }
+
+            if (matches == 0)
+            {
+                return null;
+            }
+
+            string? email = last?.Trim();
+            if (matches > 1 || !allStrings || string.IsNullOrEmpty(email) || email.Length > 256)
+            {
+                return AmbiguousAccount;
+            }
+
+            return email.ToUpperInvariant();
         }
         catch (JsonException)
         {
+            return null;
         }
-
-        return null;
     }
 }

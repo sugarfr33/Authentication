@@ -39,7 +39,10 @@ public sealed class PasswordHashingLimits
     }
 }
 
-/// <summary>Wraps the Argon2 hasher with a semaphore, so at most N hash or verify operations run at once.</summary>
+/// <summary>
+/// Wraps the Argon2 hasher with a semaphore, so at most N hash or verify operations run at once. The async methods
+/// wait for a slot without blocking a thread and run Argon2 on a worker; the sync methods remain for sync callers.
+/// </summary>
 internal sealed class BoundedPasswordHasher(IPasswordHasher inner, PasswordHashingLimits limits) : IPasswordHasher, IDisposable
 {
     private readonly SemaphoreSlim slots = new(limits.MaxConcurrentOperations, limits.MaxConcurrentOperations);
@@ -47,6 +50,12 @@ internal sealed class BoundedPasswordHasher(IPasswordHasher inner, PasswordHashi
     public string Hash(string password) => Run(() => inner.Hash(password));
 
     public PasswordVerifyResult Verify(string password, string storedHash) => Run(() => inner.Verify(password, storedHash));
+
+    public Task<string> HashAsync(string password, CancellationToken cancellationToken) =>
+        RunAsync(() => inner.Hash(password), cancellationToken);
+
+    public Task<PasswordVerifyResult> VerifyAsync(string password, string storedHash, CancellationToken cancellationToken) =>
+        RunAsync(() => inner.Verify(password, storedHash), cancellationToken);
 
     public void Dispose() => slots.Dispose();
 
@@ -60,6 +69,24 @@ internal sealed class BoundedPasswordHasher(IPasswordHasher inner, PasswordHashi
         try
         {
             return operation();
+        }
+        finally
+        {
+            slots.Release();
+        }
+    }
+
+    private async Task<T> RunAsync<T>(Func<T> operation, CancellationToken cancellationToken)
+    {
+        if (!await slots.WaitAsync(limits.QueueTimeout, cancellationToken))
+        {
+            throw new PasswordHashingBusyException();
+        }
+
+        try
+        {
+            // Argon2 is CPU and memory bound: run it on a worker so the request thread is free while it computes.
+            return await Task.Run(operation, CancellationToken.None);
         }
         finally
         {

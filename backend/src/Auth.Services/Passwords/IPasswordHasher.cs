@@ -21,4 +21,15 @@ public interface IPasswordHasher
 
     /// <summary>Checks <paramref name="password"/> against a value produced by <see cref="Hash"/>, in constant time.</summary>
     PasswordVerifyResult Verify(string password, string storedHash);
+
+    /// <summary>
+    /// Preferred in request paths: the registered hasher waits for a hashing slot asynchronously and runs Argon2 on a
+    /// worker, so queued requests do not hold threads.
+    /// </summary>
+    /// <exception cref="PasswordHashingBusyException">No slot freed up within the queue timeout.</exception>
+    Task<string> HashAsync(string password, CancellationToken cancellationToken) => Task.FromResult(Hash(password));
+
+    /// <inheritdoc cref="HashAsync"/>
+    Task<PasswordVerifyResult> VerifyAsync(string password, string storedHash, CancellationToken cancellationToken) =>
+        Task.FromResult(Verify(password, storedHash));
 }

@@ -71,9 +71,34 @@ internal static class AuthRateLimiting
                 return RateLimitPartition.GetNoLimiter(NoLimit);
             }
 
-            string ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            return FixedWindow(kind + "|ip|" + ip, policy.PerIp);
+            return FixedWindow(kind + "|ip|" + ClientPartitionKey(context.Connection.RemoteIpAddress), policy.PerIp);
         });
+
+    /// <summary>
+    /// IPv4 clients are partitioned per address. IPv6 clients are partitioned per /64, because one subscriber usually
+    /// holds a whole /64 and could otherwise rotate addresses to escape the limit. IPv4-mapped IPv6 counts as IPv4.
+    /// </summary>
+    internal static string ClientPartitionKey(IPAddress? address)
+    {
+        if (address is null)
+        {
+            return "unknown";
+        }
+
+        if (address.IsIPv4MappedToIPv6)
+        {
+            address = address.MapToIPv4();
+        }
+
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6)
+        {
+            return address.ToString();
+        }
+
+        byte[] bytes = address.GetAddressBytes();
+        Array.Clear(bytes, 8, 8);
+        return new IPAddress(bytes) + "/64";
+    }
 
     private static PartitionedRateLimiter<HttpContext> PerAccount(AuthRateLimitOptions settings) =>
         PartitionedRateLimiter.Create<HttpContext, string>(context =>

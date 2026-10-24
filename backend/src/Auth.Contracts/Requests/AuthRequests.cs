@@ -1,13 +1,15 @@
+using System.Text.Json.Serialization;
+
 namespace Auth.Contracts.Requests;
 
 /// <summary>Self-service sign-up.</summary>
-public sealed record RegisterRequest(string Email, string Password, string DisplayName);
+public sealed record RegisterRequest([property: JsonPropertyName(AuthRequestFields.Email)] string Email, string Password, string DisplayName);
 
 /// <summary>Email and password sign-in, optionally on behalf of a client application.</summary>
-public sealed record LoginRequest(string Email, string Password, string? ClientId);
+public sealed record LoginRequest([property: JsonPropertyName(AuthRequestFields.Email)] string Email, string Password, string? ClientId);
 
 /// <summary>Starts a password reset. The response is identical whether or not the email exists.</summary>
-public sealed record ForgotPasswordRequest(string Email);
+public sealed record ForgotPasswordRequest([property: JsonPropertyName(AuthRequestFields.Email)] string Email);
 
 /// <summary>Completes a password reset with the raw token from the reset email.</summary>
 public sealed record ResetPasswordRequest(string Token, string NewPassword);

@@ -7,41 +7,60 @@ namespace Auth.UnitTests.Passwords;
 public class HashingGuardTests
 {
     private const string Password = "violet-canyon-7319";
+    private static readonly CancellationToken Ct = CancellationToken.None;
 
     [Fact]
-    public void Unknown_inactive_locked_and_wrong_password_paths_each_cost_exactly_one_Verify_and_look_the_same()
+    public async Task Unknown_inactive_locked_and_wrong_password_paths_each_cost_exactly_one_Verify_and_look_the_same()
     {
         CountingHasher hasher = new();
         AuthTimingGuard guard = new(hasher);
         string stored = hasher.Hash(Password);
+        await guard.CheckPasswordAsync(Password, null, accountUsable: false, Ct);
         hasher.Reset();
 
-        CredentialCheck unknown = Measure(() => guard.CheckPassword(Password, null, accountUsable: false), hasher, out int unknownCalls);
-        CredentialCheck lockedWithRightPassword = Measure(() => guard.CheckPassword(Password, stored, accountUsable: false), hasher, out int lockedCalls);
-        CredentialCheck wrongPassword = Measure(() => guard.CheckPassword("wrong-password-99", stored, accountUsable: true), hasher, out int wrongCalls);
-        CredentialCheck valid = Measure(() => guard.CheckPassword(Password, stored, accountUsable: true), hasher, out int validCalls);
+        (CredentialCheck unknown, int unknownCalls) = await MeasureAsync(() => guard.CheckPasswordAsync(Password, null, accountUsable: false, Ct), hasher);
+        (CredentialCheck locked, int lockedCalls) = await MeasureAsync(() => guard.CheckPasswordAsync(Password, stored, accountUsable: false, Ct), hasher);
+        (CredentialCheck wrong, int wrongCalls) = await MeasureAsync(() => guard.CheckPasswordAsync("wrong-password-99", stored, accountUsable: true, Ct), hasher);
+        (CredentialCheck valid, int validCalls) = await MeasureAsync(() => guard.CheckPasswordAsync(Password, stored, accountUsable: true, Ct), hasher);
 
         Assert.Equal(CredentialCheck.Invalid, unknown);
-        Assert.Equal(CredentialCheck.Invalid, lockedWithRightPassword);
-        Assert.Equal(CredentialCheck.Invalid, wrongPassword);
+        Assert.Equal(CredentialCheck.Invalid, locked);
+        Assert.Equal(CredentialCheck.Invalid, wrong);
         Assert.Equal(CredentialCheck.Valid, valid);
         Assert.Equal([1, 1, 1, 1], new[] { unknownCalls, lockedCalls, wrongCalls, validCalls });
-        Assert.Equal(1, hasher.HashCalls);
+        Assert.Equal(0, hasher.HashCalls);
     }
 
     [Fact]
-    public void Dummy_hash_uses_the_current_parameters_so_the_work_matches_a_real_account()
+    public async Task Dummy_hash_uses_the_current_parameters_and_is_made_once()
     {
         CountingHasher hasher = new();
         AuthTimingGuard guard = new(hasher);
 
-        guard.CheckPassword(Password, null, accountUsable: false);
+        await guard.CheckPasswordAsync(Password, null, accountUsable: false, Ct);
+        await guard.CheckPasswordAsync(Password, null, accountUsable: false, Ct);
 
         Assert.StartsWith("$argon2id$v=19$m=1024,t=1,p=1$", hasher.LastVerifiedHash, StringComparison.Ordinal);
+        Assert.Equal(1, hasher.HashCalls);
+    }
+
+    /// <summary>Review fix: a busy moment while making the dummy hash must not be cached as a permanent failure.</summary>
+    [Fact]
+    public async Task A_failure_while_making_the_dummy_hash_is_not_cached()
+    {
+        CountingHasher hasher = new() { FailNextHash = true };
+        AuthTimingGuard guard = new(hasher);
+
+        await Assert.ThrowsAsync<PasswordHashingBusyException>(() => guard.CheckPasswordAsync(Password, null, accountUsable: false, Ct));
+        CredentialCheck retried = await guard.CheckPasswordAsync(Password, null, accountUsable: false, Ct);
+
+        Assert.Equal(CredentialCheck.Invalid, retried);
+        Assert.Equal(2, hasher.HashCalls);
+        Assert.Equal(1, hasher.VerifyCalls);
     }
 
     [Fact]
-    public void Overlong_passwords_are_rejected_before_any_Verify_on_every_path()
+    public async Task Overlong_passwords_are_rejected_before_any_Verify_on_every_path()
     {
         CountingHasher hasher = new();
         AuthTimingGuard guard = new(hasher);
@@ -49,30 +68,46 @@ public class HashingGuardTests
         hasher.Reset();
         string tooLong = new('a', IPasswordPolicy.MaximumLength + 1);
 
-        Assert.Equal(CredentialCheck.Invalid, guard.CheckPassword(tooLong, stored, accountUsable: true));
-        Assert.Equal(CredentialCheck.Invalid, guard.CheckPassword(tooLong, null, accountUsable: false));
+        Assert.Equal(CredentialCheck.Invalid, await guard.CheckPasswordAsync(tooLong, stored, accountUsable: true, Ct));
+        Assert.Equal(CredentialCheck.Invalid, await guard.CheckPasswordAsync(tooLong, null, accountUsable: false, Ct));
         Assert.Equal(0, hasher.VerifyCalls);
-        Assert.Equal(CredentialCheck.Valid, guard.CheckPassword(Password, stored, accountUsable: true));
-        Assert.Equal(1, hasher.VerifyCalls);
+        Assert.Equal(0, hasher.HashCalls);
     }
 
     [Fact]
-    public async Task At_most_N_hash_operations_run_at_once_and_excess_callers_get_busy()
+    public async Task At_most_N_hash_operations_run_at_once_and_excess_async_callers_get_busy()
     {
         using ManualResetEventSlim release = new(false);
         BlockingHasher inner = new(release);
         using BoundedPasswordHasher bounded = new(inner, new PasswordHashingLimits { MaxConcurrentOperations = 2, QueueTimeout = TimeSpan.FromMilliseconds(200) }.Validated());
 
-        Task<PasswordVerifyResult>[] running = [Task.Run(() => bounded.Verify("a", "b")), Task.Run(() => bounded.Verify("a", "b"))];
-        SpinWait.SpinUntil(() => inner.Active == 2, TimeSpan.FromSeconds(5));
+        Task<PasswordVerifyResult>[] running = [bounded.VerifyAsync("a", "b", Ct), bounded.VerifyAsync("a", "b", Ct)];
+        Assert.True(SpinWait.SpinUntil(() => inner.Active == 2, TimeSpan.FromSeconds(5)));
 
+        await Assert.ThrowsAsync<PasswordHashingBusyException>(() => bounded.VerifyAsync("a", "b", Ct));
         Assert.Throws<PasswordHashingBusyException>(() => bounded.Verify("a", "b"));
-        Assert.Equal(2, inner.MaxObserved);
 
         release.Set();
         await Task.WhenAll(running);
-        Assert.Equal(PasswordVerifyResult.Failed, bounded.Verify("a", "b"));
+        Assert.Equal(PasswordVerifyResult.Failed, await bounded.VerifyAsync("a", "b", Ct));
         Assert.Equal(2, inner.MaxObserved);
+    }
+
+    [Fact]
+    public async Task Waiting_for_a_slot_does_not_block_the_caller_thread()
+    {
+        using ManualResetEventSlim release = new(false);
+        BlockingHasher inner = new(release);
+        using BoundedPasswordHasher bounded = new(inner, new PasswordHashingLimits { MaxConcurrentOperations = 1, QueueTimeout = TimeSpan.FromSeconds(10) }.Validated());
+
+        Task<PasswordVerifyResult> holder = bounded.VerifyAsync("a", "b", Ct);
+        Assert.True(SpinWait.SpinUntil(() => inner.Active == 1, TimeSpan.FromSeconds(5)));
+
+        Task<PasswordVerifyResult> queued = bounded.VerifyAsync("a", "b", Ct);
+
+        Assert.False(queued.IsCompleted);
+        release.Set();
+        await Task.WhenAll(holder, queued);
     }
 
     [Fact]
@@ -82,23 +117,22 @@ public class HashingGuardTests
 
         IEnumerable<TimeSpan> durations = Enumerable.Range(1, 9).Select(options.DurationFor);
 
-        Assert.Equal(
-            [1, 2, 4, 8, 16, 32, 60, 60, 60],
-            durations.Select(d => (int)d.TotalMinutes));
+        Assert.Equal([1, 2, 4, 8, 16, 32, 60, 60, 60], durations.Select(d => (int)d.TotalMinutes));
     }
 
-    private static CredentialCheck Measure(Func<CredentialCheck> check, CountingHasher hasher, out int verifyCalls)
+    private static async Task<(CredentialCheck Result, int VerifyCalls)> MeasureAsync(Func<Task<CredentialCheck>> check, CountingHasher hasher)
     {
         int before = hasher.VerifyCalls;
-        CredentialCheck result = check();
-        verifyCalls = hasher.VerifyCalls - before;
-        return result;
+        CredentialCheck result = await check();
+        return (result, hasher.VerifyCalls - before);
     }
 
-    /// <summary>The real Argon2 hasher (fast test parameters), counting calls.</summary>
+    /// <summary>The real Argon2 hasher (fast test parameters), counting calls; the async methods use the defaults.</summary>
     private sealed class CountingHasher : IPasswordHasher
     {
         private readonly Argon2PasswordHasher inner = new(Argon2PasswordHasherTests.FastOptions);
+
+        public bool FailNextHash { get; set; }
 
         public int VerifyCalls { get; private set; }
 
@@ -109,6 +143,12 @@ public class HashingGuardTests
         public string Hash(string password)
         {
             HashCalls++;
+            if (FailNextHash)
+            {
+                FailNextHash = false;
+                throw new PasswordHashingBusyException();
+            }
+
             return inner.Hash(password);
         }
 

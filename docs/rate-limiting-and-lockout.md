@@ -57,3 +57,27 @@ Every hash or verify goes through `BoundedPasswordHasher`: at most `PasswordHash
 half the processors, 1 to 16) Argon2 operations at once, which is about 64 MiB each. A caller waits up to `QueueTimeout`
 (5 s). After that, `PasswordHashingBusyException` becomes **503** ProblemDetails with `Retry-After: 1`, logged as a
 warning, instead of the process running out of memory.
+
+## Known trade-offs and residual risks (T11 review)
+
+- **Targeted lockout (denial of a known victim's login).** Anyone who knows an email can drive that account into
+  lockout, and the per-account rate limit, by submitting wrong passwords. The lockout level does **not** decay over
+  time; only a successful sign-in resets it, so repeated attacks keep the backoff at its 1 h cap. This is the usual price
+  of per-account protection against online guessing. **Future mitigation:** let the real owner bypass or clear the lock,
+  e.g. an unlock link sent by email, or a trusted-device cookie that exempts known devices from the lock.
+- **Ambiguous email fields.** The account key mirrors System.Text.Json web-default binding: the property name matches
+  case-insensitively (`email`, `Email`, `EMAIL`, ...) and the last value wins. A body whose email field is duplicated,
+  non-string or empty is put in one shared constant bucket, so such tricks cannot escape the per-account limit. The
+  field name is the shared constant `AuthRequestFields.Email` (Auth.Contracts), also used by the request DTOs.
+- **Loopback origins.** In production, http is accepted only for loopback origins (`localhost`, `127.0.0.1`, `[::1]`)
+  when they are registered. Keep localhost entries out of production ClientApplication rows: any process on the user's
+  machine could use them.
+- **Body buffering before the IP throttle.** `AccountKeyMiddleware` runs before the limiter, so it reads up to
+  `MaxAccountBodyBytes` (16 KB) of a request even when the IP limit will reject it. This is bounded per request; slow
+  senders are bounded by Kestrel's `MinRequestBodyDataRate` (default 240 bytes/s after a 5 s grace), and the request
+  body size by `MaxRequestBodySize`. Keep both at their defaults or tighter.
+- **IPv6.** Per-IP limits partition IPv6 clients by /64 (one subscriber typically holds a whole /64), IPv4 per
+  address, and IPv4-mapped IPv6 as IPv4.
+- **Hashing capacity.** Waiting for a hashing slot is asynchronous (no thread is held while queued), and Argon2 runs
+  on a worker. The dummy hash used by the timing guard is created on first need; a failure (e.g. busy) is not cached,
+  so the next request simply tries again.
