@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using Auth.Contracts;
 using Auth.Contracts.Requests;
 using Auth.DAL;
@@ -76,6 +77,10 @@ internal sealed class RegistrationService(
         IReadOnlyDictionary<string, string[]> errors = validator.Validate(request);
         if (errors.Count > 0)
         {
+            // Field names only: never the submitted values. No account lookup, so it reveals nothing about existence.
+            string fields = string.Join(",", errors.Keys.Order(StringComparer.Ordinal).Select(k => "\"" + k + "\""));
+            await auditLog.AddAsync(audit.Entry(AuditEventType.RegistrationRejected, null, clock.UtcNow, "{\"fields\":[" + fields + "]}"), cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
             return new RegistrationResult(errors);
         }
 
@@ -100,7 +105,7 @@ internal sealed class RegistrationService(
         ArgumentNullException.ThrowIfNull(audit);
         if (string.IsNullOrEmpty(token) || token.Length > MaxTokenLength)
         {
-            return Result.Failure(AuthError.InvalidOrExpiredToken);
+            return await AuditVerifyFailureAsync(null, "malformed", audit, cancellationToken);
         }
 
         byte[] hash = generator.Hash(token);
@@ -108,7 +113,8 @@ internal sealed class RegistrationService(
         {
             try
             {
-                return await VerifyOnceAsync(hash, audit, cancellationToken);
+                (Guid? userId, string? failure) = await VerifyOnceAsync(hash, audit, cancellationToken);
+                return failure is null ? Result.Success() : await AuditVerifyFailureAsync(userId, failure, audit, cancellationToken);
             }
             catch (ConcurrencyConflictException) when (attempt < MaxVerifyAttempts)
             {
@@ -116,6 +122,15 @@ internal sealed class RegistrationService(
                 unitOfWork.ClearChanges();
             }
         }
+    }
+
+    /// <summary>Audit row for a failed redemption, in its own save after the (rolled back) transaction. Never the token.</summary>
+    private async Task<Result> AuditVerifyFailureAsync(Guid? userId, string reason, AuditContext audit, CancellationToken cancellationToken)
+    {
+        unitOfWork.ClearChanges();
+        await auditLog.AddAsync(audit.Entry(AuditEventType.EmailVerificationFailed, userId, clock.UtcNow, "{\"reason\":\"" + reason + "\"}"), cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return Result.Failure(AuthError.InvalidOrExpiredToken);
     }
 
     /// <summary>
@@ -154,7 +169,7 @@ internal sealed class RegistrationService(
             return null;
         }
 
-        return VerificationMessage(registrant.Email, token);
+        return VerificationMessage(registrant.Email, token, now);
     }
 
     private async Task<User> LoadAfterRaceAsync(string normalizedEmail, CancellationToken cancellationToken) =>
@@ -173,7 +188,7 @@ internal sealed class RegistrationService(
         EmailMessage message;
         if (!user.EmailVerified && user.IsActive)
         {
-            message = VerificationMessage(user.Email, await AddVerificationTokenAsync(user.Id, registrant, now, cancellationToken));
+            message = VerificationMessage(user.Email, await AddVerificationTokenAsync(user.Id, registrant, now, cancellationToken), now);
         }
         else
         {
@@ -207,40 +222,62 @@ internal sealed class RegistrationService(
         return token.Value;
     }
 
-    private EmailMessage VerificationMessage(string email, string token) => new(
+    /// <summary>
+    /// One template for a first and a repeated sign-up (audit MEDIUM-1 mitigation): it names the moment of the
+    /// registration this link confirms and tells the reader not to open it unless they made that registration, because
+    /// opening it activates the password chosen in that registration.
+    /// </summary>
+    private EmailMessage VerificationMessage(string email, string token, DateTime registeredUtc) => new(
         email,
         VerificationSubject,
-        "Please confirm your email address by opening this link:\n\n" + options.VerificationLink(token) + "\n\n"
-        + "The link works once and expires in " + (int)options.VerificationTokenLifetime.TotalHours + " hours. "
-        + "If you did not create an account, you can ignore this email.");
+        "A sign-up for this email address was made on "
+        + registeredUtc.ToString("yyyy-MM-dd 'at' HH:mm 'UTC'", CultureInfo.InvariantCulture) + ".\n\n"
+        + "If you made it, confirm your email address by opening this link:\n\n" + options.VerificationLink(token) + "\n\n"
+        + "This link confirms only the sign-up made at that time and activates the password chosen in it. It works once and "
+        + "expires in " + (int)options.VerificationTokenLifetime.TotalHours + " hours.\n\n"
+        + "If you did not make a sign-up at that time, do NOT open the link; just ignore this email. If you received several "
+        + "of these emails, open only the one that matches the sign-up you made.");
 
-    private async Task<Result> VerifyOnceAsync(byte[] hash, AuditContext audit, CancellationToken cancellationToken)
+    /// <summary>One redemption attempt. Returns the failure reason for the audit (null on success); any failure rolls back.</summary>
+    private async Task<(Guid? UserId, string? Failure)> VerifyOnceAsync(byte[] hash, AuditContext audit, CancellationToken cancellationToken)
     {
         DateTime now = clock.UtcNow;
         EmailVerificationToken? row = await verificationTokens.GetByHashAsync(hash, cancellationToken);
-        if (row is null || row.UsedUtc is not null || row.ExpiresUtc <= now || string.IsNullOrEmpty(row.PendingPasswordHash))
+        string? early = row switch
         {
-            return Result.Failure(AuthError.InvalidOrExpiredToken);
+            null => "unknown",
+            { UsedUtc: not null } => "used",
+            _ when row.ExpiresUtc <= now => "expired",
+            { PendingPasswordHash: null or "" } => "no_pending_password",
+            _ => null,
+        };
+        if (early is not null)
+        {
+            return (row?.UserId, early);
         }
+
+        // Read before TryMarkUsedAsync: the same UPDATE that spends the link erases its pending payload in the row.
+        string pendingPasswordHash = row!.PendingPasswordHash!;
+        string? pendingDisplayName = row.PendingDisplayName;
 
         await using IUnitOfWorkTransaction transaction = await unitOfWork.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
 
         // Conditional UPDATE: of two concurrent redemptions only one can mark the token used.
         if (!await verificationTokens.TryMarkUsedAsync(row.Id, now, cancellationToken))
         {
-            return Result.Failure(AuthError.InvalidOrExpiredToken);
+            return (row.UserId, "used");
         }
 
         // A verified account is never changed by a leftover link (for example one created in a race with verification).
         User? user = await users.GetByIdAsync(row.UserId, cancellationToken);
         if (user is null || !user.IsActive || user.EmailVerified)
         {
-            return Result.Failure(AuthError.InvalidOrExpiredToken);
+            return (row.UserId, user is null ? "unknown_user" : user.IsActive ? "already_verified" : "inactive");
         }
 
         // Only now does a password become usable: the one chosen at the registration that produced this link.
-        user.PasswordHash = row.PendingPasswordHash;
-        user.DisplayName = string.IsNullOrEmpty(row.PendingDisplayName) ? user.DisplayName : row.PendingDisplayName;
+        user.PasswordHash = pendingPasswordHash;
+        user.DisplayName = string.IsNullOrEmpty(pendingDisplayName) ? user.DisplayName : pendingDisplayName;
         user.EmailVerified = true;
         user.SecurityStamp = Guid.NewGuid();
         user.UpdatedUtc = now;
@@ -249,7 +286,7 @@ internal sealed class RegistrationService(
         await auditLog.AddAsync(audit.Entry(AuditEventType.EmailVerified, user.Id, now), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return Result.Success();
+        return (user.Id, null);
     }
 
     /// <summary>What one sign-up request chose. The hash is never written to the User row before verification.</summary>

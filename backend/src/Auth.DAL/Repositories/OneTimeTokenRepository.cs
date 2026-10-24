@@ -1,12 +1,15 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
 
 namespace Auth.DAL.Repositories;
 
 /// <summary>
 /// Shared implementation for the single-use token tables. They all have <c>Id</c>, <c>UserId</c> and <c>UsedUtc</c>;
-/// only the hash column name differs (TokenHash or CodeHash), so it is passed in at registration.
+/// only the hash column name differs (TokenHash or CodeHash), so it is passed in at registration. Nullable payload
+/// columns listed in <paramref name="eraseWhenUsed"/> (for example a pending password hash) are set to NULL in the
+/// same UPDATE that marks a token used or retires it, so a spent token keeps no secret material.
 /// </summary>
-internal sealed class OneTimeTokenRepository<T>(AuthDbContext context, string hashProperty) : IOneTimeTokenRepository<T>
+internal sealed class OneTimeTokenRepository<T>(AuthDbContext context, string hashProperty, params string[] eraseWhenUsed) : IOneTimeTokenRepository<T>
     where T : class
 {
     private const string IdProperty = "Id";
@@ -23,7 +26,7 @@ internal sealed class OneTimeTokenRepository<T>(AuthDbContext context, string ha
     {
         int updated = await context.Set<T>()
             .Where(t => EF.Property<Guid>(t, IdProperty) == id && EF.Property<DateTime?>(t, UsedUtcProperty) == null)
-            .ExecuteUpdateAsync(s => s.SetProperty(t => EF.Property<DateTime?>(t, UsedUtcProperty), usedUtc), cancellationToken);
+            .ExecuteUpdateAsync(setters => MarkUsed(setters, usedUtc), cancellationToken);
 
         return updated == 1;
     }
@@ -31,5 +34,14 @@ internal sealed class OneTimeTokenRepository<T>(AuthDbContext context, string ha
     public Task<int> InvalidateAllForUserAsync(Guid userId, DateTime usedUtc, CancellationToken cancellationToken) =>
         context.Set<T>()
             .Where(t => EF.Property<Guid>(t, UserIdProperty) == userId && EF.Property<DateTime?>(t, UsedUtcProperty) == null)
-            .ExecuteUpdateAsync(s => s.SetProperty(t => EF.Property<DateTime?>(t, UsedUtcProperty), usedUtc), cancellationToken);
+            .ExecuteUpdateAsync(setters => MarkUsed(setters, usedUtc), cancellationToken);
+
+    private void MarkUsed(UpdateSettersBuilder<T> setters, DateTime usedUtc)
+    {
+        setters.SetProperty(t => EF.Property<DateTime?>(t, UsedUtcProperty), usedUtc);
+        foreach (string property in eraseWhenUsed)
+        {
+            setters.SetProperty(t => EF.Property<string?>(t, property), (string?)null);
+        }
+    }
 }

@@ -55,6 +55,10 @@ too (tested by counting, not by timing):
   every refresh token of the user is revoked (reason PasswordChange), the user's other unused links are retired, and
   an `EmailVerified` audit row is written.
 - A link of an account that is already verified fails, so a leftover link can never change a verified account.
+- **No secret left behind (audit LOW-1):** the same conditional UPDATE that marks a link used or retires it sets its
+  `PendingPasswordHash` and `PendingDisplayName` to NULL. After a verification, the account's other links hold no
+  hash either. Links that simply expire unused keep theirs until a purge job removes expired rows and long-unverified
+  accounts (planned with the T17 cleanup work).
 - Unknown, used, expired, malformed or over-long tokens, and tokens of inactive accounts, all give the same 400.
 - The link is `AccountEmail:VerifyEmailUrl` + `#token=...`. The token is in the URL **fragment**, so it never
   reaches a server log, a proxy or a Referer header; the front-end page posts it to `/verify-email`.
@@ -70,10 +74,38 @@ too (tested by counting, not by timing):
 - Registration sends the email after the save. If sending fails, the account exists without a delivered link;
   registering again sends a fresh one.
 
+### Deployment notes (audit LOW-3)
+
+- Register a real `IEmailSender` before going live; the default outside Development refuses to send.
+- The real sender must behave **the same for every recipient** from the caller's point of view: enqueue the message
+  (outbox table or queue) and deliver it after the response, so provider latency, bounces or rejected recipients can
+  never make a new address answer differently (status or timing) from an existing one. Do not send SMTP inline.
+- Treat `To` as data (it is validated, and the subject is constant), and never log the body: it holds the one-time link.
+
 ## Audit
 
-`Registered` (detail `{"outcome":"created"}` or `{"outcome":"duplicate"}`) and `EmailVerified`, with IP, user agent and
-trace id, through `IAuditLogRepository`. No token, password or hash is written to the audit log or to any log.
+Through `IAuditLogRepository`, each with IP, user agent and trace id:
+
+- `Registered` (detail `{"outcome":"created"}` or `{"outcome":"duplicate"}`, with the account's user id).
+- `RegistrationRejected` (audit LOW-4): detail `{"fields":[...]}` with the failing field names only, never the values;
+  no user id (validation does not read the database).
+- `EmailVerified`.
+- `EmailVerificationFailed` (audit LOW-4): detail `{"reason":"..."}`, one of `malformed`, `unknown`, `used`, `expired`,
+  `no_pending_password`, `unknown_user`, `inactive`, `already_verified`, with the link's user id when the link
+  exists. Written in its own save after the failed attempt rolled back. The HTTP answer stays the one generic 400.
+
+No token, password or hash is written to the audit log or to any log. The audit log names the requester IP for
+attempts against existing accounts, so audit reads must stay restricted to support and security staff.
+
+### Mail volume (audit LOW-2)
+
+Each register request for an unverified address sends one link and each for a verified one sends a notice, so a third
+party can make an address receive mail. This is bounded by the per-account register limit (3 per email per hour,
+`RateLimiting:Policies:Register:PerAccount`) plus the per-IP limit; the same limit can also keep the real owner from
+signing up for up to an hour. A "one mail per account per 5 minutes" throttle was considered and **not** built: skipping
+the email for some duplicates would make that path do less work than a new sign-up (an observable difference while
+emails are sent inline), which is the uniformity this endpoint must keep. Once the queued sender above exists, the
+throttle can live in the queue (drop or merge repeats) without touching the request path.
 
 ## No account pre-hijacking (review HIGH-1)
 
@@ -93,11 +125,18 @@ produced:
 Tested both ways round with the sign-in check: attacker first then victim, and victim first then attacker. In both,
 after the victim's link is redeemed the victim's password signs in and the attacker's does not.
 
-**Residual risk:** the victim's inbox may hold a link produced by the attacker's registration. If the victim opens
-THAT link (and not their own) before any other, the attacker's password is activated. Recovery: the victim's password
-fails, so they reset it (T14), which rotates the stamp and revokes sessions. To close this completely, verification
-could ask for the password chosen at sign-up (VerifyEmailRequest gets a password; the API contract and the front end
-change). This needs a product decision.
+**Residual risk (audit MEDIUM-1, accepted by the product owner for now):** the victim's inbox may hold a link produced
+by the attacker's registration. If the victim opens THAT link (and not their own) before any other, the attacker's
+password is activated. Mitigations in place:
+
+- Every link email (first or repeated sign-up, one template) names the time of the sign-up it confirms, says that
+  opening it activates the password chosen in that sign-up, and tells the reader not to open it unless they made that
+  sign-up, and to open only the matching one when several arrive.
+- T13 refuses sign-in for unverified accounts with the generic failure; the T14 password reset is the recovery path
+  (it rotates the stamp and revokes sessions).
+
+Not done, by decision: asking for the sign-up password on verify-email (would close it completely; changes
+VerifyEmailRequest and the front end).
 
 ## Not in T12
 

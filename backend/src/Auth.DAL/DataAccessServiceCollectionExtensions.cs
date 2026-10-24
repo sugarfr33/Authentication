@@ -37,7 +37,11 @@ public static class DataAccessServiceCollectionExtensions
         services.AddScoped<IOneTimeTokenRepository<PasswordResetToken>>(sp =>
             new OneTimeTokenRepository<PasswordResetToken>(sp.GetRequiredService<AuthDbContext>(), nameof(PasswordResetToken.TokenHash)));
         services.AddScoped<IOneTimeTokenRepository<EmailVerificationToken>>(sp =>
-            new OneTimeTokenRepository<EmailVerificationToken>(sp.GetRequiredService<AuthDbContext>(), nameof(EmailVerificationToken.TokenHash)));
+            new OneTimeTokenRepository<EmailVerificationToken>(
+                sp.GetRequiredService<AuthDbContext>(),
+                nameof(EmailVerificationToken.TokenHash),
+                nameof(EmailVerificationToken.PendingPasswordHash),
+                nameof(EmailVerificationToken.PendingDisplayName)));
         services.AddScoped<IOneTimeTokenRepository<MfaRecoveryCode>>(sp =>
             new OneTimeTokenRepository<MfaRecoveryCode>(sp.GetRequiredService<AuthDbContext>(), nameof(MfaRecoveryCode.CodeHash)));
 

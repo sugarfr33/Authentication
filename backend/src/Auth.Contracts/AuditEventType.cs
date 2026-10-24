@@ -23,4 +23,10 @@ public enum AuditEventType
     AuthorizationCodeIssued,
     AuthorizationCodeRedeemed,
     SigningKeyRotated,
+
+    /// <summary>A verify-email attempt failed (unknown, used, expired or unusable link). Never holds the token.</summary>
+    EmailVerificationFailed,
+
+    /// <summary>A sign-up was rejected by validation. Holds the failing field names only, never their values.</summary>
+    RegistrationRejected,
 }

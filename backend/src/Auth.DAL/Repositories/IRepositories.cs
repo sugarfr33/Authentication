@@ -74,11 +74,12 @@ public interface IOneTimeTokenRepository<T>
 
     /// <summary>
     /// Sets UsedUtc only if the token is still unused, in one conditional UPDATE. Returns false when it was already used
-    /// (or does not exist), so two concurrent redemptions cannot both succeed.
+    /// (or does not exist), so two concurrent redemptions cannot both succeed. The same UPDATE erases the token's
+    /// secret payload (EmailVerificationToken: PendingPasswordHash, PendingDisplayName); read it before calling this.
     /// </summary>
     Task<bool> TryMarkUsedAsync(Guid id, DateTime usedUtc, CancellationToken cancellationToken);
 
-    /// <summary>Marks all of the user's unused tokens as used, in one UPDATE. Returns the number changed.</summary>
+    /// <summary>Marks all of the user's unused tokens as used (erasing their payload), in one UPDATE. Returns the number changed.</summary>
     Task<int> InvalidateAllForUserAsync(Guid userId, DateTime usedUtc, CancellationToken cancellationToken);
 }
 

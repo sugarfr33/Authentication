@@ -286,6 +286,84 @@ public sealed class RegistrationServiceTests : RepositoryTestBase, IAsyncDisposa
         Assert.Empty(mailbox.Messages);
     }
 
+    /// <summary>Audit LOW-1: a spent or retired link keeps no password hash or display name.</summary>
+    [Fact]
+    public async Task Redeemed_and_retired_links_keep_no_pending_password_or_name()
+    {
+        string email = UniqueEmail();
+        await RegisterAsync(email, "First", Password);
+        await RegisterAsync(email, "Second", "second-password-5530");
+        Assert.All(await LoadTokensAsync((await LoadUserAsync(email)).Id), t => Assert.NotNull(t.PendingPasswordHash));
+
+        Assert.True((await VerifyAsync(TokenFrom(mailbox.To(email)[0]))).IsSuccess);
+
+        List<EmailVerificationToken> links = await LoadTokensAsync((await LoadUserAsync(email)).Id);
+        Assert.Equal(2, links.Count);
+        Assert.All(links, t =>
+        {
+            Assert.NotNull(t.UsedUtc);
+            Assert.Null(t.PendingPasswordHash);
+            Assert.Null(t.PendingDisplayName);
+        });
+        Assert.True(await SignsInAsync(email, Password));
+        Assert.Equal("First", (await LoadUserAsync(email)).DisplayName);
+    }
+
+    /// <summary>Audit LOW-4: failed redemptions are audited with a reason, never the token.</summary>
+    [Fact]
+    public async Task Failed_verifications_are_audited_with_a_reason_and_without_the_token()
+    {
+        string email = UniqueEmail();
+        await RegisterAsync(email);
+        string token = TokenFrom(mailbox.OnlyTo(email));
+        Guid userId = (await LoadUserAsync(email)).Id;
+        string correlation = "verify-" + Guid.NewGuid().ToString("N")[..8];
+        AuditContext audit = new("203.0.113.77", "probe-agent", correlation);
+
+        await InScopeAsync(s => s.VerifyEmailAsync("no-such-token-value", audit, Ct));
+        await InScopeAsync(s => s.VerifyEmailAsync(token, audit, Ct));
+        await InScopeAsync(s => s.VerifyEmailAsync(token, audit, Ct));
+        await InScopeAsync(s => s.VerifyEmailAsync(string.Empty, audit, Ct));
+
+        List<AuditLog> rows = await WithContextAsync(context => context.AuditLog.AsNoTracking()
+            .Where(a => a.CorrelationId == correlation).OrderBy(a => a.Id).ToListAsync());
+        Assert.Equal(
+            [nameof(AuditEventType.EmailVerificationFailed), nameof(AuditEventType.EmailVerified), nameof(AuditEventType.EmailVerificationFailed), nameof(AuditEventType.EmailVerificationFailed)],
+            rows.Select(r => r.EventType));
+        Assert.Equal(["""{"reason":"unknown"}""", null, """{"reason":"used"}""", """{"reason":"malformed"}"""], rows.Select(r => r.Detail));
+        Assert.Equal([null, userId, userId, null], rows.Select(r => r.UserId));
+        Assert.All(rows, r => Assert.Equal(("203.0.113.77", "probe-agent"), (r.IpAddress, r.UserAgent)));
+        Assert.DoesNotContain(rows, r => (r.Detail ?? string.Empty).Contains(token, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Rejected_registrations_are_audited_with_field_names_only()
+    {
+        string correlation = "reject-" + Guid.NewGuid().ToString("N")[..8];
+
+        await InScopeAsync(s => s.RegisterAsync(new RegisterRequest("bad@@example", "short", "Ok Name"), new AuditContext("203.0.113.78", "probe", correlation), Ct));
+
+        AuditLog row = Assert.Single(await WithContextAsync(context => context.AuditLog.AsNoTracking().Where(a => a.CorrelationId == correlation).ToListAsync()));
+        Assert.Equal(nameof(AuditEventType.RegistrationRejected), row.EventType);
+        Assert.Equal("""{"fields":["email","password"]}""", row.Detail);
+        Assert.Null(row.UserId);
+    }
+
+    /// <summary>Audit MEDIUM-1 mitigation: every link email names the sign-up it confirms and says not to open it otherwise.</summary>
+    [Fact]
+    public async Task Link_emails_name_the_sign_up_time_and_warn_not_to_open_someone_elses()
+    {
+        string email = UniqueEmail();
+        await RegisterAsync(email);
+        clock.Advance(TimeSpan.FromMinutes(7));
+        await RegisterAsync(email);
+
+        IReadOnlyList<EmailMessage> messages = mailbox.To(email);
+        Assert.Contains(TestData.Now.ToString("yyyy-MM-dd 'at' HH:mm 'UTC'", System.Globalization.CultureInfo.InvariantCulture), messages[0].Body, StringComparison.Ordinal);
+        Assert.Contains(TestData.Now.AddMinutes(7).ToString("yyyy-MM-dd 'at' HH:mm 'UTC'", System.Globalization.CultureInfo.InvariantCulture), messages[1].Body, StringComparison.Ordinal);
+        Assert.All(messages, m => Assert.Contains("do NOT open the link", m.Body, StringComparison.Ordinal));
+    }
+
     public async ValueTask DisposeAsync() => await services.DisposeAsync();
 
     private static bool IsAscending(List<Guid> ids) =>
