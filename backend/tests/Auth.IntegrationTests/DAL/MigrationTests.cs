@@ -10,7 +10,7 @@ namespace Auth.IntegrationTests.DAL;
 
 /// <summary>
 /// T05 on real SQL Server: Up applies cleanly and a second run is a no-op, Down reverts, and the idempotent
-/// docs script runs twice. Each test uses its own throwaway <c>CentralAuth_Migrations_Test</c> database
+/// docs script runs twice. Each test uses its own throwaway <c>CentralAuth_Migrations_run{id}_Test</c> database
 /// (guarded by the _Test rule), created and dropped inside the test.
 /// </summary>
 [Collection(SqlServerTestGroup.Name)]
@@ -24,7 +24,7 @@ public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncL
         "RefreshToken", "Role", "RolePermission", "SigningKey", "User", "UserRole",
     ];
 
-    private readonly string connectionString = WithDatabase(database.ConnectionString, "CentralAuth_Migrations_Test");
+    private readonly string connectionString = TestDatabaseNames.WithUniqueDatabase(database.ConnectionString, "CentralAuth_Migrations");
 
     [Fact]
     public async Task Migrate_applies_cleanly_and_a_second_run_is_a_no_op()

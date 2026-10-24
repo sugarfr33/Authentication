@@ -8,8 +8,9 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Auth.IntegrationTests.DAL;
 
 /// <summary>
-/// Creates a throwaway <c>CentralAuth_Test</c> database on local SQL Express (Windows auth) for the whole test run,
-/// and drops it at the end. A leftover database from a crashed run is dropped first. The schema comes from the
+/// Creates a throwaway database on local SQL Express (Windows auth) for the whole test run, and drops it at the end.
+/// Its name is unique per run (<c>CentralAuth_run{id}_Test</c>, see <see cref="TestDatabaseNames"/>), so parallel runs
+/// never collide; databases left by crashed runs more than two hours ago are dropped first. The schema comes from the
 /// migrations (MigrateAsync), the same path production uses. Override the server with CENTRALAUTH_TEST_CONNECTION.
 /// </summary>
 public sealed class SqlServerDatabaseFixture : IAsyncLifetime
@@ -33,6 +34,7 @@ public sealed class SqlServerDatabaseFixture : IAsyncLifetime
     public async Task InitializeAsync()
     {
         EnsureThrowawayDatabase(ConnectionString);
+        await TestDatabaseNames.DropStaleAsync(ConnectionString, TimeSpan.FromHours(2));
         ServiceCollection collection = new();
         collection.AddDataAccess(ConnectionString, options => options.AddInterceptors(Commands));
         services = collection.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
@@ -78,8 +80,12 @@ public sealed class SqlServerDatabaseFixture : IAsyncLifetime
 
     private static string ResolveConnectionString()
     {
+        // The override chooses the server and credentials; the database name always gets this run's unique suffix.
         string? fromEnvironment = Environment.GetEnvironmentVariable(ConnectionStringVariable);
-        return string.IsNullOrWhiteSpace(fromEnvironment) ? LocalConnectionString : fromEnvironment;
+        string configured = string.IsNullOrWhiteSpace(fromEnvironment) ? LocalConnectionString : fromEnvironment;
+        EnsureThrowawayDatabase(configured);
+        string baseName = new SqlConnectionStringBuilder(configured).InitialCatalog;
+        return TestDatabaseNames.WithUniqueDatabase(configured, baseName);
     }
 
     /// <summary>Records the text of each executed command so tests can assert how many statements an operation sends.</summary>

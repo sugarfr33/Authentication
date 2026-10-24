@@ -20,7 +20,7 @@ using Serilog.Events;
 namespace Auth.IntegrationTests.Api;
 
 /// <summary>
-/// Hosts the real Auth.Api (Program) in the Production environment against its own throwaway CentralAuth_Api_Test
+/// Hosts the real Auth.Api (Program) in the Production environment against its own throwaway CentralAuth_Api_run{id}_Test
 /// database (migrated, with one real ES256 signing key), with every log event captured by an in-memory sink.
 /// </summary>
 public sealed class ApiFixture : IAsyncLifetime
@@ -45,8 +45,8 @@ public sealed class ApiFixture : IAsyncLifetime
         string baseConnection = Environment.GetEnvironmentVariable(SqlServerDatabaseFixture.ConnectionStringVariable) is { Length: > 0 } fromEnvironment
             ? fromEnvironment
             : @"Server=.\SQLEXPRESS;Database=CentralAuth_Test;Trusted_Connection=True;TrustServerCertificate=True;";
-        ConnectionString = WithDatabase(baseConnection, "CentralAuth_Api_Test");
-        MissingDatabaseConnectionString = WithDatabase(baseConnection, "CentralAuth_Missing_Test");
+        ConnectionString = TestDatabaseNames.WithUniqueDatabase(baseConnection, "CentralAuth_Api");
+        MissingDatabaseConnectionString = TestDatabaseNames.WithUniqueDatabase(baseConnection, "CentralAuth_Missing");
 
         using ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         PrivateKeyPem = key.ExportPkcs8PrivateKeyPem();
