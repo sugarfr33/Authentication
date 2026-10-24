@@ -29,6 +29,15 @@ public sealed class SigningKeyRotationTests : IDisposable
     }
 
     [Fact]
+    public async Task First_key_with_a_slightly_past_activation_starts_now()
+    {
+        await harness.AddKeyAsync("k1", KeyHarness.Start - TimeSpan.FromMilliseconds(5));
+
+        Assert.Equal(KeyHarness.Start, harness.Repository.Get("k1").ActivatedUtc);
+        Assert.Equal("k1", (await harness.Provider.GetSigningKeyAsync(Ct)).Kid);
+    }
+
+    [Fact]
     public async Task No_key_means_no_signing()
     {
         await Assert.ThrowsAsync<InvalidOperationException>(() => harness.Provider.GetSigningKeyAsync(Ct));

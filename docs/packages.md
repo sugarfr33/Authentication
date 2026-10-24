@@ -12,6 +12,7 @@ Add new packages only through the task that needs them, and add a line here when
 | Konscious.Security.Cryptography.Argon2 | 1.3.1 | Auth.Services | Argon2id password hashing (plan A9: m=64 MiB, t=3, p=1), managed code, MIT. Pulls Konscious.Security.Cryptography.Blake2 1.1.1 (same author, MIT). Output checked against the RFC 9106 Argon2id test vector in the unit tests. |
 | Microsoft.Extensions.Configuration.Abstractions | 10.0.13 | Auth.Services | `IConfiguration` for `AddAuthServices` to read the connection string and options. |
 | Microsoft.IdentityModel.JsonWebTokens | 8.23.0 | Auth.Services | Access-token creation and validation (T07, approved): JsonWebTokenHandler with ES256/RS256, pinned algorithms, kid-based key resolution. Brings Microsoft.IdentityModel.Tokens/Logging/Abstractions 8.23.0. ShowPII stays off. |
+| Serilog.AspNetCore | 10.0.0 | Auth.Api | Structured logging with the RedactionEnricher (T09, on the allowed list). Brings Serilog 4.3, Settings.Configuration, Sinks.Console/Debug/File, Formatting.Compact. |
 
 ## Design time
 
@@ -40,8 +41,9 @@ Add new packages only through the task that needs them, and add a line here when
 | Microsoft.NET.Test.Sdk | 18.11.0 | all test projects | Test host required by `dotnet test`. |
 | coverlet.collector | 6.0.4 | all test projects | Code-coverage collection (`dotnet test --collect "XPlat Code Coverage"`). |
 | NetArchTest.Rules | 1.3.2 | Auth.ArchitectureTests | IL-level checks that layers depend only on what the rules allow. |
+| Microsoft.AspNetCore.Mvc.Testing | 10.0.13 | Auth.IntegrationTests | WebApplicationFactory for hosting Auth.Api in tests (T09 acceptance; on the T00 approved plan list). |
 
 ## Planned (added by later tasks, approved in the T00 plan)
 
-FluentValidation (T12), Serilog.AspNetCore (T09),
-NSubstitute (first unit tests), Microsoft.AspNetCore.Mvc.Testing (integration tests), Testcontainers.MsSql (optional; local SQL Express is the default).
+FluentValidation (T12),
+NSubstitute (first unit tests), Testcontainers.MsSql (optional; local SQL Express is the default).

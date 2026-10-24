@@ -16,7 +16,7 @@ public interface ISigningKeyRotation
     /// Registers a key whose private part is already in the secret store under <paramref name="privateKeyReference"/>.
     /// It is published at once but signs only from <paramref name="activateAtUtc"/>, which must be at least
     /// token lifetime plus skew away, so clients have its public key before they meet a token signed with it.
-    /// The very first key (nothing signing yet) may activate immediately.
+    /// The very first key (nothing signing yet) may activate immediately; an activation time in the past is treated as now.
     /// </summary>
     Task AddKeyAsync(string kid, string algorithm, string privateKeyReference, DateTime activateAtUtc, CancellationToken cancellationToken);
 

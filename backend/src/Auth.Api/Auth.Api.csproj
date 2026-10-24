@@ -9,6 +9,10 @@
     deps.json and the publish output; Auth.ArchitectureTests fails the build if Api code uses them.
   -->
   <ItemGroup>
+    <PackageReference Include="Serilog.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Auth.Services\Auth.Services.csproj" />
     <ProjectReference Include="..\Auth.Contracts\Auth.Contracts.csproj" />
   </ItemGroup>

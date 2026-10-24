@@ -37,8 +37,13 @@ internal sealed class SigningKeyRotation(
         DateTime now = clock.UtcNow;
         IReadOnlyList<SigningKey> publishable = await repository.GetPublishableAsync(cancellationToken);
         bool bootstrap = SigningKeySchedule.CurrentSigningKey(publishable, now) is null;
-        DateTime earliest = bootstrap ? now : now + options.KeyOverlap;
-        if (activateAtUtc < earliest)
+        if (bootstrap && activateAtUtc < now)
+        {
+            // Nothing signs yet, so there is nothing to overlap with: the first key may start now (an earlier time means now).
+            activateAtUtc = now;
+        }
+
+        if (!bootstrap && activateAtUtc < now + options.KeyOverlap)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(activateAtUtc),

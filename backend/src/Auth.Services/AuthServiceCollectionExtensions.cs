@@ -23,6 +23,7 @@ public static class AuthServiceCollectionExtensions
 
         services.AddDataAccess(connectionString);
         services.AddPasswordServices();
+        services.AddScoped<ISystemHealth, SystemHealth>();
         services.AddTokenServices(configuration);
 
         return services;
