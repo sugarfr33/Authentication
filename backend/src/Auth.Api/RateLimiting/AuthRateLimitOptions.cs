@@ -33,8 +33,8 @@ public sealed class AuthRateLimitOptions
     public const string SectionName = "RateLimiting";
 
     /// <summary>
-    /// Request path (exact, case-insensitive) to kind. The defaults are the T12/T13 endpoint paths, so the limits
-    /// apply as soon as those endpoints exist. More paths can be added by configuration.
+    /// Request path (exact, case-insensitive) to kind. The defaults are the auth endpoint paths; an entry for an
+    /// endpoint that does not exist yet applies as soon as it does. More paths can be added by configuration.
     /// </summary>
     public Dictionary<string, AuthRateLimitKind> Paths { get; } = new(StringComparer.OrdinalIgnoreCase)
     {

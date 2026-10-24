@@ -40,4 +40,11 @@ public interface ITokenService
 
     /// <summary>Validates a token with <see cref="GetValidationParametersAsync"/>.</summary>
     Task<TokenValidationResult> ValidateAsync(string jwt, string? audience, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Like <see cref="ValidateAsync"/> for the default audience, but an expired token is still accepted: signature,
+    /// issuer, audience, type and algorithm are all checked. Only for logout, so a session whose access token has
+    /// just expired can still be ended; never for authorization.
+    /// </summary>
+    Task<TokenValidationResult> ValidateIgnoringLifetimeAsync(string jwt, CancellationToken cancellationToken);
 }

@@ -44,7 +44,7 @@ public static class AuthServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registration and email verification. Keeps any AccountEmailOptions registered earlier. The host must register
+    /// Registration, email verification and sign-in. Keeps any AccountEmailOptions registered earlier. The host must register
     /// an <see cref="IEmailSender"/>.
     /// </summary>
     internal static IServiceCollection AddAccountServices(this IServiceCollection services)
@@ -63,6 +63,7 @@ public static class AuthServiceCollectionExtensions
             sp.GetRequiredService<IEmailSender>(),
             sp.GetRequiredService<IClock>(),
             sp.GetRequiredService<AccountEmailOptions>().Validated()));
+        services.AddScoped<ISignInService, SignInService>();
 
         return services;
     }

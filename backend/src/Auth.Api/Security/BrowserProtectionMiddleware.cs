@@ -36,7 +36,7 @@ internal sealed class BrowserProtectionMiddleware(
         {
             if (context.Request.Path.StartsWithSegments(ApiPrefix))
             {
-                IssueTokens(context);
+                IssueTokens(context, antiforgery);
             }
 
             await next(context);
@@ -115,7 +115,11 @@ internal sealed class BrowserProtectionMiddleware(
         return origins;
     }
 
-    private void IssueTokens(HttpContext context)
+    /// <summary>
+    /// Issues a fresh antiforgery pair for <c>context.User</c>: the HttpOnly cookie token plus the readable XSRF-TOKEN.
+    /// Tokens are bound to the user, so login and logout call this again after switching the user.
+    /// </summary>
+    internal static void IssueTokens(HttpContext context, IAntiforgery antiforgery)
     {
         AntiforgeryTokenSet tokens = antiforgery.GetAndStoreTokens(context);
         context.Response.Cookies.Append(AuthCookieNames.Xsrf, tokens.RequestToken!, new CookieOptions

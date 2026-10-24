@@ -19,8 +19,9 @@ Three steps, in this order, on the auth paths (framework limiter, no package):
    `EmailNormalizer` (Auth.Contracts: trimmed, upper case, at most 256 characters), used for the rate-limit key,
    `User.NormalizedEmail` and every lookup by email.
 
-Operations are matched **by request path** (`RateLimiting:Paths`), so the limits apply to the T12/T13 endpoints as
-soon as they exist at these paths:
+Operations are matched **by request path** (`RateLimiting:Paths`). Register and verify-email (T12) and login (T13)
+are live at these paths; refresh, forgot-password and reset-password are limited as soon as they exist. Logout,
+logout-all and /me are not rate limited (they need the antiforgery token, and logout-all and /me also a session):
 
 | Kind | Path | Per IP | Per account |
 |---|---|---|---|
@@ -55,7 +56,7 @@ Persisted on the User row (`FailedLoginCount`, `LockoutEndUtc`, `LockoutLevel`):
 - `ResetAsync` (successful sign-in) clears the counter, the lock and the backoff level.
 - Writes use the User RowVersion with a bounded retry, so concurrent failures are never lost (tested in parallel).
 - `RegisterFailureAsync` returns `AccountLockedOut` when this failure caused the lock: the hook T17 logs as Lockout.
-- T13 must answer a locked account exactly like a wrong password (see the timing guard).
+- Login (T13) answers a locked account exactly like a wrong password, after the same single Verify (see sign-in-and-sessions.md).
 
 Settings: section `Lockout` (`FailuresBeforeLockout`, `BaseLockout`, `MaxLockout`).
 
@@ -104,6 +105,10 @@ warning, instead of the process running out of memory.
   for existing accounts; T13 should do an equivalent round trip for unknown accounts and keep the locked and
   wrong-password responses byte-identical. (iii) A stored hash that cannot be parsed returns Failed without Argon2
   work; such rows should not exist, but T13 can verify against the dummy hash in that case.
+  **T13 status:** (ii) done: an unknown email also does a lockout round trip (a lookup) and the same audit insert, and
+  every failure answer is identical (tested); the residual is the lockout UPDATE for existing accounts
+  (sign-in-and-sessions.md). (iii) the empty "no usable password" hash of unverified registrations is refused before
+  the guard, so it verifies the dummy hash; only a corrupted, non-empty hash would skip Argon2.
 - **Capacity settings.** `PasswordHashing:MaxConcurrentOperations` is limited to 1..64 (64 is about 4 GiB of peak
   Argon2 memory). Waiting for a slot is bounded by the 5 s queue timeout. Request paths must use `HashAsync` and
   `VerifyAsync` only; the sync methods block a thread while queued. A client that disconnects while queued is

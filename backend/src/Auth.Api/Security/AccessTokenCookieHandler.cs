@@ -45,9 +45,12 @@ internal sealed class AccessTokenCookieHandler(
             return AuthenticateResult.Fail("Invalid access token.");
         }
 
-        ClaimsIdentity identity = new(result.ClaimsIdentity.Claims, Scheme.Name, AuthClaimTypes.Name, AuthClaimTypes.Role);
-        return AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name));
+        return AuthenticateResult.Success(new AuthenticationTicket(PrincipalFrom(result.ClaimsIdentity), Scheme.Name));
     }
+
+    /// <summary>The principal for a validated access token: the same one every later request will authenticate as.</summary>
+    internal static ClaimsPrincipal PrincipalFrom(ClaimsIdentity validated) =>
+        new(new ClaimsIdentity(validated.Claims, SchemeName, AuthClaimTypes.Name, AuthClaimTypes.Role));
 
     protected override Task HandleChallengeAsync(AuthenticationProperties properties) =>
         WriteProblemAsync(StatusCodes.Status401Unauthorized, "Authentication required.");

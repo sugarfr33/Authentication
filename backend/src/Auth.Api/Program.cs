@@ -55,6 +55,7 @@ else
 }
 
 builder.Services.AddSingleton<IEndpointModule, AccountEndpoints>();
+builder.Services.AddSingleton<IEndpointModule, SessionEndpoints>();
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
     context.ProblemDetails.Extensions["traceId"] = Activity.Current?.Id ?? context.HttpContext.TraceIdentifier);
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();

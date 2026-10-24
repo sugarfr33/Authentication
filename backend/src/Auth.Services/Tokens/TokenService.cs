@@ -98,6 +98,13 @@ internal sealed class TokenService(SigningKeyProvider keys, IClock clock, TokenO
         return await handler.ValidateTokenAsync(jwt, parameters);
     }
 
+    public async Task<TokenValidationResult> ValidateIgnoringLifetimeAsync(string jwt, CancellationToken cancellationToken)
+    {
+        TokenValidationParameters parameters = await GetValidationParametersAsync(null, cancellationToken);
+        parameters.ValidateLifetime = false;
+        return await handler.ValidateTokenAsync(jwt, parameters);
+    }
+
     private static void AddIfAny(Dictionary<string, object> claims, string type, IReadOnlyCollection<string> values)
     {
         if (values.Count > 0)
@@ -106,12 +113,19 @@ internal sealed class TokenService(SigningKeyProvider keys, IClock clock, TokenO
         }
     }
 
+    /// <summary>
+    /// Wraps a key object for IdentityModel. Signature-provider caching is OFF: the default factory caches providers
+    /// process-wide by key id, so a provider could outlive (and reuse) a key object that the key provider has already
+    /// disposed, e.g. after a reload or in a second host in the same process, and signing would fail.
+    /// </summary>
     private static SecurityKey ToSecurityKey(string kid, AsymmetricAlgorithm key) => key switch
     {
-        ECDsa ec => new ECDsaSecurityKey(ec) { KeyId = kid },
-        RSA rsa => new RsaSecurityKey(rsa) { KeyId = kid },
+        ECDsa ec => new ECDsaSecurityKey(ec) { KeyId = kid, CryptoProviderFactory = NonCachingProviders() },
+        RSA rsa => new RsaSecurityKey(rsa) { KeyId = kid, CryptoProviderFactory = NonCachingProviders() },
         _ => throw new InvalidOperationException("Signing key '" + kid + "' has an unsupported key type."),
     };
+
+    private static CryptoProviderFactory NonCachingProviders() => new() { CacheSignatureProviders = false };
 
     private static string ToSecurityAlgorithm(string algorithm) => algorithm switch
     {
