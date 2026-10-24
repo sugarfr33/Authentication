@@ -12,9 +12,12 @@ Three steps, in this order, on the auth paths (framework limiter, no package):
    endpoint, and nothing is buffered to disk. For kinds with a per-account rule, the email is then read exactly like
    the endpoint's System.Text.Json binder: UTF-8 BOM skipped, depth 64, case-insensitive name, last value wins. A
    declared non-utf-8 charset gets **415**. Ambiguous or unparsable bodies (duplicated, non-string or blank email,
-   malformed JSON, invalid UTF-8) all share one constant bucket, so parsing tricks cannot escape the limit.
-3. **Per account** (`AccountRateLimitMiddleware`): a fixed window per normalized email (trimmed, upper case, like
-   `User.NormalizedEmail`).
+   malformed JSON, invalid UTF-8) all share one constant bucket, so parsing tricks cannot escape the limit. A body
+   the server itself cannot read keeps the server's status (408 too slow, 400 bad framing) and is logged as a warning;
+   413 is only for a real overflow. Rate-limited endpoints bind JSON bodies only, never forms (tested).
+3. **Per account** (`AccountRateLimitMiddleware`): a fixed window per normalized email. There is one normalizer,
+   `EmailNormalizer` (Auth.Contracts: trimmed, upper case, at most 256 characters), used for the rate-limit key,
+   `User.NormalizedEmail` and every lookup by email.
 
 Operations are matched **by request path** (`RateLimiting:Paths`), so the limits apply to the T12/T13 endpoints as
 soon as they exist at these paths:
@@ -90,7 +93,8 @@ warning, instead of the process running out of memory.
   address, and IPv4-mapped IPv6 as IPv4.
 - **Hashing capacity.** Waiting for a hashing slot is asynchronous (no thread is held while queued), and Argon2 runs
   on a worker. The timing guard's dummy hash is created at startup (and otherwise on first need); a failure (e.g.
-  busy) is not cached, so the next request simply tries again.
+  busy) is not cached, so the next request simply tries again. A failed warm-up is logged as a warning and never
+  stops the host.
 - **Lockout window and decay (audit LOW-4, for T17).** `FailedLoginCount` never decays with time and the lockout level
   resets only on success. A failure window (reset the count after N quiet minutes) and level decay after a quiet period
   are on the T17 list, together with the unlock-by-email-link mitigation.

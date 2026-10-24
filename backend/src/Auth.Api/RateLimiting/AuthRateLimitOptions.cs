@@ -54,8 +54,8 @@ public sealed class AuthRateLimitOptions
     };
 
     /// <summary>
-    /// At most this many body bytes are read to find the account email. A larger or chunked body is only IP-limited;
-    /// the body is never buffered in memory beyond this size.
+    /// Body cap for POSTs to the rate-limited paths: a larger body (declared or streamed/chunked) is answered 413 and
+    /// never reaches the endpoint. The body is read into memory up to this size (never to disk) to find the account email.
     /// </summary>
     public int MaxAccountBodyBytes { get; set; } = 16 * 1024;
 

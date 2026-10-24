@@ -1,13 +1,13 @@
 using System.Net;
 using System.Net.Sockets;
-using Auth.Services.Passwords;
 using Auth.Services.Security;
 
 namespace Auth.Api.Hosting;
 
 /// <summary>
 /// Creates the timing guard's dummy hash at startup, outside any request, so the first unknown-account sign-in does
-/// not pay for an extra Hash (audit LOW-5). A busy or cancelled start is harmless: the guard creates it on first need.
+/// not pay for an extra Hash (audit LOW-5). It never stops the host: any failure is logged as a warning and the guard
+/// simply creates the hash on first need.
 /// </summary>
 internal sealed partial class TimingGuardWarmUp(IAuthTimingGuard guard, ILogger<TimingGuardWarmUp> logger) : BackgroundService
 {
@@ -17,14 +17,18 @@ internal sealed partial class TimingGuardWarmUp(IAuthTimingGuard guard, ILogger<
         {
             await guard.WarmUpAsync(stoppingToken);
         }
-        catch (Exception ex) when (ex is PasswordHashingBusyException or OperationCanceledException)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            LogWarmUpSkipped(logger);
+            // Host shutting down before the warm-up finished: nothing to report.
+        }
+        catch (Exception ex)
+        {
+            LogWarmUpFailed(logger, ex);
         }
     }
 
-    [LoggerMessage(EventId = 5100, Level = LogLevel.Information, Message = "Timing-guard warm-up skipped; the dummy hash will be created on first use")]
-    private static partial void LogWarmUpSkipped(ILogger logger);
+    [LoggerMessage(EventId = 5100, Level = LogLevel.Warning, Message = "Timing-guard warm-up failed; the dummy hash will be created on first use")]
+    private static partial void LogWarmUpFailed(ILogger logger, Exception exception);
 }
 
 /// <summary>

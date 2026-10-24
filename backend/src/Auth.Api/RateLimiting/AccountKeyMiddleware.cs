@@ -20,7 +20,11 @@ namespace Auth.Api.RateLimiting;
 /// so parsing tricks cannot escape the per-account limit.</item>
 /// </list>
 /// </summary>
-internal sealed class AccountKeyMiddleware(RequestDelegate next, IOptions<AuthRateLimitOptions> options, IProblemDetailsService problemDetails)
+internal sealed partial class AccountKeyMiddleware(
+    RequestDelegate next,
+    IOptions<AuthRateLimitOptions> options,
+    IProblemDetailsService problemDetails,
+    ILogger<AccountKeyMiddleware> logger)
 {
     public const string ItemKey = "Auth.RateLimit.Account";
 
@@ -48,10 +52,12 @@ internal sealed class AccountKeyMiddleware(RequestDelegate next, IOptions<AuthRa
             sizeFeature.MaxRequestBodySize = maxBytes;
         }
 
-        (bool tooLarge, byte[]? body) = context.Request.ContentLength > maxBytes ? (true, null) : await BufferBodyAsync(context, maxBytes);
-        if (tooLarge)
+        (int failure, byte[]? body) = context.Request.ContentLength > maxBytes
+            ? (StatusCodes.Status413PayloadTooLarge, null)
+            : await BufferBodyAsync(context, maxBytes);
+        if (failure != 0)
         {
-            await WriteProblemAsync(context, StatusCodes.Status413PayloadTooLarge, "Request body too large.");
+            await WriteProblemAsync(context, failure, failure == StatusCodes.Status413PayloadTooLarge ? "Request body too large." : "The request body could not be read.");
             return;
         }
 
@@ -130,13 +136,8 @@ internal sealed class AccountKeyMiddleware(RequestDelegate next, IOptions<AuthRa
                 return null;
             }
 
-            string? email = last?.Trim();
-            if (matches > 1 || !allStrings || string.IsNullOrEmpty(email) || email.Length > 256)
-            {
-                return AmbiguousAccount;
-            }
-
-            return email.ToUpperInvariant();
+            string? normalized = EmailNormalizer.Normalize(last);
+            return matches > 1 || !allStrings || normalized is null ? AmbiguousAccount : normalized;
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
@@ -157,10 +158,12 @@ internal sealed class AccountKeyMiddleware(RequestDelegate next, IOptions<AuthRa
     }
 
     /// <summary>
-    /// Reads the whole body into memory, at most maxBytes, and rewinds it for the endpoint. Returns tooLarge when the
-    /// body exceeds the cap (counted here, or reported by the server's MaxRequestBodySize as 413).
+    /// Reads the whole body into memory, at most maxBytes, and rewinds it for the endpoint. Returns failure 0 and the
+    /// bytes, or the status to answer: 413 only for a real overflow (counted here, or the server's MaxRequestBodySize),
+    /// otherwise the server's own status for a body it could not read (408 timeout / MinRequestBodyDataRate, 400 bad
+    /// framing), logged as a warning. A client that disconnected is left to the exception handler (499, no error).
     /// </summary>
-    private static async Task<(bool TooLarge, byte[]? Body)> BufferBodyAsync(HttpContext context, int maxBytes)
+    private async Task<(int Failure, byte[]? Body)> BufferBodyAsync(HttpContext context, int maxBytes)
     {
         context.Request.EnableBuffering(bufferThreshold: maxBytes + 1, bufferLimit: maxBytes + 1);
         byte[] buffer = ArrayPool<byte>.Shared.Rent(maxBytes + 1);
@@ -180,21 +183,34 @@ internal sealed class AccountKeyMiddleware(RequestDelegate next, IOptions<AuthRa
 
             if (total > maxBytes)
             {
-                return (true, null);
+                return (StatusCodes.Status413PayloadTooLarge, null);
             }
 
             context.Request.Body.Position = 0;
-            return (false, buffer[..total]);
+            return (0, buffer[..total]);
         }
-        catch (Exception ex) when (ex is BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge } or IOException)
+        catch (BadHttpRequestException ex) when (ex.StatusCode == StatusCodes.Status413PayloadTooLarge)
         {
-            return (true, null);
+            return (StatusCodes.Status413PayloadTooLarge, null);
+        }
+        catch (BadHttpRequestException ex)
+        {
+            LogUnreadableBody(logger, ex.StatusCode, ex.Message);
+            return (ex.StatusCode, null);
+        }
+        catch (IOException ex) when (!context.RequestAborted.IsCancellationRequested)
+        {
+            LogUnreadableBody(logger, StatusCodes.Status400BadRequest, ex.Message);
+            return (StatusCodes.Status400BadRequest, null);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
     }
+
+    [LoggerMessage(EventId = 5110, Level = LogLevel.Warning, Message = "Auth request body could not be read (answered {StatusCode}): {Reason}")]
+    private static partial void LogUnreadableBody(ILogger logger, int statusCode, string reason);
 
     private async Task WriteProblemAsync(HttpContext context, int status, string title)
     {

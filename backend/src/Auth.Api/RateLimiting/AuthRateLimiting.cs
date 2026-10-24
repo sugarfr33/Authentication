@@ -10,9 +10,10 @@ using Microsoft.Net.Http.Headers;
 namespace Auth.Api.RateLimiting;
 
 /// <summary>
-/// Rate limiting for the auth endpoints with the framework limiter (no package). One global, chained limiter: a per-IP
-/// fixed window, then a per-account fixed window when an account key was found. Requests to other paths are not
-/// limited. Rejections are 429 ProblemDetails with Retry-After.
+/// Rate limiting for the auth endpoints with the framework limiter (no package), in two steps: the global limiter is a
+/// per-IP fixed window that counts the request before its body is read; after AccountKeyMiddleware has read the email,
+/// AccountRateLimitMiddleware applies the per-account fixed window. Requests to other paths are not limited.
+/// Rejections are 429 ProblemDetails with Retry-After.
 /// </summary>
 internal static class AuthRateLimiting
 {
