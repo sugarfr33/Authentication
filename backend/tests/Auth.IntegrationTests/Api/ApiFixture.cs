@@ -61,6 +61,9 @@ public sealed class ApiFixture : IAsyncLifetime
 
     public LogSink Logs { get; } = new();
 
+    /// <summary>Every account email the app sends (the fixture replaces the production sender).</summary>
+    public Services.CapturingEmailSender Emails { get; } = new();
+
     public ApiFactory Factory { get; }
 
     public HttpClient CreateHttpsClient(WebApplicationFactory<Program>? factory = null) =>
@@ -165,6 +168,7 @@ public sealed class ApiFixture : IAsyncLifetime
             builder.ConfigureServices(services =>
             {
                 services.AddSingleton<ILogEventSink>(fixture.Logs);
+                services.AddSingleton<Auth.Services.Accounts.IEmailSender>(fixture.Emails);
                 services.AddSingleton(new Auth.Services.Passwords.PasswordHashingOptions { MemorySizeKiB = 1024, Iterations = 1, Parallelism = 1 });
                 services.AddSingleton<IStartupFilter, RemoteIpFilter>();
                 services.AddSingleton<IStartupFilter, ThrowingEndpointFilter>();

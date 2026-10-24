@@ -45,5 +45,5 @@ Add new packages only through the task that needs them, and add a line here when
 
 ## Planned (added by later tasks, approved in the T00 plan)
 
-FluentValidation (T12),
+FluentValidation (T12; not added: hand-written validators do the job without a new dependency),
 NSubstitute (first unit tests), Testcontainers.MsSql (optional; local SQL Express is the default).

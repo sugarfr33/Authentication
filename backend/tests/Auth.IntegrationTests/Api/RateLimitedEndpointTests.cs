@@ -23,7 +23,8 @@ public sealed class RateLimitedEndpointTests(ApiFixture api)
             .Where(e => limits.Paths.ContainsKey("/" + e.RoutePattern.RawText?.Trim('/')))
             .ToList();
 
-        Assert.NotEmpty(limited);
+        Assert.Contains(limited, e => e.RoutePattern.RawText == "/api/v1/auth/register");
+        Assert.Contains(limited, e => e.RoutePattern.RawText == "/api/v1/auth/verify-email");
         Assert.All(limited, endpoint =>
         {
             Assert.Empty(endpoint.Metadata.OfType<IFromFormMetadata>());

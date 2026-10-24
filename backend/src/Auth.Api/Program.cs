@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using Auth.Api.Email;
 using Auth.Api.Endpoints;
 using Auth.Api.Health;
 using Auth.Api.Hosting;
@@ -10,6 +11,7 @@ using Auth.Contracts;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Auth.Services;
+using Auth.Services.Accounts;
 using Auth.Services.ClientApplications;
 using Auth.Services.Passwords;
 using Auth.Services.Security;
@@ -38,7 +40,21 @@ builder.Services.AddSingleton(new ClientApplicationOriginOptions { RequireHttps 
 // Optional overrides of the Services defaults: concurrent Argon2 operations and lockout thresholds.
 builder.Services.AddSingleton(builder.Configuration.GetSection("PasswordHashing").Get<PasswordHashingLimits>() ?? new PasswordHashingLimits());
 builder.Services.AddSingleton(builder.Configuration.GetSection("Lockout").Get<LockoutOptions>() ?? new LockoutOptions());
+builder.Services.AddSingleton(builder.Configuration.GetSection(AccountEmailOptions.SectionName).Get<AccountEmailOptions>() ?? new AccountEmailOptions());
 builder.Services.AddAuthServices(builder.Configuration);
+
+// Account emails (T12): a local pickup folder in Development; elsewhere a real provider must replace the refusing sender.
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddSingleton(builder.Configuration.GetSection(DevelopmentEmailOptions.SectionName).Get<DevelopmentEmailOptions>() ?? new DevelopmentEmailOptions());
+    builder.Services.AddSingleton<IEmailSender, PickupDirectoryEmailSender>();
+}
+else
+{
+    builder.Services.AddSingleton<IEmailSender, UnconfiguredEmailSender>();
+}
+
+builder.Services.AddSingleton<IEndpointModule, AccountEndpoints>();
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
     context.ProblemDetails.Extensions["traceId"] = Activity.Current?.Id ?? context.HttpContext.TraceIdentifier);
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
@@ -111,7 +127,7 @@ app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.Health
 
 app.MapWellKnownEndpoints();
 
-// Versioned API surface: every registered endpoint module is mapped under /api/v1 (real modules arrive with T13).
+// Versioned API surface: every registered endpoint module is mapped under /api/v1.
 RouteGroupBuilder api = app.MapGroup("/api/v1");
 foreach (IEndpointModule module in app.Services.GetServices<IEndpointModule>())
 {

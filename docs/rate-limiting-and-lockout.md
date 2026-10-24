@@ -29,6 +29,7 @@ soon as they exist at these paths:
 | Register | `/api/v1/auth/register` | 10 / 1 h | 3 / 1 h |
 | ForgotPassword | `/api/v1/auth/forgot-password` | 10 / 15 min | 3 / 15 min |
 | ResetPassword | `/api/v1/auth/reset-password` | 10 / 15 min | - |
+| VerifyEmail | `/api/v1/auth/verify-email` | 30 / 15 min | - |
 
 All values can be changed under `RateLimiting:Policies:<Kind>:PerIp|PerAccount:PermitLimit|Window`. Other paths are not
 limited. OPTIONS (preflight) is never counted. A rejection is **429** ProblemDetails with `Retry-After` (seconds until

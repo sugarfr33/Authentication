@@ -8,6 +8,7 @@ public enum AuthRateLimitKind
     Register,
     ForgotPassword,
     ResetPassword,
+    VerifyEmail,
 }
 
 /// <summary>A fixed-window limit: <see cref="PermitLimit"/> requests per <see cref="Window"/>.</summary>
@@ -42,6 +43,7 @@ public sealed class AuthRateLimitOptions
         ["/api/v1/auth/register"] = AuthRateLimitKind.Register,
         ["/api/v1/auth/forgot-password"] = AuthRateLimitKind.ForgotPassword,
         ["/api/v1/auth/reset-password"] = AuthRateLimitKind.ResetPassword,
+        ["/api/v1/auth/verify-email"] = AuthRateLimitKind.VerifyEmail,
     };
 
     public Dictionary<AuthRateLimitKind, AuthRateLimitPolicy> Policies { get; } = new()
@@ -51,6 +53,7 @@ public sealed class AuthRateLimitOptions
         [AuthRateLimitKind.Register] = Policy(10, TimeSpan.FromHours(1), 3, TimeSpan.FromHours(1)),
         [AuthRateLimitKind.ForgotPassword] = Policy(10, TimeSpan.FromMinutes(15), 3, TimeSpan.FromMinutes(15)),
         [AuthRateLimitKind.ResetPassword] = Policy(10, TimeSpan.FromMinutes(15), null, TimeSpan.Zero),
+        [AuthRateLimitKind.VerifyEmail] = Policy(30, TimeSpan.FromMinutes(15), null, TimeSpan.Zero),
     };
 
     /// <summary>

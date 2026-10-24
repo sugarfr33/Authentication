@@ -1,5 +1,7 @@
 using Auth.DAL;
 using Auth.DAL.Repositories;
+using Auth.Entities;
+using Auth.Services.Accounts;
 using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
@@ -36,6 +38,30 @@ public static class AuthServiceCollectionExtensions
         services.TryAddSingleton(new ClientApplicationOriginOptions());
         services.AddSingleton<IClientApplicationOriginProvider, ClientApplicationOriginProvider>();
         services.AddTokenServices(configuration);
+        services.AddAccountServices();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registration and email verification. Keeps any AccountEmailOptions registered earlier. The host must register
+    /// an <see cref="IEmailSender"/>.
+    /// </summary>
+    internal static IServiceCollection AddAccountServices(this IServiceCollection services)
+    {
+        services.TryAddSingleton(new AccountEmailOptions());
+        services.AddSingleton<RegisterRequestValidator>();
+        services.AddScoped<IRegistrationService>(sp => new RegistrationService(
+            sp.GetRequiredService<RegisterRequestValidator>(),
+            sp.GetRequiredService<IPasswordHasher>(),
+            sp.GetRequiredService<IUserRepository>(),
+            sp.GetRequiredService<IOneTimeTokenRepository<EmailVerificationToken>>(),
+            sp.GetRequiredService<IAuditLogRepository>(),
+            sp.GetRequiredService<IUnitOfWork>(),
+            sp.GetRequiredService<ITokenGenerator>(),
+            sp.GetRequiredService<IEmailSender>(),
+            sp.GetRequiredService<IClock>(),
+            sp.GetRequiredService<AccountEmailOptions>().Validated()));
 
         return services;
     }
