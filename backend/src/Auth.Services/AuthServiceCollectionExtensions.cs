@@ -1,4 +1,5 @@
 using Auth.DAL;
+using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
 using Auth.Services.Tokens;
@@ -24,6 +25,8 @@ public static class AuthServiceCollectionExtensions
         services.AddDataAccess(connectionString);
         services.AddPasswordServices();
         services.AddScoped<ISystemHealth, SystemHealth>();
+        services.TryAddSingleton(new ClientApplicationOriginOptions());
+        services.AddSingleton<IClientApplicationOriginProvider, ClientApplicationOriginProvider>();
         services.AddTokenServices(configuration);
 
         return services;

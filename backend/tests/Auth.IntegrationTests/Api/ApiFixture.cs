@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
+using Auth.Api.Endpoints;
 using Auth.DAL;
 using Auth.Entities;
 using Auth.IntegrationTests.DAL;
@@ -29,6 +30,10 @@ public sealed class ApiFixture : IAsyncLifetime
     public const string SigningKid = "api-k1";
     public const string ThrowPath = "/__test/throw";
     public const string ThrowProbe = "probe-exception-text-C:/secret/path";
+
+    public const string AppOrigin = "https://app.example.test";
+    public const string InactiveOrigin = "https://inactive.example.test";
+    public static readonly Guid UserId = Guid.Parse("0b9f3c3e-6a1d-4e8b-9c2a-5d7e1f2a3b4c");
 
     private const string PrivateKeyReference = "api-test-key";
 
@@ -65,6 +70,7 @@ public sealed class ApiFixture : IAsyncLifetime
             SqlServerDatabaseFixture.EnsureThrowawayDatabase(ConnectionString);
             await context.Database.EnsureDeletedAsync();
             await context.Database.MigrateAsync();
+            await SeedAsync(context);
         }
 
         await using AsyncServiceScope scope = Factory.Services.CreateAsyncScope();
@@ -96,6 +102,40 @@ public sealed class ApiFixture : IAsyncLifetime
         ["Serilog:MinimumLevel:Override:System"] = "Verbose",
     };
 
+    /// <summary>One user, one active application (AppOrigin) and one inactive application (InactiveOrigin).</summary>
+    private static async Task SeedAsync(AuthDbContext context)
+    {
+        DateTime now = DateTime.UtcNow;
+        context.User.Add(new User
+        {
+            Id = UserId,
+            Email = "api.user@example.test",
+            NormalizedEmail = "API.USER@EXAMPLE.TEST",
+            PasswordHash = "argon2id$placeholder",
+            DisplayName = "Api User",
+            IsActive = true,
+            SecurityStamp = Guid.NewGuid(),
+            CreatedUtc = now,
+            UpdatedUtc = now,
+        });
+        context.ClientApplication.Add(Application("active-app", AppOrigin, isActive: true, now));
+        context.ClientApplication.Add(Application("inactive-app", InactiveOrigin, isActive: false, now));
+        await context.SaveChangesAsync();
+    }
+
+    private static ClientApplication Application(string clientId, string origin, bool isActive, DateTime now) => new()
+    {
+        ClientId = clientId,
+        Name = clientId,
+        Audience = "api://" + clientId,
+        AllowedOrigin = "[\"" + origin + "\"]",
+        RedirectUri = "[]",
+        PostLogoutRedirectUri = "[]",
+        IsActive = isActive,
+        CreatedUtc = now,
+        UpdatedUtc = now,
+    };
+
     private static AuthDbContext NewContext(string connectionString)
     {
         DbContextOptionsBuilder<AuthDbContext> builder = new();
@@ -121,6 +161,7 @@ public sealed class ApiFixture : IAsyncLifetime
             {
                 services.AddSingleton<ILogEventSink>(fixture.Logs);
                 services.AddSingleton<IStartupFilter, ThrowingEndpointFilter>();
+                services.AddSingleton<IEndpointModule, TestEndpoints>();
             });
         }
     }

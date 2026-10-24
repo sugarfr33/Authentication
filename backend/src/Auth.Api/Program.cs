@@ -4,6 +4,10 @@ using Auth.Api.Endpoints;
 using Auth.Api.Health;
 using Auth.Api.Hosting;
 using Auth.Api.Logging;
+using Auth.Api.Security;
+using Auth.Contracts;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Cors.Infrastructure;
 using Auth.Services;
 using Serilog;
 using Serilog.Events;
@@ -29,6 +33,33 @@ builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = 
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddHealthChecks().AddCheck<DatabaseReadinessCheck>("database", tags: ["ready"]);
 
+// Cookie transport (T10): tokens only ever travel in HttpOnly, Secure cookies.
+builder.Services.AddOptions<AuthCookieOptions>()
+    .Bind(builder.Configuration.GetSection(AuthCookieOptions.SectionName))
+    .Validate(options => options.IsValid(), "AuthCookies is invalid: AccessSameSite must be Lax or Strict, RefreshPath must start with /, Domain must be a bare host.")
+    .ValidateOnStart();
+builder.Services.AddOptions<BrowserProtectionOptions>().Bind(builder.Configuration.GetSection(BrowserProtectionOptions.SectionName));
+builder.Services.AddSingleton<ICookieWriter, CookieWriter>();
+builder.Services.AddAuthentication(AccessTokenCookieHandler.SchemeName)
+    .AddScheme<AuthenticationSchemeOptions, AccessTokenCookieHandler>(AccessTokenCookieHandler.SchemeName, configureOptions: null);
+builder.Services.AddAuthorization();
+
+// CSRF: antiforgery tokens bound to the user; the request token reaches script via the readable XSRF-TOKEN cookie.
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = AuthCookieNames.XsrfHeader;
+    options.Cookie.Name = AuthCookieNames.Antiforgery;
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    options.Cookie.Path = "/";
+    options.SuppressXFrameOptionsHeader = true;
+});
+
+// CORS: exact origins from active client applications (plus trusted origins), credentials allowed, never a wildcard.
+builder.Services.AddCors();
+builder.Services.AddSingleton<ICorsPolicyProvider, ClientApplicationCorsPolicyProvider>();
+
 WebApplication app = builder.Build();
 
 app.UseMiddleware<SecurityHeadersMiddleware>();
@@ -40,6 +71,10 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseSerilogRequestLogging();
+app.UseCors();
+app.UseAuthentication();
+app.UseMiddleware<BrowserProtectionMiddleware>();
+app.UseAuthorization();
 
 // Liveness: the process answers. Readiness: dependencies (the database) answer. Bodies are just the status word.
 app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions { Predicate = _ => false });
@@ -47,8 +82,12 @@ app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.Health
 
 app.MapWellKnownEndpoints();
 
-// Versioned API surface. Endpoints arrive with T10+ (cookies, auth flows).
-app.MapGroup("/api/v1");
+// Versioned API surface: every registered endpoint module is mapped under /api/v1 (real modules arrive with T13).
+RouteGroupBuilder api = app.MapGroup("/api/v1");
+foreach (IEndpointModule module in app.Services.GetServices<IEndpointModule>())
+{
+    module.Map(api);
+}
 
 app.Run();
 

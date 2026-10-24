@@ -50,6 +50,13 @@ internal sealed class SecurityHeadersMiddleware(RequestDelegate next, IHostEnvir
             headers[HeaderNames.StrictTransportSecurity] = StrictTransportSecurity;
         }
 
+        // CORS answers are computed per request Origin (one exact origin per policy), so caches must key on Origin;
+        // the CORS middleware only adds this itself when a policy lists several origins.
+        if (!headers.Vary.ToString().Contains("Origin", StringComparison.OrdinalIgnoreCase))
+        {
+            headers.Append(HeaderNames.Vary, "Origin");
+        }
+
         if (!headers.ContainsKey(HeaderNames.CacheControl))
         {
             headers[HeaderNames.CacheControl] = NoStore;

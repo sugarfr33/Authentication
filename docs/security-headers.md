@@ -11,6 +11,7 @@
 | `Referrer-Policy` | `no-referrer` | Never leak URLs (which may carry codes) to other sites. |
 | `Permissions-Policy` | every powerful feature disabled (`camera=()`, `geolocation=()`, ...) | The API needs none of them. |
 | `Cross-Origin-Opener-Policy` | `same-origin` | Isolates the browsing context. |
+| `Vary` | `Origin` | CORS headers are computed per request Origin, so caches (e.g. for the public JWKS) must key on it. |
 | `Cache-Control` | `no-store` (plus `Pragma: no-cache`) unless an endpoint sets its own | Auth responses must never be cached. The JWKS sets `public, max-age=300`. |
 
 The `Server` header is removed (Kestrel `AddServerHeader = false`).

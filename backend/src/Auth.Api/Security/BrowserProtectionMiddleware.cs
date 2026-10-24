@@ -1,0 +1,138 @@
+using Auth.Contracts;
+using Auth.Services.ClientApplications;
+using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+
+namespace Auth.Api.Security;
+
+/// <summary>
+/// CSRF defence for cookie-authenticated browsers:
+/// <list type="bullet">
+/// <item>GET/HEAD under /api issue the antiforgery pair: an HttpOnly cookie token plus the readable
+/// <c>XSRF-TOKEN</c> cookie that script echoes back.</item>
+/// <item>Every other method (POST, PUT, PATCH, DELETE, ...) must come from an allowed origin: Origin header, or Referer
+/// when Origin is absent; same-origin, configured trusted origins or active client applications. It must also carry a
+/// matching <c>X-XSRF-TOKEN</c> header.</item>
+/// </list>
+/// Runs after authentication, because antiforgery tokens are bound to the signed-in user.
+/// </summary>
+internal sealed class BrowserProtectionMiddleware(
+    RequestDelegate next,
+    IAntiforgery antiforgery,
+    IClientApplicationOriginProvider applicationOrigins,
+    IOptions<BrowserProtectionOptions> options,
+    IProblemDetailsService problemDetails)
+{
+    private static readonly PathString ApiPrefix = new("/api");
+
+    private readonly HashSet<string> trustedOrigins = NormalizeTrusted(options.Value.TrustedOrigins);
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        string method = context.Request.Method;
+        if (HttpMethods.IsGet(method) || HttpMethods.IsHead(method))
+        {
+            if (context.Request.Path.StartsWithSegments(ApiPrefix))
+            {
+                IssueTokens(context);
+            }
+
+            await next(context);
+            return;
+        }
+
+        if (HttpMethods.IsOptions(method))
+        {
+            await next(context);
+            return;
+        }
+
+        if (!await IsOriginAllowedAsync(context))
+        {
+            await WriteProblemAsync(context, StatusCodes.Status403Forbidden, "Request origin is not allowed.");
+            return;
+        }
+
+        try
+        {
+            await antiforgery.ValidateRequestAsync(context);
+        }
+        catch (AntiforgeryValidationException)
+        {
+            await WriteProblemAsync(context, StatusCodes.Status400BadRequest, "Missing or invalid antiforgery token.");
+            return;
+        }
+
+        await next(context);
+    }
+
+    /// <summary>True when the request's origin is allowed for a state-changing call. Used by the CORS policy too.</summary>
+    internal async Task<bool> IsOriginAllowedAsync(HttpContext context)
+    {
+        string? origin = context.Request.Headers.Origin;
+        string candidate;
+        if (!string.IsNullOrEmpty(origin))
+        {
+            if (!OriginNormalizer.TryNormalize(origin, out candidate))
+            {
+                return false;
+            }
+        }
+        else if (!string.IsNullOrEmpty(context.Request.Headers.Referer))
+        {
+            if (!OriginNormalizer.TryGetOrigin(context.Request.Headers.Referer, out candidate))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            return options.Value.AllowMissingOrigin;
+        }
+
+        string self = (context.Request.Scheme + "://" + context.Request.Host.Value).ToLowerInvariant();
+        return candidate == self
+            || trustedOrigins.Contains(candidate)
+            || await applicationOrigins.IsAllowedAsync(candidate, context.RequestAborted);
+    }
+
+    internal static HashSet<string> NormalizeTrusted(IEnumerable<string> configured)
+    {
+        HashSet<string> origins = new(StringComparer.Ordinal);
+        foreach (string entry in configured)
+        {
+            if (!OriginNormalizer.TryNormalize(entry, out string normalized))
+            {
+                throw new InvalidOperationException("BrowserProtection:TrustedOrigins contains an entry that is not an exact http(s) origin.");
+            }
+
+            origins.Add(normalized);
+        }
+
+        return origins;
+    }
+
+    private void IssueTokens(HttpContext context)
+    {
+        AntiforgeryTokenSet tokens = antiforgery.GetAndStoreTokens(context);
+        context.Response.Cookies.Append(AuthCookieNames.Xsrf, tokens.RequestToken!, new CookieOptions
+        {
+            HttpOnly = false,
+            Secure = true,
+            SameSite = SameSiteMode.Strict,
+            Path = "/",
+            IsEssential = true,
+        });
+    }
+
+    private async Task WriteProblemAsync(HttpContext context, int status, string title)
+    {
+        context.Response.StatusCode = status;
+        await problemDetails.WriteAsync(new ProblemDetailsContext
+        {
+            HttpContext = context,
+            ProblemDetails = new ProblemDetails { Status = status, Title = title },
+        });
+    }
+}

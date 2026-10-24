@@ -1,14 +1,26 @@
 namespace Auth.Contracts;
 
-/// <summary>Cookie names used by the API and the auth UI.</summary>
+/// <summary>Cookie and header names used by the API and the auth UI.</summary>
 public static class AuthCookieNames
 {
-    /// <summary>HttpOnly access-token cookie (host-only, Path=/).</summary>
+    /// <summary>HttpOnly access-token cookie: host-only (no Domain), Path=/, Secure.</summary>
     public const string Access = "__Host-access";
 
-    /// <summary>HttpOnly refresh-token cookie, scoped to the refresh endpoint.</summary>
+    /// <summary>
+    /// Access-token cookie name when a cookie Domain is configured (shared-domain mode, T20). The <c>__Host-</c> prefix
+    /// forbids a Domain attribute, so the <c>__Secure-</c> prefix is used instead.
+    /// </summary>
+    public const string AccessWithDomain = "__Secure-access";
+
+    /// <summary>HttpOnly refresh-token cookie, scoped to the refresh endpoint path.</summary>
     public const string Refresh = "__Secure-refresh";
 
-    /// <summary>Readable antiforgery cookie echoed back in the <c>X-XSRF-TOKEN</c> header.</summary>
+    /// <summary>Readable (not HttpOnly, by design) antiforgery request token, echoed back in <see cref="XsrfHeader"/>.</summary>
     public const string Xsrf = "XSRF-TOKEN";
+
+    /// <summary>HttpOnly antiforgery cookie token that the request token is checked against.</summary>
+    public const string Antiforgery = "__Host-antiforgery";
+
+    /// <summary>Header that state-changing requests must carry with the value of the <see cref="Xsrf"/> cookie.</summary>
+    public const string XsrfHeader = "X-XSRF-TOKEN";
 }
