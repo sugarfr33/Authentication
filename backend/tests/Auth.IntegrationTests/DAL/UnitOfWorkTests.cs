@@ -103,6 +103,44 @@ public class UnitOfWorkTests(SqlServerDatabaseFixture database) : RepositoryTest
         Assert.Equal((false, false, false), await ExistsAsync(work));
     }
 
+    /// <summary>
+    /// Two RepeatableRead transactions read the same row and then both update it: SQL Server kills one as deadlock
+    /// victim (1205). EF wraps that in a "transient failure" InvalidOperationException; the unit of work must still
+    /// surface it as ConcurrencyConflictException, and exactly one update survives.
+    /// </summary>
+    [Fact]
+    public async Task Deadlock_victim_is_reported_as_ConcurrencyConflictException()
+    {
+        User user = TestData.User();
+        await SeedAsync(user);
+        using Barrier bothRead = new(2);
+
+        Task<Exception?>[] writers = Enumerable.Range(1, 2).Select(n => Task.Run(async () =>
+        {
+            await using AsyncServiceScope scope = Database.CreateScope();
+            IUnitOfWork unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+            try
+            {
+                await using IUnitOfWorkTransaction transaction = await unitOfWork.BeginTransactionAsync(IsolationLevel.RepeatableRead, Ct);
+                User copy = (await scope.ServiceProvider.GetRequiredService<IUserRepository>().GetByIdAsync(user.Id, Ct))!;
+                bothRead.SignalAndWait(TimeSpan.FromSeconds(30));
+                copy.FailedLoginCount = n;
+                await unitOfWork.SaveChangesAsync(Ct);
+                await transaction.CommitAsync(Ct);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return ex;
+            }
+        })).ToArray();
+
+        Exception?[] outcomes = await Task.WhenAll(writers);
+
+        Assert.Single(outcomes, e => e is null);
+        Assert.IsType<ConcurrencyConflictException>(Assert.Single(outcomes, e => e is not null));
+    }
+
     private static Work NewWork()
     {
         User user = TestData.User();

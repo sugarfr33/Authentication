@@ -12,7 +12,7 @@ public interface IUnitOfWork
     Task<IUnitOfWorkTransaction> BeginTransactionAsync(IsolationLevel isolationLevel, CancellationToken cancellationToken);
 
     /// <summary>Saves tracked changes.</summary>
-    /// <exception cref="ConcurrencyConflictException">A RowVersion check failed.</exception>
+    /// <exception cref="ConcurrencyConflictException">A RowVersion check failed, or SQL Server chose this save as a deadlock victim (the transaction is rolled back).</exception>
     /// <exception cref="UniqueConstraintViolationException">A unique index or key was violated.</exception>
     /// <exception cref="DataAccessException">Any other database failure while saving.</exception>
     Task<int> SaveChangesAsync(CancellationToken cancellationToken);

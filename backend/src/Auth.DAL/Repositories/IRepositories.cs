@@ -39,6 +39,13 @@ public interface IRefreshTokenRepository
 {
     Task<RefreshToken?> GetByHashAsync(byte[] tokenHash, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Like <see cref="GetByHashAsync"/> but takes an update lock on the row (UPDLOCK) until the current transaction ends,
+    /// so a second rotation of the same token waits for the first to commit instead of deadlocking. Call inside an
+    /// IUnitOfWork transaction.
+    /// </summary>
+    Task<RefreshToken?> GetByHashForUpdateAsync(byte[] tokenHash, CancellationToken cancellationToken);
+
     Task AddAsync(RefreshToken token, CancellationToken cancellationToken);
 
     /// <summary>Revokes every not-yet-revoked token of the family in one UPDATE. Returns the number revoked.</summary>
@@ -49,6 +56,9 @@ public interface IRefreshTokenRepository
 
     /// <summary>The user's tokens that are neither revoked nor expired at <paramref name="utcNow"/>, newest first.</summary>
     Task<IReadOnlyList<RefreshToken>> GetActiveByUserAsync(Guid userId, DateTime utcNow, CancellationToken cancellationToken);
+
+    /// <summary>When the family started: the earliest CreatedUtc of its tokens, or null for an unknown family.</summary>
+    Task<DateTime?> GetFamilyCreatedUtcAsync(Guid familyId, CancellationToken cancellationToken);
 }
 
 /// <summary>Single-use hashed tokens: <see cref="PasswordResetToken"/>, <see cref="EmailVerificationToken"/>, <see cref="MfaRecoveryCode"/>.</summary>

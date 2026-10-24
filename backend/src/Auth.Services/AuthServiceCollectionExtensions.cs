@@ -45,6 +45,9 @@ public static class AuthServiceCollectionExtensions
         services.AddSingleton<ISigningKeyProvider>(sp => sp.GetRequiredService<SigningKeyProvider>());
         services.AddScoped<ISigningKeyRotation, SigningKeyRotation>();
         services.AddSingleton<ITokenService, TokenService>();
+        services.TryAddSingleton(new RefreshTokenOptions().Validated());
+        services.AddSingleton<ITokenGenerator, TokenGenerator>();
+        services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 
         return services;
     }

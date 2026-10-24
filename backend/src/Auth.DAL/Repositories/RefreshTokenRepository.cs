@@ -8,6 +8,11 @@ internal sealed class RefreshTokenRepository(AuthDbContext context) : IRefreshTo
     public Task<RefreshToken?> GetByHashAsync(byte[] tokenHash, CancellationToken cancellationToken) =>
         context.RefreshToken.FirstOrDefaultAsync(t => t.TokenHash == tokenHash, cancellationToken);
 
+    public Task<RefreshToken?> GetByHashForUpdateAsync(byte[] tokenHash, CancellationToken cancellationToken) =>
+        context.RefreshToken
+            .FromSql($"SELECT * FROM [auth].[RefreshToken] WITH (UPDLOCK, ROWLOCK) WHERE [TokenHash] = {tokenHash}")
+            .FirstOrDefaultAsync(cancellationToken);
+
     public async Task AddAsync(RefreshToken token, CancellationToken cancellationToken) =>
         await context.RefreshToken.AddAsync(token, cancellationToken);
 
@@ -30,4 +35,9 @@ internal sealed class RefreshTokenRepository(AuthDbContext context) : IRefreshTo
             .Where(t => t.UserId == userId && t.RevokedUtc == null && t.ExpiresUtc > utcNow)
             .OrderByDescending(t => t.CreatedUtc)
             .ToListAsync(cancellationToken);
+
+    public Task<DateTime?> GetFamilyCreatedUtcAsync(Guid familyId, CancellationToken cancellationToken) =>
+        context.RefreshToken
+            .Where(t => t.FamilyId == familyId)
+            .MinAsync(t => (DateTime?)t.CreatedUtc, cancellationToken);
 }
