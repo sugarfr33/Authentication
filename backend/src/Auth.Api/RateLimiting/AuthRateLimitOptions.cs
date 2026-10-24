@@ -10,6 +10,7 @@ public enum AuthRateLimitKind
     ResetPassword,
     VerifyEmail,
     ChangePassword,
+    Sessions,
 }
 
 /// <summary>A fixed-window limit: <see cref="PermitLimit"/> requests per <see cref="Window"/>.</summary>
@@ -48,6 +49,15 @@ public sealed class AuthRateLimitOptions
         ["/api/v1/auth/change-password"] = AuthRateLimitKind.ChangePassword,
     };
 
+    /// <summary>
+    /// Path prefix (case-insensitive) to kind, for routes with parameters: the prefix itself and anything below it
+    /// (prefix + "/...") match. Exact <see cref="Paths"/> entries win.
+    /// </summary>
+    public Dictionary<string, AuthRateLimitKind> PathPrefixes { get; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["/api/v1/auth/sessions"] = AuthRateLimitKind.Sessions,
+    };
+
     public Dictionary<AuthRateLimitKind, AuthRateLimitPolicy> Policies { get; } = new()
     {
         [AuthRateLimitKind.Login] = Policy(20, TimeSpan.FromMinutes(1), 10, TimeSpan.FromMinutes(15)),
@@ -57,6 +67,7 @@ public sealed class AuthRateLimitOptions
         [AuthRateLimitKind.ResetPassword] = Policy(10, TimeSpan.FromMinutes(15), null, TimeSpan.Zero),
         [AuthRateLimitKind.VerifyEmail] = Policy(30, TimeSpan.FromMinutes(15), null, TimeSpan.Zero),
         [AuthRateLimitKind.ChangePassword] = Policy(10, TimeSpan.FromMinutes(15), null, TimeSpan.Zero),
+        [AuthRateLimitKind.Sessions] = Policy(60, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
     };
 
     /// <summary>
@@ -72,7 +83,21 @@ public sealed class AuthRateLimitOptions
     internal AuthRateLimitKind? Resolve(PathString path)
     {
         string value = (path.Value ?? string.Empty).TrimEnd('/');
-        return Paths.TryGetValue(value, out AuthRateLimitKind kind) ? kind : null;
+        if (Paths.TryGetValue(value, out AuthRateLimitKind kind))
+        {
+            return kind;
+        }
+
+        foreach (KeyValuePair<string, AuthRateLimitKind> prefix in PathPrefixes)
+        {
+            string root = prefix.Key.TrimEnd('/');
+            if (value.Equals(root, StringComparison.OrdinalIgnoreCase) || value.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return prefix.Value;
+            }
+        }
+
+        return null;
     }
 
     private static bool IsValid(RateLimitRule rule) => rule.PermitLimit > 0 && rule.Window > TimeSpan.Zero;

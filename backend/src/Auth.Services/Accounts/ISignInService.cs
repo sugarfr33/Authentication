@@ -15,6 +15,9 @@ namespace Auth.Services.Accounts;
 /// <summary>A started session: the tokens go to cookies only, the profile to the response body.</summary>
 public sealed record SignedIn(AccessToken AccessToken, IssuedRefreshToken RefreshToken, UserProfileResponse Profile);
 
+/// <summary>Outcome of a refresh: <see cref="Session"/> is set only when the status is Rotated.</summary>
+public sealed record RefreshOutcome(RotationStatus Status, SignedIn? Session);
+
 /// <summary>Email and password sign-in, sign-out and the signed-in profile (T13).</summary>
 public interface ISignInService
 {
@@ -45,10 +48,29 @@ public interface ISignInService
 
     /// <summary>The profile of an active user, without secrets; <see cref="AuthError.NotFound"/> for a missing or inactive one.</summary>
     Task<Result<UserProfileResponse>> GetProfileAsync(Guid userId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Rotates the presented refresh token (T08 rules: one winner of a race, reuse revokes the family) and, when rotated,
+    /// mints a new access token for the default audience with sid = the family. Audits TokenRefreshed or TokenReuse.
+    /// </summary>
+    Task<RefreshOutcome> RefreshAsync(string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The user's live sessions (one row per refresh family, newest use first, at most <paramref name="max"/>), with the
+    /// family whose id is <paramref name="currentSessionId"/> flagged as current. IP and user agent are cleaned for display.
+    /// </summary>
+    Task<IReadOnlyList<SessionResponse>> ListSessionsAsync(Guid userId, Guid? currentSessionId, int max, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Revokes one session of the user. False when the family does not belong to the user (or does not exist): the caller
+    /// cannot tell the two apart. Revoking an already revoked own session is true (idempotent).
+    /// </summary>
+    Task<bool> RevokeSessionAsync(Guid userId, Guid familyId, AuditContext audit, CancellationToken cancellationToken);
 }
 
 internal sealed class SignInService(
     IUserRepository users,
+    IRefreshTokenRepository refreshRows,
     IRoleRepository roles,
     IAuditLogRepository auditLog,
     IUnitOfWork unitOfWork,
@@ -130,6 +152,67 @@ internal sealed class SignInService(
         int revoked = await refreshTokens.RevokeAllAsync(userId, RefreshTokenRevokedReason.LogoutAll, cancellationToken);
         await AuditAsync(AuditEventType.LogoutAll, userId, "{\"revoked\":" + revoked.ToString(CultureInfo.InvariantCulture) + "}", audit, cancellationToken);
         return revoked;
+    }
+
+    public async Task<RefreshOutcome> RefreshAsync(string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(audit);
+        if (string.IsNullOrEmpty(presentedRefreshToken))
+        {
+            return new RefreshOutcome(RotationStatus.Invalid, null);
+        }
+
+        // RotateAsync may clear the change tracker on its retry, so audit rows are staged only after it returns.
+        RotationResult rotation = await refreshTokens.RotateAsync(
+            presentedRefreshToken, new RefreshContext(audit.IpAddress ?? string.Empty, audit.UserAgent ?? string.Empty), cancellationToken);
+        switch (rotation.Status)
+        {
+            case RotationStatus.Rotated when rotation.Token is IssuedRefreshToken token:
+                User? user = await users.GetByIdAsync(token.UserId, cancellationToken);
+                if (user is not { IsActive: true, EmailVerified: true })
+                {
+                    await refreshTokens.RevokeFamilyForUserAsync(token.FamilyId, token.UserId, RefreshTokenRevokedReason.Admin, cancellationToken);
+                    return new RefreshOutcome(RotationStatus.Invalid, null);
+                }
+
+                UserProfileResponse profile = await ProfileAsync(user, cancellationToken);
+                AccessToken access = await tokens.CreateAccessTokenAsync(
+                    new AccessTokenRequest(user.Id, user.Email, user.DisplayName, profile.Roles, profile.Permissions, tokenOptions.DefaultAudience, null, token.FamilyId),
+                    cancellationToken);
+                await AuditAsync(AuditEventType.TokenRefreshed, user.Id, null, audit, cancellationToken);
+                return new RefreshOutcome(RotationStatus.Rotated, new SignedIn(access, token, profile));
+
+            case RotationStatus.ReuseDetected when rotation.Reuse is TokenReuseDetected reuse:
+                await AuditAsync(AuditEventType.TokenReuse, reuse.UserId, "{\"revoked\":" + reuse.RevokedCount.ToString(CultureInfo.InvariantCulture) + "}", audit, cancellationToken);
+                return new RefreshOutcome(RotationStatus.ReuseDetected, null);
+
+            default:
+                return new RefreshOutcome(rotation.Status, null);
+        }
+    }
+
+    public async Task<IReadOnlyList<SessionResponse>> ListSessionsAsync(Guid userId, Guid? currentSessionId, int max, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<IRefreshSessionSummary> sessions = await refreshRows.GetActiveSessionsAsync(userId, clock.UtcNow, max, cancellationToken);
+        return [.. sessions.Select(s => new SessionResponse(
+            s.FamilyId, ForDisplay(s.IpAddress, 45), ForDisplay(s.UserAgent, 256), s.CreatedUtc, s.LastUsedUtc, s.FamilyId == currentSessionId))];
+    }
+
+    public async Task<bool> RevokeSessionAsync(Guid userId, Guid familyId, AuditContext audit, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(audit);
+        if (!await refreshRows.FamilyBelongsToUserAsync(familyId, userId, cancellationToken))
+        {
+            return false;
+        }
+
+        int revoked = await refreshTokens.RevokeFamilyForUserAsync(familyId, userId, RefreshTokenRevokedReason.Logout, cancellationToken);
+        if (revoked > 0)
+        {
+            await AuditAsync(AuditEventType.SessionRevoked, userId, "{\"session\":\"" + familyId.ToString("D") + "\"}", audit, cancellationToken);
+        }
+
+        return true;
     }
 
     public async Task<Result<UserProfileResponse>> GetProfileAsync(Guid userId, CancellationToken cancellationToken)
@@ -224,10 +307,20 @@ internal sealed class SignInService(
     }
 
     /// <summary>
+    /// For display only: control and invisible format characters and the HTML brackets &lt; &gt; removed (they never
+    /// occur in a real IP address or user agent), trimmed, capped. The stored value is not changed.
+    /// </summary>
+    private static string ForDisplay(string value, int max)
+    {
+        string clean = new string([.. value.Where(c => !char.IsControl(c) && char.GetUnicodeCategory(c) != UnicodeCategory.Format && c is not ('<' or '>'))]).Trim();
+        return clean.Length <= max ? clean : clean[..max];
+    }
+
+    /// <summary>
     /// Writes a session audit row. The user id is kept only if the account still exists (AuditLog has a foreign key to
     /// User): a token of a deleted account must still be able to sign out without a database error.
     /// </summary>
-    private async Task AuditAsync(AuditEventType type, Guid userId, string detail, AuditContext audit, CancellationToken cancellationToken)
+    private async Task AuditAsync(AuditEventType type, Guid userId, string? detail, AuditContext audit, CancellationToken cancellationToken)
     {
         Guid? existing = await users.GetByIdAsync(userId, cancellationToken) is null ? null : userId;
         await auditLog.AddAsync(audit.Entry(type, existing, clock.UtcNow, detail), cancellationToken);

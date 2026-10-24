@@ -42,6 +42,23 @@ internal sealed partial class SessionEndpoints : IEndpointModule
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
+        // Anonymous: the refresh cookie is the credential. Origin check and antiforgery apply like every POST.
+        auth.MapPost("/refresh", RefreshAsync)
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status409Conflict);
+
+        auth.MapGet("/sessions", ListSessionsAsync)
+            .RequireAuthorization()
+            .Produces<IReadOnlyList<SessionResponse>>()
+            .ProducesProblem(StatusCodes.Status401Unauthorized);
+
+        auth.MapDelete("/sessions/{id}", RevokeSessionAsync)
+            .RequireAuthorization()
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized);
+
         auth.MapGet("/me", MeAsync)
             .RequireAuthorization()
             .Produces<UserProfileResponse>()
@@ -138,6 +155,86 @@ internal sealed partial class SessionEndpoints : IEndpointModule
 
         SignOut(http, cookies, antiforgery);
         return TypedResults.NoContent();
+    }
+
+    private static async Task<IResult> RefreshAsync(
+        ISignInService signIn,
+        ITokenService tokens,
+        ICookieWriter cookies,
+        IAntiforgery antiforgery,
+        HttpContext http,
+        CancellationToken cancellationToken)
+    {
+        RefreshOutcome outcome = await signIn.RefreshAsync(RefreshCookie(http), AccountEndpoints.AuditFrom(http), cancellationToken);
+        switch (outcome.Status)
+        {
+            case RotationStatus.Rotated when outcome.Session is SignedIn session:
+                cookies.WriteAccessToken(http.Response, session.AccessToken);
+                cookies.WriteRefreshToken(http.Response, session.RefreshToken);
+                await ReissueXsrfForAsync(session.AccessToken, tokens, antiforgery, http, cancellationToken);
+                return TypedResults.NoContent();
+
+            case RotationStatus.Concurrent:
+                // Another tab refreshed with this token a moment ago; its response carries the new cookies. Change nothing.
+                return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: "The session was just refreshed; retry the request.");
+
+            default:
+                SignOut(http, cookies, antiforgery);
+                return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "The session has ended; sign in again.");
+        }
+    }
+
+    /// <summary>Maximum sessions listed; a user with more sees the most recently used ones.</summary>
+    internal const int MaxListedSessions = 50;
+
+    private static async Task<IResult> ListSessionsAsync(ISignInService signIn, HttpContext http, CancellationToken cancellationToken)
+    {
+        ClaimsIdentity? identity = http.User.Identity as ClaimsIdentity;
+        if (!TryGetGuid(identity, AuthClaimTypes.Subject, out Guid userId))
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Authentication required.");
+        }
+
+        Guid? current = TryGetGuid(identity, AuthClaimTypes.SessionId, out Guid sid) ? sid : null;
+        return TypedResults.Ok(await signIn.ListSessionsAsync(userId, current, MaxListedSessions, cancellationToken));
+    }
+
+    private static async Task<IResult> RevokeSessionAsync(
+        string id,
+        ISignInService signIn,
+        ICookieWriter cookies,
+        IAntiforgery antiforgery,
+        HttpContext http,
+        CancellationToken cancellationToken)
+    {
+        ClaimsIdentity? identity = http.User.Identity as ClaimsIdentity;
+        if (!TryGetGuid(identity, AuthClaimTypes.Subject, out Guid userId))
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Authentication required.");
+        }
+
+        // A malformed id, an unknown one and another user's session all get this same 404.
+        if (!Guid.TryParse(id, out Guid familyId) || !await signIn.RevokeSessionAsync(userId, familyId, AccountEndpoints.AuditFrom(http), cancellationToken))
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: "Session not found.");
+        }
+
+        if (TryGetGuid(identity, AuthClaimTypes.SessionId, out Guid current) && current == familyId)
+        {
+            SignOut(http, cookies, antiforgery);
+        }
+
+        return TypedResults.NoContent();
+    }
+
+    private static async Task ReissueXsrfForAsync(AccessToken access, ITokenService tokens, IAntiforgery antiforgery, HttpContext http, CancellationToken cancellationToken)
+    {
+        TokenValidationResult minted = await tokens.ValidateAsync(access.Jwt, null, cancellationToken);
+        if (minted is { IsValid: true, ClaimsIdentity: not null })
+        {
+            http.User = AccessTokenCookieHandler.PrincipalFrom(minted.ClaimsIdentity);
+            BrowserProtectionMiddleware.IssueTokens(http, antiforgery);
+        }
     }
 
     private static async Task<IResult> MeAsync(ISignInService signIn, HttpContext http, CancellationToken cancellationToken)

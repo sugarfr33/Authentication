@@ -114,5 +114,18 @@ public class RateLimitKeyTests
         Assert.Equal("unknown", AuthRateLimiting.ClientPartitionKey(null));
     }
 
+    /// <summary>T15: routes with an id are matched by prefix; exact paths still win and look-alike paths do not match.</summary>
+    [Theory]
+    [InlineData("/api/v1/auth/sessions", AuthRateLimitKind.Sessions)]
+    [InlineData("/api/v1/auth/sessions/", AuthRateLimitKind.Sessions)]
+    [InlineData("/API/v1/Auth/Sessions/3f2b8c1e-0000-4000-8000-000000000000", AuthRateLimitKind.Sessions)]
+    [InlineData("/api/v1/auth/sessionsX", null)]
+    [InlineData("/api/v1/auth/login", AuthRateLimitKind.Login)]
+    [InlineData("/api/v1/auth/me", null)]
+    public void Paths_resolve_exactly_or_by_prefix(string path, AuthRateLimitKind? expected)
+    {
+        Assert.Equal(expected, new AuthRateLimitOptions().Resolve(path));
+    }
+
     private static string? Find(string json) => AccountKeyMiddleware.FindEmail(Encoding.UTF8.GetBytes(json));
 }

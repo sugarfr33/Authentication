@@ -14,6 +14,9 @@ its family; every other route ignores it (tested: with only the refresh cookie, 
 | `POST /logout` | anonymous (works with an expired access cookie) | none | **204**, both cookies expired, new anonymous XSRF-TOKEN | - |
 | `POST /logout-all` | signed in | none | **204**, every session revoked, cookies expired, new XSRF-TOKEN | **401** |
 | `GET /me` | signed in | - | **200** `UserProfileResponse` | **401** (also for an inactive or deleted account) |
+| `POST /refresh` (T15) | refresh cookie | none | **204**, both cookies rotated, XSRF reissued for the user | **401** (cookies expired) for an unknown, expired, revoked or reused token; **409** for the losing side of a concurrent refresh (cookies untouched) |
+| `GET /sessions` (T15) | signed in | - | **200** array of `SessionResponse` | **401** |
+| `DELETE /sessions/{id}` (T15) | signed in | none | **204** (current session: cookies expired too) | **404** "Session not found." for a malformed, unknown or another user's id; **401** |
 
 `UserProfileResponse`: id, email, emailVerified, displayName, mfaEnabled, roles, permissions. No hash, stamp, lockout
 counters or secrets.
@@ -78,6 +81,38 @@ the session may still be live on the server.
 Needs a valid access cookie. Revokes every refresh family of the user (reason `LogoutAll`, one UPDATE), writes a
 `LogoutAll` audit row with the count, expires the cookies and reissues an anonymous XSRF token. Access tokens already
 issued elsewhere stay valid until they expire (short lifetime); they can no longer be refreshed.
+
+## Refresh (T15)
+
+`POST /refresh` rotates the refresh cookie with the T08 rules (`IRefreshTokenService.RotateAsync`: one winner of a
+race, a replayed token revokes its whole family) and mints a new access token for the default audience with the same
+`sid`. Audit: `TokenRefreshed`, or `TokenReuse` with the revoked count. A rotated token whose user is no longer active
+and verified gets its family revoked. Like every POST it needs an allowed Origin and the antiforgery token. Note for the
+SPA (T23): when the access cookie has expired the user is anonymous again, so the XSRF token must be an anonymous one;
+any GET under /api (for example the 401 from `/me`) issues it. After a successful refresh the XSRF token is reissued
+for the user.
+
+## Active sessions (T15)
+
+`GET /sessions` lists the caller's **own** live sessions: one row per refresh family (not per token) that still has
+a token that is neither revoked nor expired, most recently used first, at most 50.
+
+| Field | Meaning |
+|---|---|
+| `familyId` | opaque session id (the refresh family id; also the access token `sid`) |
+| `createdUtc` | when the session started: the earliest token of the family (the T08 anchor of the 30-day cap) |
+| `lastUsedUtc` | when it was last refreshed (its live token) |
+| `ip`, `userAgent` | of the last refresh; for display, control and invisible characters and `<` `>` are removed and they are capped at 45 and 256 characters (stored values unchanged) |
+| `isCurrent` | true for the family named by the caller's own `sid` |
+
+No token, hash, SecurityStamp, row id or user id is returned (tested). The DAL returns a read model
+(`IRefreshSessionSummary`), never an entity.
+
+`DELETE /sessions/{id}` revokes one of the caller's sessions (`RevokeFamilyForUserAsync`, reason `Logout`, audit
+`SessionRevoked` with the session id). Another user's session id, an unknown id and a malformed id all give the
+**identical 404** (tested), so ids of other users cannot be probed. Revoking an already revoked own session is **204**
+again (idempotent; audited only when something was revoked). Revoking the current session also expires this browser's
+cookies, like logout. A revoked session cannot refresh (tested through `/refresh`: 401).
 
 ## Residual risks
 

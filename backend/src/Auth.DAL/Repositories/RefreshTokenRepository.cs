@@ -48,8 +48,37 @@ internal sealed class RefreshTokenRepository(AuthDbContext context) : IRefreshTo
             .OrderByDescending(t => t.CreatedUtc)
             .ToListAsync(cancellationToken));
 
+    public Task<IReadOnlyList<IRefreshSessionSummary>> GetActiveSessionsAsync(Guid userId, DateTime utcNow, int max, CancellationToken cancellationToken) =>
+        SqlErrors.MapDeadlockAsync<IReadOnlyList<IRefreshSessionSummary>>(async () =>
+        {
+            // Normally one live token per family (rotation revokes the old one); keep the newest if there are more.
+            List<LiveToken> live = await context.RefreshToken.AsNoTracking()
+                .Where(t => t.UserId == userId && t.RevokedUtc == null && t.ExpiresUtc > utcNow)
+                .OrderByDescending(t => t.CreatedUtc)
+                .Select(t => new LiveToken(t.FamilyId, t.CreatedUtc, t.IpAddress, t.UserAgent))
+                .Take(max * 4)
+                .ToListAsync(cancellationToken);
+            List<LiveToken> latest = live.GroupBy(t => t.FamilyId).Select(g => g.First()).Take(max).ToList();
+            List<Guid> families = latest.Select(t => t.FamilyId).ToList();
+
+            Dictionary<Guid, DateTime> started = await context.RefreshToken.AsNoTracking()
+                .Where(t => families.Contains(t.FamilyId))
+                .GroupBy(t => t.FamilyId)
+                .Select(g => new { FamilyId = g.Key, CreatedUtc = g.Min(t => t.CreatedUtc) })
+                .ToDictionaryAsync(g => g.FamilyId, g => g.CreatedUtc, cancellationToken);
+
+            return latest.Select(IRefreshSessionSummary (t) => new RefreshSessionSummary(t.FamilyId, started[t.FamilyId], t.CreatedUtc, t.IpAddress, t.UserAgent)).ToList();
+        });
+
+    public Task<bool> FamilyBelongsToUserAsync(Guid familyId, Guid userId, CancellationToken cancellationToken) =>
+        SqlErrors.MapDeadlockAsync(() => context.RefreshToken.AnyAsync(t => t.FamilyId == familyId && t.UserId == userId, cancellationToken));
+
     public Task<DateTime?> GetFamilyCreatedUtcAsync(Guid familyId, CancellationToken cancellationToken) =>
         SqlErrors.MapDeadlockAsync(() => context.RefreshToken
             .Where(t => t.FamilyId == familyId)
             .MinAsync(t => (DateTime?)t.CreatedUtc, cancellationToken));
+
+    private sealed record LiveToken(Guid FamilyId, DateTime CreatedUtc, string IpAddress, string UserAgent);
+
+    private sealed record RefreshSessionSummary(Guid FamilyId, DateTime CreatedUtc, DateTime LastUsedUtc, string IpAddress, string UserAgent) : IRefreshSessionSummary;
 }

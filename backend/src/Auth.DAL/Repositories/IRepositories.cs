@@ -35,6 +35,23 @@ public interface IRoleRepository
     Task<IReadOnlyList<string>> GetPermissionCodesForUserAsync(Guid userId, Guid? clientApplicationId, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Read model of one live session (refresh family): when it started (its first token), when it was last refreshed (its
+/// live token), and the IP and user agent of that last refresh. No hashes, tokens or row ids.
+/// </summary>
+public interface IRefreshSessionSummary
+{
+    Guid FamilyId { get; }
+
+    DateTime CreatedUtc { get; }
+
+    DateTime LastUsedUtc { get; }
+
+    string IpAddress { get; }
+
+    string UserAgent { get; }
+}
+
 public interface IRefreshTokenRepository
 {
     Task<RefreshToken?> GetByHashAsync(byte[] tokenHash, CancellationToken cancellationToken);
@@ -68,6 +85,15 @@ public interface IRefreshTokenRepository
     /// whole families only: deleting a family's oldest rows would move its start later and extend the session.
     /// </summary>
     Task<DateTime?> GetFamilyCreatedUtcAsync(Guid familyId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The user's live sessions at <paramref name="utcNow"/> (families with a token that is neither revoked nor expired),
+    /// one row per family, most recently used first, at most <paramref name="max"/>.
+    /// </summary>
+    Task<IReadOnlyList<IRefreshSessionSummary>> GetActiveSessionsAsync(Guid userId, DateTime utcNow, int max, CancellationToken cancellationToken);
+
+    /// <summary>True when the family has at least one token of <paramref name="userId"/>, in any state.</summary>
+    Task<bool> FamilyBelongsToUserAsync(Guid familyId, Guid userId, CancellationToken cancellationToken);
 }
 
 /// <summary>Single-use hashed tokens: <see cref="PasswordResetToken"/>, <see cref="EmailVerificationToken"/>, <see cref="MfaRecoveryCode"/>.</summary>

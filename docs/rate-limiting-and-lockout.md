@@ -20,7 +20,8 @@ Three steps, in this order, on the auth paths (framework limiter, no package):
    `User.NormalizedEmail` and every lookup by email.
 
 Operations are matched **by request path** (`RateLimiting:Paths`). Register and verify-email (T12), login (T13) and
-forgot, reset and change password (T14) are live at these paths; refresh is limited as soon as it exists. Logout,
+forgot, reset and change password (T14), refresh and the sessions routes (T15) are live at these paths.
+`RateLimiting:PathPrefixes` matches routes with an id by prefix (`/api/v1/auth/sessions` and anything below it). Logout,
 logout-all and /me are not rate limited (they need the antiforgery token, and logout-all and /me also a session):
 
 | Kind | Path | Per IP | Per account |
@@ -32,6 +33,7 @@ logout-all and /me are not rate limited (they need the antiforgery token, and lo
 | ResetPassword | `/api/v1/auth/reset-password` | 10 / 15 min | - |
 | VerifyEmail | `/api/v1/auth/verify-email` | 30 / 15 min | - |
 | ChangePassword | `/api/v1/auth/change-password` | 10 / 15 min | - (signed in; wrong current passwords count toward lockout) |
+| Sessions | `/api/v1/auth/sessions` and `/api/v1/auth/sessions/{id}` (prefix) | 60 / 1 min | - (signed in) |
 
 All values can be changed under `RateLimiting:Policies:<Kind>:PerIp|PerAccount:PermitLimit|Window`. Other paths are not
 limited. OPTIONS (preflight) is never counted. A rejection is **429** ProblemDetails with `Retry-After` (seconds until
