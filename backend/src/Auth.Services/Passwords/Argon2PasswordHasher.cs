@@ -14,11 +14,14 @@ internal sealed class Argon2PasswordHasher(PasswordHashingOptions options) : IPa
 {
     private const string Prefix = "$argon2id$v=19$";
 
-    // Upper bounds accepted from a stored hash, so a tampered row cannot make Verify allocate unbounded memory or time.
-    private const int MaxMemorySizeKiB = 1024 * 1024;
-    private const int MaxIterations = 20;
-    private const int MaxParallelism = 16;
+    // Upper bounds (256 MiB, t=6, p=4) accepted from a stored hash, so a tampered row cannot make Verify allocate
+    // unbounded memory or time. The configured options must stay within them too, or new hashes would never verify.
+    internal const int MaxMemorySizeKiB = 262144;
+    internal const int MaxIterations = 6;
+    internal const int MaxParallelism = 4;
     private const int MaxBytes = 1024;
+
+    private readonly PasswordHashingOptions options = EnsureWithinCaps(options);
 
     public string Hash(string password)
     {
@@ -54,6 +57,20 @@ internal sealed class Argon2PasswordHasher(PasswordHashingOptions options) : IPa
             && stored.Hash.Length == options.HashSizeBytes;
 
         return current ? PasswordVerifyResult.Success : PasswordVerifyResult.SuccessNeedsRehash;
+    }
+
+    private static PasswordHashingOptions EnsureWithinCaps(PasswordHashingOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.Parallelism, 1, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.Parallelism, MaxParallelism, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.MemorySizeKiB, 8 * options.Parallelism, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.MemorySizeKiB, MaxMemorySizeKiB, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.Iterations, 1, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.Iterations, MaxIterations, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.SaltSizeBytes, 16, nameof(options));
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.HashSizeBytes, 32, nameof(options));
+        return options;
     }
 
     private static byte[] Derive(string password, byte[] salt, int memorySizeKiB, int iterations, int parallelism, int length)

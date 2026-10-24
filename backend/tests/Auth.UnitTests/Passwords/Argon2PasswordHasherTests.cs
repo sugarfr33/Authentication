@@ -83,8 +83,9 @@ public class Argon2PasswordHasherTests
     [InlineData("violet-canyon-7319")]
     [InlineData("$argon2i$v=19$m=1024,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g")]
     [InlineData("$argon2id$v=19$m=1024,t=1$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g")]
-    [InlineData("$argon2id$v=19$m=99999999,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g")]
-    [InlineData("$argon2id$v=19$m=1024,t=999,p=1$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g")]
+    [InlineData("$argon2id$v=19$m=262145,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g")]
+    [InlineData("$argon2id$v=19$m=1024,t=7,p=1$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g")]
+    [InlineData("$argon2id$v=19$m=1024,t=1,p=5$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g")]
     [InlineData("$argon2id$v=19$m=1024,t=1,p=1$***not-base64***$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g")]
     [InlineData("$argon2id$v=19$m=1024,t=1,p=1$c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g")]
     [InlineData("$argon2id$v=19$m=-5,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g")]
@@ -92,6 +93,25 @@ public class Argon2PasswordHasherTests
     public void Malformed_or_out_of_bounds_stored_values_fail_without_throwing(string stored)
     {
         Assert.Equal(PasswordVerifyResult.Failed, hasher.Verify(Password, stored));
+    }
+
+    [Theory]
+    [InlineData(262145, 3, 1)]
+    [InlineData(65536, 7, 1)]
+    [InlineData(65536, 3, 5)]
+    [InlineData(65536, 0, 1)]
+    [InlineData(4, 1, 1)]
+    public void Options_outside_the_parse_caps_are_refused_so_every_new_hash_stays_verifiable(int memoryKiB, int iterations, int parallelism)
+    {
+        PasswordHashingOptions options = new() { MemorySizeKiB = memoryKiB, Iterations = iterations, Parallelism = parallelism };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Argon2PasswordHasher(options));
+    }
+
+    [Fact]
+    public void Caps_match_the_T06_review_limits()
+    {
+        Assert.Equal((262144, 6, 4), (Argon2PasswordHasher.MaxMemorySizeKiB, Argon2PasswordHasher.MaxIterations, Argon2PasswordHasher.MaxParallelism));
     }
 
     /// <summary>RFC 9106 section 5.3 Argon2id test vector, run against the Konscious library the hasher builds on.</summary>
