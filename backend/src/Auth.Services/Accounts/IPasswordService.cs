@@ -13,7 +13,13 @@ using Auth.Services.Tokens;
 namespace Auth.Services.Accounts;
 
 /// <summary>Outcome of a password operation: success, validation errors (ValidationFailed), or one generic <see cref="AuthError"/>.</summary>
-public sealed record PasswordResult(AuthError? Error, IReadOnlyDictionary<string, string[]>? ValidationErrors)
+/// <param name="Error">Null on success.</param>
+/// <param name="ValidationErrors">Field errors for a ValidationFailed result.</param>
+/// <param name="NoticeFailure">
+/// On success only: the exception type name when the best-effort "password changed" email could not be sent. The
+/// password change itself is committed; the host logs this as a warning. Never holds a message, address or token.
+/// </param>
+public sealed record PasswordResult(AuthError? Error, IReadOnlyDictionary<string, string[]>? ValidationErrors, string? NoticeFailure = null)
 {
     public static readonly PasswordResult Ok = new(null, null);
 
@@ -173,8 +179,7 @@ internal sealed class PasswordService(
                     return await ResetFailedAsync(owner.Id, failure, audit, cancellationToken);
                 }
 
-                await emailSender.SendAsync(ChangedNotice(owner.Email, clock.UtcNow), cancellationToken);
-                return PasswordResult.Ok;
+                return await NotifyChangedAsync(owner.Email, cancellationToken);
             }
             catch (ConcurrencyConflictException) when (attempt < MaxAttempts)
             {
@@ -220,8 +225,7 @@ internal sealed class PasswordService(
                 await auditLog.AddAsync(audit.Entry(AuditEventType.PasswordChanged, current.Id, clock.UtcNow), cancellationToken);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
-                await emailSender.SendAsync(ChangedNotice(current.Email, clock.UtcNow), cancellationToken);
-                return PasswordResult.Ok;
+                return await NotifyChangedAsync(current.Email, cancellationToken);
             }
             catch (ConcurrencyConflictException) when (attempt < MaxAttempts)
             {
@@ -274,6 +278,24 @@ internal sealed class PasswordService(
         await resetTokens.InvalidateAllForUserAsync(user.Id, now, cancellationToken);
         await verificationTokens.InvalidateAllForUserAsync(user.Id, now, cancellationToken);
         await refreshTokens.RevokeAllForUserAsync(user.Id, RefreshTokenRevokedReason.PasswordChange, now, cancellationToken);
+    }
+
+    /// <summary>
+    /// The "password changed" notice is sent after the commit and is best effort: the new password is already in force
+    /// (and a reset link already spent), so a failing sender must not turn success into an error. Cancellation still
+    /// propagates. The failure is reported to the host through <see cref="PasswordResult.NoticeFailure"/>.
+    /// </summary>
+    private async Task<PasswordResult> NotifyChangedAsync(string email, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await emailSender.SendAsync(ChangedNotice(email, clock.UtcNow), cancellationToken);
+            return PasswordResult.Ok;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new PasswordResult(null, null, ex.GetType().Name);
+        }
     }
 
     private async Task<PasswordResult> ResetFailedAsync(Guid? userId, string reason, AuditContext audit, CancellationToken cancellationToken)

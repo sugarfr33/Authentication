@@ -489,8 +489,16 @@ public sealed class CapturingEmailSender : IEmailSender
         }
     }
 
+    /// <summary>When set, messages it matches are refused with an exception (a sender outage), and not recorded.</summary>
+    public Predicate<EmailMessage>? FailWhen { get; set; }
+
     public Task SendAsync(EmailMessage message, CancellationToken cancellationToken)
     {
+        if (FailWhen?.Invoke(message) == true)
+        {
+            throw new InvalidOperationException("Simulated email sender outage.");
+        }
+
         lock (messages)
         {
             messages.Add(message);

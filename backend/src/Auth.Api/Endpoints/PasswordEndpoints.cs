@@ -13,7 +13,7 @@ namespace Auth.Api.Endpoints;
 /// T14 forgot, reset and change password under /api/v1/auth. JSON bodies only; every POST passes the origin check and
 /// the antiforgery token, the per-IP limit and the 16 KB cap; forgot-password also the per-account limit.
 /// </summary>
-internal sealed class PasswordEndpoints : IEndpointModule
+internal sealed partial class PasswordEndpoints : IEndpointModule
 {
     /// <summary>The one answer to every well-formed forgot-password request.</summary>
     internal const string ForgotAcceptedMessage = "If an account can reset its password with this address, we sent it an email with a link.";
@@ -50,9 +50,15 @@ internal sealed class PasswordEndpoints : IEndpointModule
             : TypedResults.ValidationProblem(result.ValidationErrors!, title: "The request is invalid.");
     }
 
-    private static async Task<IResult> ResetAsync([FromBody] ResetPasswordRequest request, IPasswordService passwords, HttpContext http, CancellationToken cancellationToken)
+    private static async Task<IResult> ResetAsync(
+        [FromBody] ResetPasswordRequest request,
+        IPasswordService passwords,
+        ILogger<PasswordEndpoints> logger,
+        HttpContext http,
+        CancellationToken cancellationToken)
     {
         PasswordResult result = await passwords.ResetPasswordAsync(request, AccountEndpoints.AuditFrom(http), cancellationToken);
+        LogNoticeFailure(logger, result);
         return result switch
         {
             { IsSuccess: true } => TypedResults.NoContent(),
@@ -66,6 +72,7 @@ internal sealed class PasswordEndpoints : IEndpointModule
         IPasswordService passwords,
         ICookieWriter cookies,
         IAntiforgery antiforgery,
+        ILogger<PasswordEndpoints> logger,
         HttpContext http,
         CancellationToken cancellationToken)
     {
@@ -75,6 +82,7 @@ internal sealed class PasswordEndpoints : IEndpointModule
         }
 
         PasswordResult result = await passwords.ChangePasswordAsync(userId, request, AccountEndpoints.AuditFrom(http), cancellationToken);
+        LogNoticeFailure(logger, result);
         if (result.IsSuccess)
         {
             // Every session, this one included, was revoked: the browser signs in again with the new password.
@@ -86,4 +94,15 @@ internal sealed class PasswordEndpoints : IEndpointModule
             ? TypedResults.ValidationProblem(result.ValidationErrors, title: "The new password is not allowed.")
             : TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "The current password is incorrect.");
     }
+
+    private static void LogNoticeFailure(ILogger logger, PasswordResult result)
+    {
+        if (result.NoticeFailure is string exceptionType)
+        {
+            LogNoticeNotSent(logger, exceptionType);
+        }
+    }
+
+    [LoggerMessage(EventId = 5310, Level = LogLevel.Warning, Message = "The password-changed notice could not be sent ({ExceptionType}); the password change itself succeeded")]
+    private static partial void LogNoticeNotSent(ILogger logger, string exceptionType);
 }

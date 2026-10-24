@@ -239,6 +239,42 @@ public sealed class PasswordServiceTests : RepositoryTestBase, IAsyncDisposable
         Assert.Contains(await WithContextAsync(c => c.AuditLog.AsNoTracking().Where(a => a.UserId == userId).ToListAsync()), a => a.EventType == nameof(AuditEventType.PasswordChanged));
     }
 
+    /// <summary>Review T14: the post-commit notice is best effort; a failing sender never turns a done change into an error.</summary>
+    [Fact]
+    public async Task A_failing_notice_email_does_not_undo_or_fail_a_reset()
+    {
+        string email = await SeedAsync();
+        Guid userId = (await LoadAsync(email)).Id;
+        await IssueSessionAsync(userId);
+        await ForgotAsync(email);
+        string token = TokenFrom(mailbox.OnlyTo(email));
+        mailbox.FailWhen = m => m.Subject == "Your password was changed";
+
+        PasswordResult result = await ResetAsync(token, NewPassword);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(nameof(InvalidOperationException), result.NoticeFailure);
+        Assert.True(await PasswordWorksAsync(await LoadAsync(email), NewPassword));
+        Assert.Equal(RefreshTokenRevokedReason.PasswordChange, Assert.Single(await WithContextAsync(c => c.RefreshToken.AsNoTracking().Where(t => t.UserId == userId).ToListAsync())).RevokedReason);
+        Assert.Equal(AuthError.InvalidOrExpiredToken, (await ResetAsync(token, "another-password-1234")).Error);
+    }
+
+    [Fact]
+    public async Task A_failing_notice_email_does_not_undo_or_fail_a_change()
+    {
+        string email = await SeedAsync();
+        Guid userId = (await LoadAsync(email)).Id;
+        await IssueSessionAsync(userId);
+        mailbox.FailWhen = m => m.Subject == "Your password was changed";
+
+        PasswordResult result = await ChangeAsync(userId, OldPassword, NewPassword);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(nameof(InvalidOperationException), result.NoticeFailure);
+        Assert.True(await PasswordWorksAsync(await LoadAsync(email), NewPassword));
+        Assert.Equal(RefreshTokenRevokedReason.PasswordChange, Assert.Single(await WithContextAsync(c => c.RefreshToken.AsNoTracking().Where(t => t.UserId == userId).ToListAsync())).RevokedReason);
+    }
+
     public async ValueTask DisposeAsync() => await services.DisposeAsync();
 
     private static string TokenFrom(EmailMessage message)

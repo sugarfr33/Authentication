@@ -182,6 +182,38 @@ public sealed class PasswordApiTests(ApiFixture api) : IAsyncLifetime
             || t.Contains("third-password-4417", StringComparison.Ordinal));
     }
 
+    /// <summary>Review T14: with the notice email failing, reset and change still answer 204, and change still signs the browser out.</summary>
+    [Fact]
+    public async Task Reset_and_change_succeed_when_the_notice_email_fails()
+    {
+        string resetEmail = await SeedUserAsync();
+        string changeEmail = await SeedUserAsync();
+        using Browser resetter = await ReadyBrowserAsync();
+        using Browser changer = await ReadyBrowserAsync();
+        await PostAsync(resetter, Forgot, new Dictionary<string, string> { [AuthRequestFields.Email] = resetEmail });
+        string token = LatestToken(resetEmail);
+        await LoginAsync(changer, changeEmail, OldPassword);
+        Guid changerId = (await LoadUserAsync(changeEmail)).Id;
+        api.Emails.FailWhen = m => m.Subject == "Your password was changed";
+        try
+        {
+            HttpResponseMessage reset = await PostAsync(resetter, Reset, new Dictionary<string, string> { ["token"] = token, ["newPassword"] = NewPassword });
+            HttpResponseMessage change = await PostAsync(changer, Change, new Dictionary<string, string> { ["currentPassword"] = OldPassword, ["newPassword"] = NewPassword });
+
+            Assert.Equal(HttpStatusCode.NoContent, reset.StatusCode);
+            Assert.Equal(HttpStatusCode.NoContent, change.StatusCode);
+            Assert.True(Assert.Single(SetCookie.From(change), c => c.Name == AuthCookieNames.Access).IsExpired);
+            Assert.True(Assert.Single(SetCookie.From(change), c => c.Name == AuthCookieNames.Refresh).IsExpired);
+            Assert.All(await RefreshTokensAsync(changerId), t => Assert.Equal(RefreshTokenRevokedReason.PasswordChange, t.RevokedReason));
+            Assert.Equal(HttpStatusCode.BadRequest, (await PostAsync(resetter, Reset, new Dictionary<string, string> { ["token"] = token, ["newPassword"] = "another-password-1234" })).StatusCode);
+            Assert.Contains(api.Logs.Texts, t => t.Contains("password-changed notice could not be sent", StringComparison.Ordinal) && t.Contains(nameof(InvalidOperationException), StringComparison.Ordinal));
+        }
+        finally
+        {
+            api.Emails.FailWhen = null;
+        }
+    }
+
     private static StringContent Json(Dictionary<string, string> body) => new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
 
     private static Task<HttpResponseMessage> PostAsync(Browser browser, string path, Dictionary<string, string> body) =>

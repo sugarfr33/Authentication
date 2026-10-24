@@ -44,7 +44,11 @@ verified email (T13).
 In the same transaction: new Argon2 hash, **new SecurityStamp**, lockout cleared (`FailedLoginCount`, `LockoutEndUtc`,
 `LockoutLevel`), **every refresh family revoked** (reason `PasswordChange`, the current session included), every reset
 link retired, and every email-verification link retired with its pending sign-up password and display name erased. Then
-a "your password was changed" notice is emailed. Tested with two browsers: both sessions are revoked, the old password
+a "your password was changed" notice is emailed. That notice is **best effort** (review T14): the change is already
+committed (and a reset link already spent), so if the sender fails the answer is still 204 (change still expires the
+cookies), and the API logs a warning with the exception type only. Cancellation is not swallowed. Tested with a failing
+sender for both flows. The forgot-password email is not best effort: it is the purpose of that request and fails the
+same way on every path. Tested with two browsers: both sessions are revoked, the old password
 fails and the new one signs in.
 
 Change password also expires the cookies of the browser that made the change and reissues an anonymous XSRF token:
@@ -66,6 +70,24 @@ the user signs in again with the new password (decision: no session survives a p
 `malformed`, `unknown`, `used`, `expired`, `unknown_user`, `inactive`, `policy`) and `PasswordChangeFailed` (reason:
 `policy`, `wrong_password`, `unusable_account`). Never a token or a password; a user id only when the account exists.
 No token or password reaches any log (tested).
+
+## Residual notes (security audit T14; also for the T27 threat model)
+
+- **Mail volume (LOW-2).** A third party can use up an address's forgot-password budget (3 per 15 min per normalized
+  email), delaying the owner's own request for up to 15 minutes. Plus-address variants (`a+1@x`, `a+2@x`) are separate
+  keys, so one IP can make a single mailbox receive up to its per-IP limit (10 per 15 min) of notices. Bounded and
+  accepted; a later option is a per-mailbox key that ignores the `+tag`.
+- **Lockout through a stolen session (LOW-3).** Failed change-password attempts count toward the login lockout, so
+  someone holding a live stolen session could lock the owner out of signing in. It needs a valid session first; a reset
+  (mailbox control) clears the lockout. Accepted.
+- **Inline email and small work differences (LOW-4).** The sent path adds one link INSERT and a SHA-256 in the same
+  save; the SMTP call is awaited inline on every path and dominates. A background mail queue (see the T12 deployment
+  notes) would remove the residual timing and the request-time cost of slow providers.
+- **Expiry inside the UPDATE (INFO-2).** The link's expiry is checked just before the conditional UPDATE, not inside it,
+  so a link can be redeemed in the sub-second between the two. Accepted (the shared single-use repository serves tables
+  without an expiry column).
+- **Access tokens after a password change (INFO-1).** As for logout (sign-in-and-sessions.md): a copied access cookie
+  keeps working up to its 15 minute lifetime; the rotated SecurityStamp is not checked at validation yet.
 
 ## Not done
 
