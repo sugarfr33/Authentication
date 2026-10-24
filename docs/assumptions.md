@@ -4,6 +4,7 @@ The T00 plan was approved with all defaults A1–A16, plus these decisions made 
 
 - **Single tenant.** There are no tenant columns or tables. Multi-tenancy would be a separate design change.
 - **Database:** SQL Server. Local dev and test use SQL Express `.\SQLEXPRESS` with Windows Authentication: database `CentralAuth` for dev, `CentralAuth_Test` for integration tests. Testcontainers is optional. Ask before targeting any other server.
+- **Keys:** `uniqueidentifier` keys get their values in the app, from EF Core's client-side sequential GUID generator (assigned on `Add`, before `SaveChanges`). Its byte order matches SQL Server's `uniqueidentifier` sort order, so inserts append to the clustered index. Plain UUIDv7 (`Guid.CreateVersion7`) is *not* used: SQL Server sorts `uniqueidentifier` by its last bytes first, so v7 values would still fragment the index. `AuditLog` uses a `bigint` identity.
 - **Authorization codes (T19)** live in `IDistributedCache`, not a table, so the schema stays at 12 tables.
 - **Api never references Auth.DAL.** `Auth.Services.AddAuthServices` calls `Auth.DAL.AddDataAccess`.
   - Auth.DAL/Auth.Entities still flow *transitively* to the Api host, so they appear in `deps.json` and the publish output.
