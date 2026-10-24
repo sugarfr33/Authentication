@@ -173,7 +173,7 @@ internal sealed partial class SessionEndpoints : IEndpointModule
     private static partial void LogSignOutFailed(ILogger logger, string exceptionType);
 
     /// <summary>Expires both auth cookies and issues an anonymous XSRF token for the signed-out browser.</summary>
-    private static void SignOut(HttpContext http, ICookieWriter cookies, IAntiforgery antiforgery)
+    internal static void SignOut(HttpContext http, ICookieWriter cookies, IAntiforgery antiforgery)
     {
         cookies.ClearAuthCookies(http.Response);
         http.User = new ClaimsPrincipal(new ClaimsIdentity());

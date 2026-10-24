@@ -64,6 +64,8 @@ public static class AuthServiceCollectionExtensions
             sp.GetRequiredService<IClock>(),
             sp.GetRequiredService<AccountEmailOptions>().Validated()));
         services.AddScoped<ISignInService, SignInService>();
+        services.AddScoped<IPasswordService>(sp => ActivatorUtilities.CreateInstance<PasswordService>(
+            sp, sp.GetRequiredService<AccountEmailOptions>().Validated()));
 
         return services;
     }

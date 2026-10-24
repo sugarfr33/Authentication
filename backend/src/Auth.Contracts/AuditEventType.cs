@@ -29,4 +29,10 @@ public enum AuditEventType
 
     /// <summary>A sign-up was rejected by validation. Holds the failing field names only, never their values.</summary>
     RegistrationRejected,
+
+    /// <summary>A reset-password attempt failed (bad link or rejected new password). Never holds the token or a password.</summary>
+    PasswordResetFailed,
+
+    /// <summary>A change-password attempt failed (wrong current password or rejected new password). Never holds a password.</summary>
+    PasswordChangeFailed,
 }

@@ -74,7 +74,8 @@ internal sealed class RegisterRequestValidator(IPasswordPolicy passwordPolicy)
         return MailAddress.TryCreate(email, out MailAddress? address) && address.Address == email && address.DisplayName.Length == 0;
     }
 
-    private string[] PasswordErrors(string? password, string email)
+    /// <summary>The T06 policy messages for a new password (also used by reset and change password). Empty when acceptable.</summary>
+    internal string[] PasswordErrors(string? password, string? email)
     {
         if (string.IsNullOrEmpty(password))
         {
