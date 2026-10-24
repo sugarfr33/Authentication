@@ -9,6 +9,11 @@ public sealed class TokenOptions
     /// <summary>The <c>iss</c> claim and the only issuer accepted when validating. Configuration key <c>Auth:Issuer</c>.</summary>
     public required string Issuer { get; init; }
 
+    /// <summary>The <c>aud</c> for tokens not issued to a client application (central auth itself). Configuration key <c>Auth:Audience</c>; defaults to the issuer.</summary>
+    public string? Audience { get; init; }
+
+    public string DefaultAudience => string.IsNullOrWhiteSpace(Audience) ? Issuer : Audience;
+
     public TimeSpan AccessTokenLifetime { get; init; } = TimeSpan.FromMinutes(15);
 
     public TimeSpan ClockSkew { get; init; } = MaxClockSkew;

@@ -39,10 +39,12 @@ public static class AuthServiceCollectionExtensions
         services.TryAddSingleton(_ => new TokenOptions
         {
             Issuer = configuration["Auth:Issuer"] ?? throw new InvalidOperationException("Configuration value 'Auth:Issuer' is missing."),
+            Audience = configuration["Auth:Audience"],
         }.Validated());
         services.AddSingleton<SigningKeyProvider>();
         services.AddSingleton<ISigningKeyProvider>(sp => sp.GetRequiredService<SigningKeyProvider>());
         services.AddScoped<ISigningKeyRotation, SigningKeyRotation>();
+        services.AddSingleton<ITokenService, TokenService>();
 
         return services;
     }

@@ -87,8 +87,9 @@ internal sealed class KeyHarness : IDisposable
 
     private readonly ServiceProvider services;
 
-    public KeyHarness(TokenOptions? options = null)
+    public KeyHarness(TokenOptions? options = null, DateTime? start = null)
     {
+        Clock = new FakeClock(start ?? Start);
         Options = (options ?? new TokenOptions { Issuer = "https://auth.example.test" }).Validated();
         ServiceCollection collection = new();
         collection.AddSingleton<ISigningKeyRepository>(Repository);
@@ -97,7 +98,7 @@ internal sealed class KeyHarness : IDisposable
         Rotation = new SigningKeyRotation(Repository, UnitOfWork, Secrets, Clock, Options, Provider);
     }
 
-    public FakeClock Clock { get; } = new(Start);
+    public FakeClock Clock { get; }
 
     public InMemorySecretStore Secrets { get; } = new();
 

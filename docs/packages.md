@@ -11,6 +11,7 @@ Add new packages only through the task that needs them, and add a line here when
 | Microsoft.Extensions.DependencyInjection.Abstractions | 10.0.13 | Auth.DAL, Auth.Services | `IServiceCollection` for the `AddDataAccess` / `AddAuthServices` registration extensions. |
 | Konscious.Security.Cryptography.Argon2 | 1.3.1 | Auth.Services | Argon2id password hashing (plan A9: m=64 MiB, t=3, p=1), managed code, MIT. Pulls Konscious.Security.Cryptography.Blake2 1.1.1 (same author, MIT). Output checked against the RFC 9106 Argon2id test vector in the unit tests. |
 | Microsoft.Extensions.Configuration.Abstractions | 10.0.13 | Auth.Services | `IConfiguration` for `AddAuthServices` to read the connection string and options. |
+| Microsoft.IdentityModel.JsonWebTokens | 8.23.0 | Auth.Services | Access-token creation and validation (T07, approved): JsonWebTokenHandler with ES256/RS256, pinned algorithms, kid-based key resolution. Brings Microsoft.IdentityModel.Tokens/Logging/Abstractions 8.23.0. ShowPII stays off. |
 
 ## Design time
 
@@ -23,6 +24,12 @@ Add new packages only through the task that needs them, and add a line here when
 | Package | Version | Why |
 |---|---|---|
 | System.Security.Cryptography.Pkcs | 10.0.13 | Microsoft.Data.SqlClient 6.1.7 pulls 9.0.11, which has advisories GHSA-846f-f764-76mx (high) and GHSA-2fmv-rv2c-59x7 (moderate). Pinned through `CentralPackageTransitivePinningEnabled`; remove the pin once SqlClient ships a fixed dependency. |
+
+## Transitive alignment pins
+
+| Package | Version | Why |
+|---|---|---|
+| Microsoft.IdentityModel.Abstractions, .Logging, .Tokens, .Protocols, .Protocols.OpenIdConnect, System.IdentityModel.Tokens.Jwt | 8.23.0 | Microsoft.Data.SqlClient 6.1.7 pulls the 7.7.1 IdentityModel family while JsonWebTokens is 8.23.0. Microsoft requires all IdentityModel packages on one version, so the whole family is pinned to 8.23.0 through `CentralPackageTransitivePinningEnabled`. |
 
 ## Test
 
