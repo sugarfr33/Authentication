@@ -22,11 +22,12 @@ internal sealed class BrowserProtectionMiddleware(
     IAntiforgery antiforgery,
     IClientApplicationOriginProvider applicationOrigins,
     IOptions<BrowserProtectionOptions> options,
-    IProblemDetailsService problemDetails)
+    IProblemDetailsService problemDetails,
+    IHostEnvironment environment)
 {
     private static readonly PathString ApiPrefix = new("/api");
 
-    private readonly HashSet<string> trustedOrigins = NormalizeTrusted(options.Value.TrustedOrigins);
+    private readonly HashSet<string> trustedOrigins = NormalizeTrusted(options.Value.TrustedOrigins, requireHttps: !environment.IsDevelopment());
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -97,14 +98,15 @@ internal sealed class BrowserProtectionMiddleware(
             || await applicationOrigins.IsAllowedAsync(candidate, context.RequestAborted);
     }
 
-    internal static HashSet<string> NormalizeTrusted(IEnumerable<string> configured)
+    internal static HashSet<string> NormalizeTrusted(IEnumerable<string> configured, bool requireHttps)
     {
         HashSet<string> origins = new(StringComparer.Ordinal);
         foreach (string entry in configured)
         {
-            if (!OriginNormalizer.TryNormalize(entry, out string normalized))
+            if (!OriginNormalizer.TryNormalize(entry, requireHttps, out string normalized))
             {
-                throw new InvalidOperationException("BrowserProtection:TrustedOrigins contains an entry that is not an exact http(s) origin.");
+                throw new InvalidOperationException(
+                    "BrowserProtection:TrustedOrigins entries must be exact origins; outside Development they must be https (http only for localhost).");
             }
 
             origins.Add(normalized);

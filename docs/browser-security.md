@@ -40,7 +40,7 @@ as the name and role claim types. Any failure gives a bare 401 ProblemDetails. F
      **400** ProblemDetails.
 3. A request with **neither Origin nor Referer** is rejected (403) by default. **Non-browser clients:** set
    `BrowserProtection:AllowMissingOrigin=true` to let such requests skip the origin check only. They still need a
-   valid antiforgery token. Leave it off unless a non-browser client really needs it.
+   valid antiforgery token. **This flag is refused outside Development: startup fails.**
 
 Because antiforgery tokens are bound to the user, **the SPA must fetch a fresh `XSRF-TOKEN` (any GET under /api) after
 sign-in and sign-out** before its next state-changing call. T13's login and logout responses should reissue it.
@@ -55,6 +55,10 @@ sign-in and sign-out** before its next state-changing call. T13's login and logo
   methods GET/POST/PUT/PATCH/DELETE, headers `Content-Type` and `X-XSRF-TOKEN`, and preflight max-age 10 min.
 - An unknown origin gets **no CORS headers**. A wildcard is impossible: entries like `*`, `https://*.x` or `null` are
   rejected when the list is read.
+- The policy carries the **normalized** origin (lower case, no trailing slash), never the raw header value.
+- **Outside Development every allowed origin must be https**: plain http is accepted only for loopback hosts
+  (`localhost`, `127.0.0.1`, `[::1]`). Insecure client-application entries are skipped. An insecure or wildcard
+  `BrowserProtection:TrustedOrigins` entry stops startup. In Development, http origins are accepted.
 - Every response carries `Vary: Origin`.
 
 Same-origin detection compares the request's scheme and host. Behind a reverse proxy, forwarded headers must be

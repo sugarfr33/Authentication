@@ -22,4 +22,25 @@ internal static class HostingGuards
             throw new InvalidOperationException("AllowedHosts must list the public host names outside Development; it is empty or '*'.");
         }
     }
+
+    /// <summary>
+    /// Outside Development: BrowserProtection:AllowMissingOrigin (the non-browser escape hatch) is refused, and every
+    /// BrowserProtection:TrustedOrigins entry must be an exact https origin (http only for loopback hosts).
+    /// </summary>
+    public static void EnsureBrowserProtectionSafe(IConfiguration configuration, IHostEnvironment environment)
+    {
+        if (environment.IsDevelopment())
+        {
+            return;
+        }
+
+        if (configuration.GetValue<bool>("BrowserProtection:AllowMissingOrigin"))
+        {
+            throw new InvalidOperationException("BrowserProtection:AllowMissingOrigin is only allowed in Development.");
+        }
+
+        Security.BrowserProtectionMiddleware.NormalizeTrusted(
+            configuration.GetSection("BrowserProtection:TrustedOrigins").Get<string[]>() ?? [],
+            requireHttps: true);
+    }
 }

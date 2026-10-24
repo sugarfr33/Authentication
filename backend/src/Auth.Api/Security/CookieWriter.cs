@@ -82,6 +82,6 @@ internal sealed class CookieWriter(IOptions<AuthCookieOptions> options, IClock c
     private TimeSpan Remaining(DateTime expiresUtc)
     {
         TimeSpan remaining = expiresUtc - clock.UtcNow;
-        return remaining > TimeSpan.Zero ? TimeSpan.FromSeconds(Math.Floor(remaining.TotalSeconds)) : TimeSpan.Zero;
+        return remaining > TimeSpan.Zero ? TimeSpan.FromSeconds(Math.Round(remaining.TotalSeconds)) : TimeSpan.Zero;
     }
 }

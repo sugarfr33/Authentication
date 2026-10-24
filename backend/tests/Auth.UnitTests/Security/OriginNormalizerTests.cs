@@ -41,4 +41,17 @@ public class OriginNormalizerTests
         Assert.True(OriginNormalizer.TryGetOrigin(referer, out string origin));
         Assert.Equal(expected, origin);
     }
+
+    [Theory]
+    [InlineData("https://app.example.com", true)]
+    [InlineData("http://localhost:5173", true)]
+    [InlineData("http://127.0.0.1:8080", true)]
+    [InlineData("http://[::1]:5000", true)]
+    [InlineData("http://app.example.com", false)]
+    [InlineData("http://localhost.evil.com", false)]
+    public void Https_is_required_except_for_loopback_hosts(string input, bool accepted)
+    {
+        Assert.Equal(accepted, OriginNormalizer.TryNormalize(input, requireHttps: true, out _));
+        Assert.True(OriginNormalizer.TryNormalize(input, requireHttps: false, out _));
+    }
 }

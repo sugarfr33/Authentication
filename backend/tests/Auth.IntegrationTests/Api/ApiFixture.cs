@@ -33,6 +33,8 @@ public sealed class ApiFixture : IAsyncLifetime
 
     public const string AppOrigin = "https://app.example.test";
     public const string InactiveOrigin = "https://inactive.example.test";
+    public const string InsecureOrigin = "http://insecure.example.test";
+    public const string LoopbackOrigin = "http://localhost:5173";
     public static readonly Guid UserId = Guid.Parse("0b9f3c3e-6a1d-4e8b-9c2a-5d7e1f2a3b4c");
 
     private const string PrivateKeyReference = "api-test-key";
@@ -120,6 +122,7 @@ public sealed class ApiFixture : IAsyncLifetime
         });
         context.ClientApplication.Add(Application("active-app", AppOrigin, isActive: true, now));
         context.ClientApplication.Add(Application("inactive-app", InactiveOrigin, isActive: false, now));
+        context.ClientApplication.Add(Application("insecure-app", InsecureOrigin + "\", \"" + LoopbackOrigin, isActive: true, now));
         await context.SaveChangesAsync();
     }
 

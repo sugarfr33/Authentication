@@ -12,11 +12,12 @@ namespace Auth.Api.Security;
 /// </summary>
 internal sealed class ClientApplicationCorsPolicyProvider(
     IClientApplicationOriginProvider applicationOrigins,
-    IOptions<BrowserProtectionOptions> options) : ICorsPolicyProvider
+    IOptions<BrowserProtectionOptions> options,
+    IHostEnvironment environment) : ICorsPolicyProvider
 {
     private static readonly TimeSpan PreflightMaxAge = TimeSpan.FromMinutes(10);
 
-    private readonly HashSet<string> trustedOrigins = BrowserProtectionMiddleware.NormalizeTrusted(options.Value.TrustedOrigins);
+    private readonly HashSet<string> trustedOrigins = BrowserProtectionMiddleware.NormalizeTrusted(options.Value.TrustedOrigins, requireHttps: !environment.IsDevelopment());
 
     public async Task<CorsPolicy?> GetPolicyAsync(HttpContext context, string? policyName)
     {
@@ -33,7 +34,8 @@ internal sealed class ClientApplicationCorsPolicyProvider(
         }
 
         return new CorsPolicyBuilder()
-            .WithOrigins(origin!)
+            // The normalized value (lower case, no trailing slash), never the raw header.
+            .WithOrigins(normalized)
             .AllowCredentials()
             .WithMethods(HttpMethods.Get, HttpMethods.Post, HttpMethods.Put, HttpMethods.Patch, HttpMethods.Delete)
             .WithHeaders("Content-Type", AuthCookieNames.XsrfHeader)

@@ -20,6 +20,12 @@ public interface IClientApplicationOriginProvider
 public sealed class ClientApplicationOriginOptions
 {
     public TimeSpan CacheDuration { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// When true (production), only https origins are accepted from the registry; plain http only for loopback hosts
+    /// (localhost, 127.0.0.1, [::1]). The host sets false in Development.
+    /// </summary>
+    public bool RequireHttps { get; init; } = true;
 }
 
 /// <summary>Singleton with a short-TTL cache over the ClientApplication registry.</summary>
@@ -57,7 +63,7 @@ internal sealed class ClientApplicationOriginProvider(
             {
                 foreach (string entry in ReadJsonArray(application.AllowedOrigin))
                 {
-                    if (OriginNormalizer.TryNormalize(entry, out string normalized))
+                    if (OriginNormalizer.TryNormalize(entry, options.RequireHttps, out string normalized))
                     {
                         origins.Add(normalized);
                     }
@@ -121,6 +127,32 @@ public static class OriginNormalizer
 
         origin = uri.GetLeftPart(UriPartial.Authority).ToLowerInvariant();
         return true;
+    }
+
+    /// <summary>
+    /// Like <see cref="TryNormalize(string?, out string)"/>, and when <paramref name="requireHttps"/> is true also rejects plain
+    /// http unless the host is loopback (localhost, 127.0.0.1, [::1]).
+    /// </summary>
+    public static bool TryNormalize(string? value, bool requireHttps, out string origin)
+    {
+        if (!TryNormalize(value, out origin) || (requireHttps && !IsHttpsOrLoopback(origin)))
+        {
+            origin = string.Empty;
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>True for https origins and for http on a loopback host.</summary>
+    public static bool IsHttpsOrLoopback(string normalizedOrigin)
+    {
+        if (normalizedOrigin.StartsWith("https://", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return Uri.TryCreate(normalizedOrigin, UriKind.Absolute, out Uri? uri) && uri.IsLoopback;
     }
 
     /// <summary>The origin (<c>scheme://host[:port]</c>) of an absolute URL such as a Referer, or false.</summary>

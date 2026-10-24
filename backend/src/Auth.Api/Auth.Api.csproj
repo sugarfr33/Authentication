@@ -13,6 +13,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Middleware and policy internals are unit-tested directly. -->
+    <InternalsVisibleTo Include="Auth.UnitTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Auth.Services\Auth.Services.csproj" />
     <ProjectReference Include="..\Auth.Contracts\Auth.Contracts.csproj" />
   </ItemGroup>

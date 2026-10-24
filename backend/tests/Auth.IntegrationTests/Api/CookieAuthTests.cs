@@ -7,6 +7,7 @@ using Auth.Contracts;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 
@@ -217,7 +218,7 @@ public sealed partial class CookieAuthTests(ApiFixture api)
         await browser.GetAsync(TestEndpoints.Prefix + "/ping");
         Assert.Equal(HttpStatusCode.Forbidden, (await browser.SendAsync(HttpMethod.Post, Echo, sendOrigin: false)).StatusCode);
 
-        await using WebApplicationFactory<Program> lenient = WithSettings(new() { ["BrowserProtection:AllowMissingOrigin"] = "true" });
+        await using WebApplicationFactory<Program> lenient = WithSettings(new() { ["BrowserProtection:AllowMissingOrigin"] = "true" }, Environments.Development);
         using Browser cli = new(lenient);
         await cli.GetAsync(TestEndpoints.Prefix + "/ping");
         Assert.Equal(HttpStatusCode.OK, (await cli.SendAsync(HttpMethod.Post, Echo, sendOrigin: false)).StatusCode);
@@ -403,8 +404,13 @@ public sealed partial class CookieAuthTests(ApiFixture api)
         return [.. parameters.Q.X!, .. parameters.Q.Y!];
     }
 
-    private WebApplicationFactory<Program> WithSettings(Dictionary<string, string?> settings) => api.Factory.WithWebHostBuilder(builder =>
+    private WebApplicationFactory<Program> WithSettings(Dictionary<string, string?> settings, string? environment = null) => api.Factory.WithWebHostBuilder(builder =>
     {
+        if (environment is not null)
+        {
+            builder.UseEnvironment(environment);
+        }
+
         foreach (KeyValuePair<string, string?> setting in settings)
         {
             builder.UseSetting(setting.Key, setting.Value);

@@ -9,12 +9,14 @@ using Auth.Contracts;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Auth.Services;
+using Auth.Services.ClientApplications;
 using Serilog;
 using Serilog.Events;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
 HostingGuards.EnsureAllowedHostsRestricted(builder.Configuration, builder.Environment);
+HostingGuards.EnsureBrowserProtectionSafe(builder.Configuration, builder.Environment);
 builder.WebHost.ConfigureKestrel(kestrel => kestrel.AddServerHeader = false);
 
 // Secrets (connection string, signing keys) come only from environment variables or User Secrets (Development);
@@ -27,6 +29,8 @@ builder.Services.AddSerilog((services, logger) => logger
     .Enrich.With<RedactionEnricher>()
     .WriteTo.Console(formatProvider: CultureInfo.InvariantCulture));
 
+// Client-application origins must be https outside Development (http only for loopback).
+builder.Services.AddSingleton(new ClientApplicationOriginOptions { RequireHttps = !builder.Environment.IsDevelopment() });
 builder.Services.AddAuthServices(builder.Configuration);
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
     context.ProblemDetails.Extensions["traceId"] = Activity.Current?.Id ?? context.HttpContext.TraceIdentifier);
