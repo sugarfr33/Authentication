@@ -22,7 +22,7 @@ public static class DataAccessServiceCollectionExtensions
 
         services.AddDbContext<AuthDbContext>(options =>
         {
-            options.UseSqlServer(connectionString);
+            AuthDbContext.UseAuthSqlServer(options, connectionString);
             configureOptions?.Invoke(options);
         });
 

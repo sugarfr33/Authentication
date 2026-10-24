@@ -10,7 +10,7 @@ namespace Auth.IntegrationTests.DAL;
 /// <summary>
 /// Creates a throwaway <c>CentralAuth_Test</c> database on local SQL Express (Windows auth) for the whole test run,
 /// and drops it at the end. A leftover database from a crashed run is dropped first. The schema comes from the
-/// model with EnsureCreated, because migrations arrive in T05. Override the server with CENTRALAUTH_TEST_CONNECTION.
+/// migrations (MigrateAsync), the same path production uses. Override the server with CENTRALAUTH_TEST_CONNECTION.
 /// </summary>
 public sealed class SqlServerDatabaseFixture : IAsyncLifetime
 {
@@ -40,7 +40,7 @@ public sealed class SqlServerDatabaseFixture : IAsyncLifetime
         await using AsyncServiceScope scope = services.CreateAsyncScope();
         AuthDbContext context = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
         await context.Database.EnsureDeletedAsync();
-        await context.Database.EnsureCreatedAsync();
+        await context.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()

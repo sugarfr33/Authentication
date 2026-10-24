@@ -11,6 +11,12 @@ Add new packages only through the task that needs them, and add a line here when
 | Microsoft.Extensions.DependencyInjection.Abstractions | 10.0.13 | Auth.DAL, Auth.Services | `IServiceCollection` for the `AddDataAccess` / `AddAuthServices` registration extensions. |
 | Microsoft.Extensions.Configuration.Abstractions | 10.0.13 | Auth.Services | `IConfiguration` for `AddAuthServices` to read the connection string and options. |
 
+## Design time
+
+| Package | Version | Used by | Why |
+|---|---|---|---|
+| Microsoft.EntityFrameworkCore.Design | 10.0.13 | Auth.DAL (`PrivateAssets="all"`, no compile assets) | Required by `dotnet ef migrations add/script` (T05); Auth.DAL is both project and startup project via `AuthDbContextFactory`. Never flows to Services, Api or the published host. Tool: global `dotnet-ef` 10.0.10. |
+
 ## Transitive security pins
 
 | Package | Version | Why |
@@ -29,5 +35,5 @@ Add new packages only through the task that needs them, and add a line here when
 
 ## Planned (added by later tasks, approved in the T00 plan)
 
-FluentValidation (T12), Serilog.AspNetCore (T09), Konscious.Security.Cryptography.Argon2 (T06), Microsoft.EntityFrameworkCore.Design (T05),
+FluentValidation (T12), Serilog.AspNetCore (T09), Konscious.Security.Cryptography.Argon2 (T06),
 NSubstitute (first unit tests), Microsoft.AspNetCore.Mvc.Testing (integration tests), Testcontainers.MsSql (optional; local SQL Express is the default).

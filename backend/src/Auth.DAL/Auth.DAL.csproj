@@ -4,6 +4,8 @@
     <!-- EF compile assets stay private to DAL (no EF in Services); runtime assets still flow to the host. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" PrivateAssets="compile;contentfiles;analyzers;build" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <!-- Design time only (dotnet ef migrations): no compile assets, nothing flows to Services, Api or the host. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
   </ItemGroup>
 
   <ItemGroup>

@@ -19,10 +19,9 @@ internal sealed class AuthDbContextFactory : IDesignTimeDbContextFactory<AuthDbC
         string? fromEnvironment = Environment.GetEnvironmentVariable(ConnectionStringVariable);
         string connectionString = string.IsNullOrWhiteSpace(fromEnvironment) ? LocalConnectionString : fromEnvironment;
 
-        DbContextOptions<AuthDbContext> options = new DbContextOptionsBuilder<AuthDbContext>()
-            .UseSqlServer(connectionString)
-            .Options;
+        DbContextOptionsBuilder<AuthDbContext> builder = new();
+        AuthDbContext.UseAuthSqlServer(builder, connectionString);
 
-        return new AuthDbContext(options);
+        return new AuthDbContext(builder.Options);
     }
 }

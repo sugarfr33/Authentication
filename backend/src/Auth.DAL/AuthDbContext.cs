@@ -11,6 +11,15 @@ internal sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : D
 {
     public const string Schema = "auth";
 
+    public const string MigrationsHistoryTable = "__EFMigrationsHistory";
+
+    /// <summary>
+    /// The one place the provider is configured, shared by DI and the design-time factory so they cannot drift.
+    /// The migrations history table also lives in the auth schema.
+    /// </summary>
+    public static DbContextOptionsBuilder UseAuthSqlServer(DbContextOptionsBuilder options, string connectionString) =>
+        options.UseSqlServer(connectionString, sql => sql.MigrationsHistoryTable(MigrationsHistoryTable, Schema));
+
     public DbSet<User> User => Set<User>();
 
     public DbSet<Role> Role => Set<Role>();
