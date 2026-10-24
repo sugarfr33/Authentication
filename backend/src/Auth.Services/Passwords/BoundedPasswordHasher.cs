@@ -31,9 +31,13 @@ public sealed class PasswordHashingLimits
     /// <summary>How long a request waits for a slot before PasswordHashingBusyException.</summary>
     public TimeSpan QueueTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>Configuration cap: 64 concurrent Argon2 operations is already about 4 GiB of peak memory.</summary>
+    public const int MaxAllowedConcurrency = 64;
+
     internal PasswordHashingLimits Validated()
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxConcurrentOperations, 1, nameof(MaxConcurrentOperations));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxConcurrentOperations, MaxAllowedConcurrency, nameof(MaxConcurrentOperations));
         ArgumentOutOfRangeException.ThrowIfLessThan(QueueTimeout, TimeSpan.Zero, nameof(QueueTimeout));
         return this;
     }

@@ -2,13 +2,19 @@
 
 ## Rate limiting (Auth.Api)
 
-The framework rate limiter (`Microsoft.AspNetCore.RateLimiting`, no package) runs one **global, chained** limiter:
+Three steps, in this order, on the auth paths (framework limiter, no package):
 
-1. **Per client IP**: a fixed window for each auth operation.
-2. **Per account**: a fixed window per normalized email (trimmed, upper case, like `User.NormalizedEmail`).
-   `AccountKeyMiddleware` reads at most `MaxAccountBodyBytes` (16 KB) of a JSON body to find a top-level `email`,
-   then rewinds it for the endpoint. A larger, chunked-beyond-limit or non-JSON body gets no account key and is still
-   IP-limited. Nothing beyond the limit is held in memory by this step.
+1. **Per client IP** (`UseRateLimiter`, the global limiter): a fixed window per auth operation. It counts the
+   request **before** the body is read, so slow or oversized bodies are counted too.
+2. **Body cap and account key** (`AccountKeyMiddleware`): every POST to a rate-limited path is capped at
+   `MaxAccountBodyBytes` (16 KB). The server's `MaxRequestBodySize` is lowered for the request and the body is read
+   into memory up to that size, so anything larger (with or without Content-Length) gets **413** and never reaches the
+   endpoint, and nothing is buffered to disk. For kinds with a per-account rule, the email is then read exactly like
+   the endpoint's System.Text.Json binder: UTF-8 BOM skipped, depth 64, case-insensitive name, last value wins. A
+   declared non-utf-8 charset gets **415**. Ambiguous or unparsable bodies (duplicated, non-string or blank email,
+   malformed JSON, invalid UTF-8) all share one constant bucket, so parsing tricks cannot escape the limit.
+3. **Per account** (`AccountRateLimitMiddleware`): a fixed window per normalized email (trimmed, upper case, like
+   `User.NormalizedEmail`).
 
 Operations are matched **by request path** (`RateLimiting:Paths`), so the limits apply to the T12/T13 endpoints as
 soon as they exist at these paths:
@@ -31,6 +37,11 @@ The IP partition uses `Connection.RemoteIpAddress`. `X-Forwarded-For`/`X-Forward
 the proxies listed in `ForwardedHeaders:KnownProxies` (ForwardLimit 1). With none configured (the default) the
 headers are ignored, so a client cannot spoof its partition. Configure the reverse proxy addresses in production.
 
+If no proxies are configured but a request arrives from a loopback or private peer **with** X-Forwarded-For, the API
+is probably behind an unconfigured proxy, and every user would share one IP bucket. Outside Development this logs one
+warning per app instance (`ProxyMisconfigurationDetector`). Set `ForwardedHeaders:Direct=true` to declare that there
+really is no proxy and silence it.
+
 ## Account lockout (Auth.Services `ILockoutService`)
 
 Persisted on the User row (`FailedLoginCount`, `LockoutEndUtc`, `LockoutLevel`):
@@ -46,7 +57,7 @@ Settings: section `Lockout` (`FailuresBeforeLockout`, `BaseLockout`, `MaxLockout
 
 ## Anti-enumeration (`IAuthTimingGuard`)
 
-`CheckPassword(password, storedHash, accountUsable)` costs **exactly one Argon2 Verify** on every path. For an unknown,
+`CheckPasswordAsync(password, storedHash, accountUsable, ct)` costs **exactly one Argon2 Verify** on every path. For an unknown,
 inactive or locked account it verifies against a dummy hash made with the current parameters. Every failure is the same
 `CredentialCheck.Invalid`. The 128-code-point maximum is enforced before Verify, independent of the account. Tests count
 hasher calls; they do not measure wall-clock time.
@@ -72,12 +83,23 @@ warning, instead of the process running out of memory.
 - **Loopback origins.** In production, http is accepted only for loopback origins (`localhost`, `127.0.0.1`, `[::1]`)
   when they are registered. Keep localhost entries out of production ClientApplication rows: any process on the user's
   machine could use them.
-- **Body buffering before the IP throttle.** `AccountKeyMiddleware` runs before the limiter, so it reads up to
-  `MaxAccountBodyBytes` (16 KB) of a request even when the IP limit will reject it. This is bounded per request; slow
-  senders are bounded by Kestrel's `MinRequestBodyDataRate` (default 240 bytes/s after a 5 s grace), and the request
-  body size by `MaxRequestBodySize`. Keep both at their defaults or tighter.
+- **Body reading.** (Audit fix) The per-IP limit now counts a request before its body is read, and the body is capped
+  at 16 KB in memory (413 above). Slow senders are still bounded by Kestrel's `MinRequestBodyDataRate` (default 240
+  bytes/s after a 5 s grace); keep it at the default or tighter.
 - **IPv6.** Per-IP limits partition IPv6 clients by /64 (one subscriber typically holds a whole /64), IPv4 per
   address, and IPv4-mapped IPv6 as IPv4.
 - **Hashing capacity.** Waiting for a hashing slot is asynchronous (no thread is held while queued), and Argon2 runs
-  on a worker. The dummy hash used by the timing guard is created on first need; a failure (e.g. busy) is not cached,
-  so the next request simply tries again.
+  on a worker. The timing guard's dummy hash is created at startup (and otherwise on first need); a failure (e.g.
+  busy) is not cached, so the next request simply tries again.
+- **Lockout window and decay (audit LOW-4, for T17).** `FailedLoginCount` never decays with time and the lockout level
+  resets only on success. A failure window (reset the count after N quiet minutes) and level decay after a quiet period
+  are on the T17 list, together with the unlock-by-email-link mitigation.
+- **Timing residuals for T13 (audit LOW-5).** (i) The dummy hash is now created at startup by a background warm-up,
+  so the first unknown-account sign-in costs no extra Hash. (ii) `RegisterFailureAsync` writes to the database only
+  for existing accounts; T13 should do an equivalent round trip for unknown accounts and keep the locked and
+  wrong-password responses byte-identical. (iii) A stored hash that cannot be parsed returns Failed without Argon2
+  work; such rows should not exist, but T13 can verify against the dummy hash in that case.
+- **Capacity settings.** `PasswordHashing:MaxConcurrentOperations` is limited to 1..64 (64 is about 4 GiB of peak
+  Argon2 memory). Waiting for a slot is bounded by the 5 s queue timeout. Request paths must use `HashAsync` and
+  `VerifyAsync` only; the sync methods block a thread while queued. A client that disconnects while queued is
+  answered quietly (status 499, no error log).

@@ -21,6 +21,13 @@ internal sealed partial class GlobalExceptionHandler(
 
     public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
     {
+        if (exception is OperationCanceledException && httpContext.RequestAborted.IsCancellationRequested)
+        {
+            // The client went away (e.g. while queued for a hashing slot): nothing to answer, not an error.
+            httpContext.Response.StatusCode = 499;
+            return true;
+        }
+
         if (exception is PasswordHashingBusyException)
         {
             // Overload protection, not a bug: all Argon2 slots are taken. Ask the client to retry shortly.

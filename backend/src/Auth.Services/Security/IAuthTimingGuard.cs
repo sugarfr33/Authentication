@@ -29,10 +29,16 @@ public interface IAuthTimingGuard
     /// <param name="cancellationToken">Request cancellation.</param>
     /// <exception cref="PasswordHashingBusyException">No hashing slot freed up in time (the host answers 503).</exception>
     Task<CredentialCheck> CheckPasswordAsync(string password, string? storedHash, bool accountUsable, CancellationToken cancellationToken);
+
+    /// <summary>Creates the dummy hash ahead of the first request (startup), so the first unknown-account login costs no extra Hash.</summary>
+    Task WarmUpAsync(CancellationToken cancellationToken);
 }
 
 internal sealed class AuthTimingGuard(IPasswordHasher hasher) : IAuthTimingGuard
 {
+    /// <summary>Raw UTF-16 length above which a password is rejected before any normalization or hashing.</summary>
+    internal const int MaxRawPasswordLength = 1024;
+
     /// <summary>
     /// Hash of a random secret with the current parameters, made on first need. A failure (for example
     /// PasswordHashingBusyException) is NOT cached: the next call simply tries again, so a busy moment can never turn
@@ -43,6 +49,13 @@ internal sealed class AuthTimingGuard(IPasswordHasher hasher) : IAuthTimingGuard
     public async Task<CredentialCheck> CheckPasswordAsync(string password, string? storedHash, bool accountUsable, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(password);
+
+        // Raw bound first: NFKC normalization copies the string, so megabytes must never reach it. (Not 128: composition
+        // can shrink text, so a raw value above 128 chars may still normalize to an allowed length.)
+        if (password.Length > MaxRawPasswordLength)
+        {
+            return CredentialCheck.Invalid;
+        }
 
         // Enforced before Verify and independent of the account, so it reveals nothing and bounds the hashing work.
         if (password.Length == 0 || password.Normalize(NormalizationForm.FormKC).EnumerateRunes().Count() > IPasswordPolicy.MaximumLength)
@@ -66,6 +79,8 @@ internal sealed class AuthTimingGuard(IPasswordHasher hasher) : IAuthTimingGuard
             _ => CredentialCheck.Invalid,
         };
     }
+
+    public Task WarmUpAsync(CancellationToken cancellationToken) => GetDummyHashAsync(cancellationToken);
 
     private async Task<string> GetDummyHashAsync(CancellationToken cancellationToken)
     {

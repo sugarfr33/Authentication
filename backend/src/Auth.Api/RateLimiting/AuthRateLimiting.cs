@@ -25,12 +25,15 @@ internal static class AuthRateLimiting
             .Validate(options => options.IsValid(), "RateLimiting is invalid: every rule needs PermitLimit > 0 and Window > 0; MaxAccountBodyBytes must be 1..1048576.")
             .ValidateOnStart();
 
+        services.AddSingleton<AccountRateLimiter>();
         services.AddRateLimiter(_ => { });
         services.AddOptions<RateLimiterOptions>().Configure<IOptions<AuthRateLimitOptions>>((limiter, auth) =>
         {
             AuthRateLimitOptions settings = auth.Value;
             limiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-            limiter.GlobalLimiter = PartitionedRateLimiter.CreateChained(PerIp(settings), PerAccount(settings));
+            // Per IP only here, so it counts the request BEFORE the body is read; the per-account limit runs after the
+            // account key is known (AccountRateLimitMiddleware).
+            limiter.GlobalLimiter = PerIp(settings);
             limiter.OnRejected = WriteRejectionAsync;
         });
 
@@ -100,7 +103,7 @@ internal static class AuthRateLimiting
         return new IPAddress(bytes) + "/64";
     }
 
-    private static PartitionedRateLimiter<HttpContext> PerAccount(AuthRateLimitOptions settings) =>
+    internal static PartitionedRateLimiter<HttpContext> PerAccount(AuthRateLimitOptions settings) =>
         PartitionedRateLimiter.Create<HttpContext, string>(context =>
         {
             if (!TryGetPolicy(settings, context, out AuthRateLimitKind kind, out AuthRateLimitPolicy? policy)
@@ -135,10 +138,13 @@ internal static class AuthRateLimiting
             AutoReplenishment = true,
         });
 
-    private static async ValueTask WriteRejectionAsync(OnRejectedContext context, CancellationToken cancellationToken)
+    private static ValueTask WriteRejectionAsync(OnRejectedContext context, CancellationToken cancellationToken) =>
+        new(WriteTooManyRequestsAsync(context.HttpContext, context.Lease));
+
+    /// <summary>429 ProblemDetails with Retry-After from the lease (seconds until the window resets).</summary>
+    internal static async Task WriteTooManyRequestsAsync(HttpContext http, RateLimitLease lease)
     {
-        HttpContext http = context.HttpContext;
-        TimeSpan retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out TimeSpan wait) ? wait : TimeSpan.FromSeconds(60);
+        TimeSpan retryAfter = lease.TryGetMetadata(MetadataName.RetryAfter, out TimeSpan wait) ? wait : TimeSpan.FromSeconds(60);
         http.Response.StatusCode = StatusCodes.Status429TooManyRequests;
         http.Response.Headers[HeaderNames.RetryAfter] = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
 

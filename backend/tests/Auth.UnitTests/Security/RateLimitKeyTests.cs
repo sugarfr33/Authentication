@@ -42,12 +42,59 @@ public class RateLimitKeyTests
 
     [Theory]
     [InlineData("""{"username":"a@example.test"}""")]
-    [InlineData("""["email","a@example.test"]""")]
-    [InlineData("""not json""")]
     [InlineData("")]
-    public void No_email_field_or_no_object_gives_no_account_key(string json)
+    [InlineData("   ")]
+    public void Empty_body_or_object_without_email_gives_no_account_key(string json)
     {
         Assert.Null(Find(json));
+    }
+
+    /// <summary>Audit MEDIUM-2 / LOW-1: anything the reader cannot parse must not escape the per-account limit.</summary>
+    [Theory]
+    [InlineData("""["email","a@example.test"]""")]
+    [InlineData("""not json""")]
+    [InlineData("{\"email\":\"a@example.test\"")]
+    public void Unparsable_or_non_object_bodies_share_the_ambiguous_bucket(string json)
+    {
+        Assert.Equal(Ambiguous, Find(json));
+    }
+
+    [Fact]
+    public void A_UTF8_BOM_is_skipped_like_the_binder_does()
+    {
+        byte[] body = [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes("""{"email":"bom@example.test"}""")];
+
+        Assert.Equal("BOM@EXAMPLE.TEST", AccountKeyMiddleware.FindEmail(body));
+    }
+
+    [Fact]
+    public void Nesting_deeper_than_8_still_parses_up_to_the_binder_depth()
+    {
+        string deep = """{"email":"deep@example.test","pad":""" + new string('[', 9) + "1" + new string(']', 9) + "}";
+        string tooDeep = """{"email":"deep@example.test","pad":""" + new string('[', 80) + "1" + new string(']', 80) + "}";
+
+        Assert.Equal("DEEP@EXAMPLE.TEST", Find(deep));
+        Assert.Equal(Ambiguous, Find(tooDeep));
+    }
+
+    [Fact]
+    public void Invalid_UTF8_inside_the_email_string_shares_the_ambiguous_bucket()
+    {
+        byte[] body = [.. Encoding.UTF8.GetBytes("{\"email\":\"a"), 0xC3, 0x28, .. Encoding.UTF8.GetBytes("@example.test\"}")];
+
+        Assert.Equal(Ambiguous, AccountKeyMiddleware.FindEmail(body));
+    }
+
+    [Theory]
+    [InlineData("application/json", true)]
+    [InlineData("application/json; charset=utf-8", true)]
+    [InlineData("application/json; charset=UTF8", true)]
+    [InlineData("application/json; charset=\"utf-8\"", true)]
+    [InlineData("application/json; charset=utf-16", false)]
+    [InlineData("application/json; charset=iso-8859-1", false)]
+    public void Only_utf8_charsets_are_accepted(string contentType, bool accepted)
+    {
+        Assert.Equal(accepted, AccountKeyMiddleware.IsUtf8Charset(contentType));
     }
 
     [Theory]

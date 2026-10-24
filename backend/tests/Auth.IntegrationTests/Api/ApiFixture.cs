@@ -165,6 +165,7 @@ public sealed class ApiFixture : IAsyncLifetime
             builder.ConfigureServices(services =>
             {
                 services.AddSingleton<ILogEventSink>(fixture.Logs);
+                services.AddSingleton(new Auth.Services.Passwords.PasswordHashingOptions { MemorySizeKiB = 1024, Iterations = 1, Parallelism = 1 });
                 services.AddSingleton<IStartupFilter, RemoteIpFilter>();
                 services.AddSingleton<IStartupFilter, ThrowingEndpointFilter>();
                 services.AddSingleton<IEndpointModule, TestEndpoints>();

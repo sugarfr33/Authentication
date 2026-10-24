@@ -71,6 +71,8 @@ builder.Services.AddAntiforgery(options =>
 // Rate limiting (T11): per IP and per account on the auth paths. Forwarded headers only from configured proxies.
 builder.Services.AddAuthRateLimiting(builder.Configuration);
 bool behindProxy = builder.Services.ConfigureForwardedHeaders(builder.Configuration);
+bool warnAboutProxy = !behindProxy && !builder.Environment.IsDevelopment() && !builder.Configuration.GetValue<bool>("ForwardedHeaders:Direct");
+builder.Services.AddHostedService<TimingGuardWarmUp>();
 
 builder.Services.AddCors();
 builder.Services.AddSingleton<ICorsPolicyProvider, ClientApplicationCorsPolicyProvider>();
@@ -80,6 +82,10 @@ WebApplication app = builder.Build();
 if (behindProxy)
 {
     app.UseForwardedHeaders();
+}
+else if (warnAboutProxy)
+{
+    app.UseMiddleware<ProxyMisconfigurationDetector>();
 }
 
 app.UseMiddleware<SecurityHeadersMiddleware>();
@@ -92,8 +98,9 @@ if (!app.Environment.IsDevelopment())
 
 app.UseSerilogRequestLogging();
 app.UseCors();
-app.UseMiddleware<AccountKeyMiddleware>();
 app.UseRateLimiter();
+app.UseMiddleware<AccountKeyMiddleware>();
+app.UseMiddleware<AccountRateLimitMiddleware>();
 app.UseAuthentication();
 app.UseMiddleware<BrowserProtectionMiddleware>();
 app.UseAuthorization();

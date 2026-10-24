@@ -74,6 +74,30 @@ public class HashingGuardTests
         Assert.Equal(0, hasher.HashCalls);
     }
 
+    /// <summary>Audit MEDIUM-3: a huge raw password is refused before normalization (which copies it) and before Verify.</summary>
+    [Fact]
+    public async Task Raw_passwords_over_1024_chars_are_rejected_before_normalization_and_Verify()
+    {
+        CountingHasher hasher = new();
+        AuthTimingGuard guard = new(hasher);
+        string stored = hasher.Hash(Password);
+        hasher.Reset();
+
+        Assert.Equal(CredentialCheck.Invalid, await guard.CheckPasswordAsync(new string('a', 1025), stored, accountUsable: true, Ct));
+        Assert.Equal(CredentialCheck.Invalid, await guard.CheckPasswordAsync(new string('a', 5_000_000), null, accountUsable: false, Ct));
+        Assert.Equal(0, hasher.VerifyCalls + hasher.HashCalls);
+        Assert.Equal(1024, AuthTimingGuard.MaxRawPasswordLength);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(65)]
+    [InlineData(1000)]
+    public void Hashing_concurrency_outside_1_to_64_is_refused(int concurrency)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new PasswordHashingLimits { MaxConcurrentOperations = concurrency }.Validated());
+    }
+
     [Fact]
     public async Task At_most_N_hash_operations_run_at_once_and_excess_async_callers_get_busy()
     {
