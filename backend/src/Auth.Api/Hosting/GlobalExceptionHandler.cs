@@ -1,6 +1,8 @@
 using Auth.Api.Logging;
+using Auth.Services.Passwords;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Net.Http.Headers;
 
 namespace Auth.Api.Hosting;
 
@@ -19,6 +21,19 @@ internal sealed partial class GlobalExceptionHandler(
 
     public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
     {
+        if (exception is PasswordHashingBusyException)
+        {
+            // Overload protection, not a bug: all Argon2 slots are taken. Ask the client to retry shortly.
+            LogHashingBusy(logger, httpContext.Request.Method, httpContext.Request.Path.Value ?? string.Empty);
+            httpContext.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            httpContext.Response.Headers[HeaderNames.RetryAfter] = "1";
+            return await problemDetails.TryWriteAsync(new ProblemDetailsContext
+            {
+                HttpContext = httpContext,
+                ProblemDetails = new ProblemDetails { Status = StatusCodes.Status503ServiceUnavailable, Title = "The service is busy. Please retry shortly." },
+            });
+        }
+
         LogUnhandled(logger, exception.GetType().FullName ?? "Exception", httpContext.Request.Method, httpContext.Request.Path.Value ?? string.Empty, LogRedaction.Redact(exception.ToString()));
 
         bool includeDetails = environment.IsDevelopment() && configuration.GetValue<bool>(IncludeDetailsKey);
@@ -34,6 +49,9 @@ internal sealed partial class GlobalExceptionHandler(
 
         return await problemDetails.TryWriteAsync(new ProblemDetailsContext { HttpContext = httpContext, ProblemDetails = problem });
     }
+
+    [LoggerMessage(EventId = 5001, Level = LogLevel.Warning, Message = "Password hashing capacity exhausted on {Method} {Path}; answered 503")]
+    private static partial void LogHashingBusy(ILogger logger, string method, string path);
 
     [LoggerMessage(EventId = 5000, Level = LogLevel.Error, Message = "Unhandled {ExceptionType} on {Method} {Path}: {Error}")]
     private static partial void LogUnhandled(ILogger logger, string exceptionType, string method, string path, string error);

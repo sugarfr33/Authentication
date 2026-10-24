@@ -4,12 +4,15 @@ using Auth.Api.Endpoints;
 using Auth.Api.Health;
 using Auth.Api.Hosting;
 using Auth.Api.Logging;
+using Auth.Api.RateLimiting;
 using Auth.Api.Security;
 using Auth.Contracts;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Auth.Services;
 using Auth.Services.ClientApplications;
+using Auth.Services.Passwords;
+using Auth.Services.Security;
 using Serilog;
 using Serilog.Events;
 
@@ -31,6 +34,10 @@ builder.Services.AddSerilog((services, logger) => logger
 
 // Client-application origins must be https outside Development (http only for loopback).
 builder.Services.AddSingleton(new ClientApplicationOriginOptions { RequireHttps = !builder.Environment.IsDevelopment() });
+
+// Optional overrides of the Services defaults: concurrent Argon2 operations and lockout thresholds.
+builder.Services.AddSingleton(builder.Configuration.GetSection("PasswordHashing").Get<PasswordHashingLimits>() ?? new PasswordHashingLimits());
+builder.Services.AddSingleton(builder.Configuration.GetSection("Lockout").Get<LockoutOptions>() ?? new LockoutOptions());
 builder.Services.AddAuthServices(builder.Configuration);
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
     context.ProblemDetails.Extensions["traceId"] = Activity.Current?.Id ?? context.HttpContext.TraceIdentifier);
@@ -61,10 +68,19 @@ builder.Services.AddAntiforgery(options =>
 });
 
 // CORS: exact origins from active client applications (plus trusted origins), credentials allowed, never a wildcard.
+// Rate limiting (T11): per IP and per account on the auth paths. Forwarded headers only from configured proxies.
+builder.Services.AddAuthRateLimiting(builder.Configuration);
+bool behindProxy = builder.Services.ConfigureForwardedHeaders(builder.Configuration);
+
 builder.Services.AddCors();
 builder.Services.AddSingleton<ICorsPolicyProvider, ClientApplicationCorsPolicyProvider>();
 
 WebApplication app = builder.Build();
+
+if (behindProxy)
+{
+    app.UseForwardedHeaders();
+}
 
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseExceptionHandler();
@@ -76,6 +92,8 @@ if (!app.Environment.IsDevelopment())
 
 app.UseSerilogRequestLogging();
 app.UseCors();
+app.UseMiddleware<AccountKeyMiddleware>();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseMiddleware<BrowserProtectionMiddleware>();
 app.UseAuthorization();

@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Auth.Api.Endpoints;
 using Auth.Api.Security;
+using Auth.Services.Passwords;
 using Auth.Services.Tokens;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -46,6 +47,16 @@ internal sealed class TestEndpoints : IEndpointModule
         test.MapMethods("/echo", [HttpMethods.Post, HttpMethods.Put, HttpMethods.Patch, HttpMethods.Delete], () => Results.Ok(new { echoed = true }));
 
         test.MapPost("/protected", () => Results.Ok(new { done = true })).RequireAuthorization();
+
+        // Rate-limit target (mapped to Login by the fixture). Echoes what it read, to prove the body survives the account-key reader.
+        test.MapPost("/login", async (HttpRequest request) =>
+        {
+            using StreamReader reader = new(request.Body);
+            string body = await reader.ReadToEndAsync();
+            return Results.Ok(new { length = body.Length });
+        });
+
+        test.MapPost("/busy", IResult () => throw new PasswordHashingBusyException());
 
         test.MapPost("/logout", (ICookieWriter cookies, HttpContext http) =>
         {

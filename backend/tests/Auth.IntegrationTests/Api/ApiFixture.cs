@@ -29,6 +29,7 @@ public sealed class ApiFixture : IAsyncLifetime
     public const string Issuer = "https://auth.example.test";
     public const string SigningKid = "api-k1";
     public const string ThrowPath = "/__test/throw";
+    public const string TestRemoteIp = "10.0.0.1";
     public const string ThrowProbe = "probe-exception-text-C:/secret/path";
 
     public const string AppOrigin = "https://app.example.test";
@@ -97,6 +98,7 @@ public sealed class ApiFixture : IAsyncLifetime
         ["https_port"] = "443",
         ["Errors:IncludeExceptionDetails"] = "true",
         ["Secrets:" + PrivateKeyReference] = PrivateKeyPem,
+        ["RateLimiting:Paths:" + TestEndpoints.Prefix + "/login"] = "Login",
         ["Serilog:MinimumLevel:Default"] = "Verbose",
         ["Serilog:MinimumLevel:Override:Microsoft"] = "Verbose",
         ["Serilog:MinimumLevel:Override:Microsoft.AspNetCore"] = "Verbose",
@@ -163,10 +165,25 @@ public sealed class ApiFixture : IAsyncLifetime
             builder.ConfigureServices(services =>
             {
                 services.AddSingleton<ILogEventSink>(fixture.Logs);
+                services.AddSingleton<IStartupFilter, RemoteIpFilter>();
                 services.AddSingleton<IStartupFilter, ThrowingEndpointFilter>();
                 services.AddSingleton<IEndpointModule, TestEndpoints>();
             });
         }
+    }
+
+    /// <summary>TestServer has no remote IP; give every request 'TestRemoteIp' (a stand-in for the proxy in front of the API).</summary>
+    private sealed class RemoteIpFilter : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use((context, nextMiddleware) =>
+            {
+                context.Connection.RemoteIpAddress ??= System.Net.IPAddress.Parse(TestRemoteIp);
+                return nextMiddleware(context);
+            });
+            next(app);
+        };
     }
 
     /// <summary>Adds a test-only endpoint after the app pipeline that throws an exception carrying a probe text.</summary>

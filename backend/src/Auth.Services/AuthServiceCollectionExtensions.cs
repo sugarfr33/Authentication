@@ -1,7 +1,9 @@
 using Auth.DAL;
+using Auth.DAL.Repositories;
 using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
+using Auth.Services.Security;
 using Auth.Services.Tokens;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +27,12 @@ public static class AuthServiceCollectionExtensions
         services.AddDataAccess(connectionString);
         services.AddPasswordServices();
         services.AddScoped<ISystemHealth, SystemHealth>();
+        services.TryAddSingleton(new LockoutOptions());
+        services.AddScoped<ILockoutService>(sp => new LockoutService(
+            sp.GetRequiredService<IUserRepository>(),
+            sp.GetRequiredService<IUnitOfWork>(),
+            sp.GetRequiredService<IClock>(),
+            sp.GetRequiredService<LockoutOptions>().Validated()));
         services.TryAddSingleton(new ClientApplicationOriginOptions());
         services.AddSingleton<IClientApplicationOriginProvider, ClientApplicationOriginProvider>();
         services.AddTokenServices(configuration);
@@ -61,7 +69,14 @@ public static class AuthServiceCollectionExtensions
     {
         services.TryAddSingleton(new PasswordHashingOptions());
         services.AddSingleton<CommonPasswordList>();
-        services.AddSingleton<IPasswordHasher, Argon2PasswordHasher>();
+        services.TryAddSingleton(new PasswordHashingLimits());
+        services.AddSingleton<Argon2PasswordHasher>();
+
+        // Every hash or verify goes through the bounded gate: at most N Argon2 operations (64 MiB each) at once.
+        services.AddSingleton<IPasswordHasher>(sp => new BoundedPasswordHasher(
+            sp.GetRequiredService<Argon2PasswordHasher>(),
+            sp.GetRequiredService<PasswordHashingLimits>().Validated()));
+        services.AddSingleton<IAuthTimingGuard, AuthTimingGuard>();
         services.AddSingleton<IPasswordPolicy, PasswordPolicy>();
 
         return services;
