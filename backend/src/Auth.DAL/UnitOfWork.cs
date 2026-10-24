@@ -13,15 +13,13 @@ internal sealed partial class UnitOfWork(AuthDbContext context) : IUnitOfWork
     private const int UniqueIndexViolation = 2601;
     private const int UniqueConstraintViolation = 2627;
 
-    // 1205 = chosen as deadlock victim: two transactions updated the same rows in opposite order or both upgraded
-    // shared locks (e.g. two simultaneous refresh-token rotations under RepeatableRead). It is a concurrency conflict.
-    private const int DeadlockVictim = 1205;
-
     public async Task<IUnitOfWorkTransaction> BeginTransactionAsync(IsolationLevel isolationLevel, CancellationToken cancellationToken)
     {
         IDbContextTransaction transaction = await context.Database.BeginTransactionAsync(isolationLevel, cancellationToken);
         return new UnitOfWorkTransaction(transaction);
     }
+
+    public void ClearChanges() => context.ChangeTracker.Clear();
 
     public async Task<int> SaveChangesAsync(CancellationToken cancellationToken)
     {
@@ -33,7 +31,7 @@ internal sealed partial class UnitOfWork(AuthDbContext context) : IUnitOfWork
         {
             throw new ConcurrencyConflictException("The row was changed or deleted since it was read.", ex);
         }
-        catch (Exception ex) when (FindSqlException(ex) is { Number: DeadlockVictim })
+        catch (Exception ex) when (SqlErrors.IsDeadlock(ex))
         {
             throw new ConcurrencyConflictException("The save lost a concurrent update (deadlock victim) and was rolled back.", ex);
         }
@@ -45,23 +43,6 @@ internal sealed partial class UnitOfWork(AuthDbContext context) : IUnitOfWork
         {
             throw new DataAccessException("Saving changes failed.", ex);
         }
-    }
-
-    /// <summary>
-    /// The SqlException anywhere in the chain. EF wraps a deadlock in an InvalidOperationException ("transient failure")
-    /// around the DbUpdateException, so checking only the direct inner exception misses it.
-    /// </summary>
-    private static SqlException? FindSqlException(Exception? exception)
-    {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-        {
-            if (current is SqlException sql)
-            {
-                return sql;
-            }
-        }
-
-        return null;
     }
 
     /// <summary>Extracts the index or constraint name SQL Server puts in quotes, e.g. <c>unique index 'UQ_User_NormalizedEmail'</c>.</summary>

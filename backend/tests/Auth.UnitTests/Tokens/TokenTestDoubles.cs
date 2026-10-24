@@ -73,6 +73,10 @@ internal sealed class FakeUnitOfWork : IUnitOfWork
     public Task<IUnitOfWorkTransaction> BeginTransactionAsync(IsolationLevel isolationLevel, CancellationToken cancellationToken) =>
         throw new NotSupportedException();
 
+    public int Clears { get; private set; }
+
+    public void ClearChanges() => Clears++;
+
     public Task<int> SaveChangesAsync(CancellationToken cancellationToken)
     {
         Saves++;

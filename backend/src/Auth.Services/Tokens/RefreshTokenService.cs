@@ -18,6 +18,10 @@ internal sealed class RefreshTokenService(
     /// <summary>Longer input cannot be one of our tokens; skip hashing and the lookup.</summary>
     private const int MaxTokenLength = 256;
 
+    /// <summary>Column sizes (nvarchar(45) and nvarchar(512)); incoming values are truncated to these before storing AND comparing.</summary>
+    private const int MaxIpAddressLength = 45;
+    private const int MaxUserAgentLength = 512;
+
     private static readonly HashSet<string> RevokeReasons =
     [
         RefreshTokenRevokedReason.Rotated, RefreshTokenRevokedReason.Reuse, RefreshTokenRevokedReason.Logout,
@@ -48,67 +52,84 @@ internal sealed class RefreshTokenService(
         }
 
         byte[] hash = generator.Hash(rawToken);
-        DateTime now = clock.UtcNow;
 
         try
         {
-            await using IUnitOfWorkTransaction transaction = await unitOfWork.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
-
-            RefreshToken? presented = await refreshTokens.GetByHashForUpdateAsync(hash, cancellationToken);
-            if (presented is null || presented.ExpiresUtc <= now)
-            {
-                return RotationResult.Invalid;
-            }
-
-            if (presented.RevokedUtc is not null)
-            {
-                if (IsLosingSideOfARace(presented, context, now))
-                {
-                    return RotationResult.Concurrent;
-                }
-
-                int revoked = await refreshTokens.RevokeFamilyAsync(presented.FamilyId, RefreshTokenRevokedReason.Reuse, now, cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
-                return new RotationResult(
-                    RotationStatus.ReuseDetected,
-                    null,
-                    new TokenReuseDetected(presented.UserId, presented.FamilyId, presented.ClientApplicationId, context.IpAddress, context.UserAgent, revoked));
-            }
-
-            if (!await CanRefreshAsync(presented, cancellationToken))
-            {
-                return RotationResult.Invalid;
-            }
-
-            DateTime familyStart = await refreshTokens.GetFamilyCreatedUtcAsync(presented.FamilyId, cancellationToken) ?? presented.CreatedUtc;
-            DateTime expires = Min(now + options.SlidingLifetime, familyStart + options.AbsoluteLifetime);
-            if (expires <= now)
-            {
-                return RotationResult.Invalid;
-            }
-
-            (RefreshToken successor, string raw) = NewToken(presented.UserId, presented.ClientApplicationId, presented.FamilyId, now, expires, context);
-            await refreshTokens.AddAsync(successor, cancellationToken);
-
-            presented.RevokedUtc = now;
-            presented.RevokedReason = RefreshTokenRevokedReason.Rotated;
-            // AddAsync has assigned successor.Id (EF client-side sequential GUID), so it can be referenced here.
-            presented.ReplacedByTokenId = successor.Id;
-
-            await unitOfWork.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-
-            return new RotationResult(
-                RotationStatus.Rotated,
-                new IssuedRefreshToken(raw, presented.FamilyId, presented.UserId, presented.ClientApplicationId, expires),
-                null);
+            return await RotateOnceAsync(hash, context, cancellationToken);
         }
         catch (ConcurrencyConflictException)
         {
-            // Another refresh of the same token committed first (RowVersion mismatch or deadlock victim). Our transaction
-            // is rolled back; the winner's successor is the live token.
+            // Lost a race: a sibling rotation committed first, or our reuse revocation was a deadlock victim. Our
+            // transaction is rolled back. Retry once with a clean change tracker: the retry sees the current state and
+            // either reports Concurrent (sibling won, same user agent) or applies the reuse revocation.
+            unitOfWork.ClearChanges();
+        }
+
+        try
+        {
+            return await RotateOnceAsync(hash, context, cancellationToken);
+        }
+        catch (ConcurrencyConflictException)
+        {
+            unitOfWork.ClearChanges();
             return RotationResult.Concurrent;
         }
+    }
+
+    /// <summary>One rotation attempt in its own RepeatableRead transaction. Throws ConcurrencyConflictException when it loses a race.</summary>
+    private async Task<RotationResult> RotateOnceAsync(byte[] hash, RefreshContext context, CancellationToken cancellationToken)
+    {
+        DateTime now = clock.UtcNow;
+        await using IUnitOfWorkTransaction transaction = await unitOfWork.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
+
+        RefreshToken? presented = await refreshTokens.GetByHashForUpdateAsync(hash, cancellationToken);
+        if (presented is null || presented.ExpiresUtc <= now)
+        {
+            return RotationResult.Invalid;
+        }
+
+        if (presented.RevokedUtc is not null)
+        {
+            if (IsLosingSideOfARace(presented, context, now))
+            {
+                return RotationResult.Concurrent;
+            }
+
+            int revoked = await refreshTokens.RevokeFamilyAsync(presented.FamilyId, RefreshTokenRevokedReason.Reuse, now, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new RotationResult(
+                RotationStatus.ReuseDetected,
+                null,
+                new TokenReuseDetected(presented.UserId, presented.FamilyId, presented.ClientApplicationId, context.IpAddress, context.UserAgent, revoked));
+        }
+
+        if (!await CanRefreshAsync(presented, cancellationToken))
+        {
+            return RotationResult.Invalid;
+        }
+
+        DateTime familyStart = await refreshTokens.GetFamilyCreatedUtcAsync(presented.FamilyId, cancellationToken) ?? presented.CreatedUtc;
+        DateTime expires = Min(now + options.SlidingLifetime, familyStart + options.AbsoluteLifetime);
+        if (expires <= now)
+        {
+            return RotationResult.Invalid;
+        }
+
+        (RefreshToken successor, string raw) = NewToken(presented.UserId, presented.ClientApplicationId, presented.FamilyId, now, expires, context);
+        await refreshTokens.AddAsync(successor, cancellationToken);
+
+        presented.RevokedUtc = now;
+        presented.RevokedReason = RefreshTokenRevokedReason.Rotated;
+        // AddAsync has assigned successor.Id (EF client-side sequential GUID), so it can be referenced here.
+        presented.ReplacedByTokenId = successor.Id;
+
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        return new RotationResult(
+            RotationStatus.Rotated,
+            new IssuedRefreshToken(raw, presented.FamilyId, presented.UserId, presented.ClientApplicationId, expires),
+            null);
     }
 
     public Task<int> RevokeFamilyAsync(Guid familyId, string reason, CancellationToken cancellationToken) =>
@@ -122,7 +143,7 @@ internal sealed class RefreshTokenService(
         presented.RevokedReason == RefreshTokenRevokedReason.Rotated
         && presented.ReplacedByTokenId is not null
         && now - presented.RevokedUtc!.Value <= options.ReuseGraceWindow
-        && string.Equals(presented.UserAgent, context.UserAgent, StringComparison.Ordinal);
+        && string.Equals(presented.UserAgent, Truncate(context.UserAgent, MaxUserAgentLength), StringComparison.Ordinal);
 
     private async Task<bool> CanRefreshAsync(RefreshToken presented, CancellationToken cancellationToken)
     {
@@ -152,8 +173,8 @@ internal sealed class RefreshTokenService(
             TokenHash = token.Hash,
             CreatedUtc = now,
             ExpiresUtc = expires,
-            IpAddress = Truncate(context.IpAddress, 45),
-            UserAgent = Truncate(context.UserAgent, 512),
+            IpAddress = Truncate(context.IpAddress, MaxIpAddressLength),
+            UserAgent = Truncate(context.UserAgent, MaxUserAgentLength),
         };
         return (row, token.Value);
     }

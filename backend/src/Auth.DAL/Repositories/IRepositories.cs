@@ -57,7 +57,10 @@ public interface IRefreshTokenRepository
     /// <summary>The user's tokens that are neither revoked nor expired at <paramref name="utcNow"/>, newest first.</summary>
     Task<IReadOnlyList<RefreshToken>> GetActiveByUserAsync(Guid userId, DateTime utcNow, CancellationToken cancellationToken);
 
-    /// <summary>When the family started: the earliest CreatedUtc of its tokens, or null for an unknown family.</summary>
+    /// <summary>When the family started: the earliest CreatedUtc of its tokens, or null for an unknown family.
+    /// The 30-day absolute session cap is computed from this, so any future purge of old refresh tokens must delete
+    /// whole families only: deleting a family's oldest rows would move its start later and extend the session.
+    /// </summary>
     Task<DateTime?> GetFamilyCreatedUtcAsync(Guid familyId, CancellationToken cancellationToken);
 }
 

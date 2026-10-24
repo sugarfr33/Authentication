@@ -122,6 +122,23 @@ public sealed class RefreshTokenServiceTests : RepositoryTestBase, IAsyncDisposa
         Assert.Equal(RotationStatus.Rotated, (await RotateAsync(winner.Token, Browser)).Status);
     }
 
+    /// <summary>Regression (T08 review): the stored user agent is truncated to 512 chars, so the comparison must truncate too.</summary>
+    [Fact]
+    public async Task A_user_agent_longer_than_the_column_still_gets_Concurrent_inside_the_grace_window()
+    {
+        RefreshContext longAgent = new("203.0.113.10", "Mozilla/5.0 " + new string('x', 600));
+        User user = await SeedUserAsync();
+        IssuedRefreshToken first = await IssueAsync(user.Id, null, longAgent);
+        IssuedRefreshToken winner = (await RotateAsync(first.Token, longAgent)).Token!;
+        clock.Advance(TimeSpan.FromSeconds(3));
+
+        RotationResult loser = await RotateAsync(first.Token, longAgent);
+
+        Assert.Equal(RotationStatus.Concurrent, loser.Status);
+        Assert.Equal(512, (await LoadByRawAsync(winner.Token)).UserAgent.Length);
+        Assert.Null((await LoadByRawAsync(winner.Token)).RevokedUtc);
+    }
+
     [Fact]
     public async Task Within_the_grace_window_a_different_user_agent_is_treated_as_reuse()
     {

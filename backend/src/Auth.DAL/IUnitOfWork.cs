@@ -11,6 +11,9 @@ public interface IUnitOfWork
 {
     Task<IUnitOfWorkTransaction> BeginTransactionAsync(IsolationLevel isolationLevel, CancellationToken cancellationToken);
 
+    /// <summary>Forgets every tracked change (e.g. before retrying an operation whose save failed).</summary>
+    void ClearChanges();
+
     /// <summary>Saves tracked changes.</summary>
     /// <exception cref="ConcurrencyConflictException">A RowVersion check failed, or SQL Server chose this save as a deadlock victim (the transaction is rolled back).</exception>
     /// <exception cref="UniqueConstraintViolationException">A unique index or key was violated.</exception>
