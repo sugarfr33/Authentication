@@ -156,6 +156,14 @@ namespace Auth.DAL.Migrations
                         .HasPrecision(7)
                         .HasColumnType("datetime2(7)");
 
+                    b.Property<string>("PendingDisplayName")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<string>("PendingPasswordHash")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
                     b.Property<byte[]>("TokenHash")
                         .IsRequired()
                         .HasMaxLength(32)

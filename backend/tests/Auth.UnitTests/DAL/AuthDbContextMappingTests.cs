@@ -55,7 +55,8 @@ public class AuthDbContextMappingTests
         ["EmailVerificationToken"] =
         [
             "Id uniqueidentifier", "UserId uniqueidentifier", "TokenHash binary(32)", "CreatedUtc datetime2(7)",
-            "ExpiresUtc datetime2(7)", "UsedUtc datetime2(7) NULL",
+            "ExpiresUtc datetime2(7)", "UsedUtc datetime2(7) NULL", "PendingPasswordHash nvarchar(512) NULL",
+            "PendingDisplayName nvarchar(128) NULL",
         ],
         ["AuditLog"] =
         [

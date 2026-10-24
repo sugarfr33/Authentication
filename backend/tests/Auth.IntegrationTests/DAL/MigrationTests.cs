@@ -16,7 +16,7 @@ namespace Auth.IntegrationTests.DAL;
 [Collection(SqlServerTestGroup.Name)]
 public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncLifetime
 {
-    private const string InitialMigration = "20261024081023_InitialCreate";
+    private static readonly string[] AllMigrations = ["20261024081023_InitialCreate", "20261024120957_EmailVerificationPendingRegistration"];
 
     private static readonly string[] Tables =
     [
@@ -36,11 +36,11 @@ public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncL
 
         await context.Database.MigrateAsync();
 
-        Assert.Equal([InitialMigration], await context.Database.GetAppliedMigrationsAsync());
+        Assert.Equal(AllMigrations, await context.Database.GetAppliedMigrationsAsync());
         Assert.Empty(await context.Database.GetPendingMigrationsAsync());
         Assert.Equal(Tables.Append(AuthDbContext.MigrationsHistoryTable).Order(StringComparer.Ordinal), await AuthTablesAsync());
         Assert.Equal(schemaAfterFirst, await SchemaObjectsAsync());
-        Assert.Equal(1, await HistoryRowCountAsync());
+        Assert.Equal(AllMigrations.Length, await HistoryRowCountAsync());
     }
 
     [Fact]
@@ -79,8 +79,8 @@ public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncL
         await ExecuteScriptAsync(script);
 
         Assert.Equal(viaMigrate, await SchemaObjectsAsync());
-        Assert.Equal(1, await HistoryRowCountAsync());
-        Assert.Equal([InitialMigration], await context.Database.GetAppliedMigrationsAsync());
+        Assert.Equal(AllMigrations.Length, await HistoryRowCountAsync());
+        Assert.Equal(AllMigrations, await context.Database.GetAppliedMigrationsAsync());
     }
 
     /// <summary>Drops any leftover copy, then optionally creates an empty database (no tables, no history).</summary>

@@ -13,6 +13,8 @@ internal sealed class EmailVerificationTokenConfiguration : IEntityTypeConfigura
         builder.HasKey(t => t.Id).HasName("PK_EmailVerificationToken");
 
         builder.Property(t => t.TokenHash).HasMaxLength(32).IsFixedLength();
+        builder.Property(t => t.PendingPasswordHash).HasMaxLength(512);
+        builder.Property(t => t.PendingDisplayName).HasMaxLength(128);
 
         builder.HasOne(t => t.User)
             .WithMany()

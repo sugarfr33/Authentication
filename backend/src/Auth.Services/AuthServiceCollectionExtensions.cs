@@ -56,6 +56,7 @@ public static class AuthServiceCollectionExtensions
             sp.GetRequiredService<IPasswordHasher>(),
             sp.GetRequiredService<IUserRepository>(),
             sp.GetRequiredService<IOneTimeTokenRepository<EmailVerificationToken>>(),
+            sp.GetRequiredService<IRefreshTokenRepository>(),
             sp.GetRequiredService<IAuditLogRepository>(),
             sp.GetRequiredService<IUnitOfWork>(),
             sp.GetRequiredService<ITokenGenerator>(),

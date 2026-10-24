@@ -1,3 +1,4 @@
+using System.Data.SqlTypes;
 using System.Security.Cryptography;
 using System.Text;
 using Auth.Contracts;
@@ -9,6 +10,8 @@ using Auth.Services;
 using Auth.Services.Accounts;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
+using Auth.Services.Security;
+using Auth.Services.Tokens;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +22,8 @@ namespace Auth.IntegrationTests.Services;
 public sealed class RegistrationServiceTests : RepositoryTestBase, IAsyncDisposable
 {
     private const string Password = "violet-canyon-7319";
+    private const string AttackerPassword = "attacker-chosen-8812";
+    private const string VictimPassword = "victim-chosen-2297";
 
     private readonly MutableClock clock = new(TestData.Now);
     private readonly CapturingEmailSender mailbox = new();
@@ -61,11 +66,14 @@ public sealed class RegistrationServiceTests : RepositoryTestBase, IAsyncDisposa
         Assert.Equal(EmailNormalizer.Normalize(email), user.NormalizedEmail);
         Assert.False(user.EmailVerified);
         Assert.True(user.IsActive);
-        Assert.StartsWith("$argon2id$", user.PasswordHash, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, user.PasswordHash);
         Assert.Equal("Ada Lovelace", user.DisplayName);
+        Assert.False(await SignsInAsync(email, Password));
 
         string token = TokenFrom(mailbox.OnlyTo(email));
         EmailVerificationToken row = Assert.Single(await LoadTokensAsync(user.Id));
+        Assert.StartsWith("$argon2id$", row.PendingPasswordHash, StringComparison.Ordinal);
+        Assert.Equal("Ada Lovelace", row.PendingDisplayName);
         Assert.Equal(SHA256.HashData(Encoding.UTF8.GetBytes(token)), row.TokenHash);
         Assert.Equal(43, token.Length);
         Assert.Null(row.UsedUtc);
@@ -96,19 +104,98 @@ public sealed class RegistrationServiceTests : RepositoryTestBase, IAsyncDisposa
     }
 
     [Fact]
-    public async Task Registering_again_before_verifying_sends_a_fresh_link_and_retires_the_old_one()
+    public async Task Registering_again_before_verifying_adds_a_link_and_never_changes_an_earlier_links_password()
+    {
+        string email = UniqueEmail();
+        await RegisterAsync(email, "First Name", Password);
+        await RegisterAsync(email, "Second Name", "second-password-5530");
+        (string firstToken, string secondToken) = (TokenFrom(mailbox.To(email)[0]), TokenFrom(mailbox.To(email)[1]));
+
+        Assert.NotEqual(firstToken, secondToken);
+        Assert.True((await VerifyAsync(firstToken)).IsSuccess);
+        Assert.Equal(AuthError.InvalidOrExpiredToken, (await VerifyAsync(secondToken)).Error);
+        Assert.True(await SignsInAsync(email, Password));
+        Assert.False(await SignsInAsync(email, "second-password-5530"));
+        Assert.Equal("First Name", (await LoadUserAsync(email)).DisplayName);
+    }
+
+    /// <summary>Review HIGH-1: the attacker registers the victim's email first; the victim's own link must activate only the victim's password.</summary>
+    [Fact]
+    public async Task Pre_hijacking_attacker_first_victim_link_activates_only_the_victim_password()
+    {
+        string email = UniqueEmail();
+        await RegisterAsync(email, "Attacker", AttackerPassword);
+        await RegisterAsync(email, "Victim", VictimPassword);
+        string victimLink = TokenFrom(mailbox.To(email)[1]);
+
+        Assert.False(await SignsInAsync(email, AttackerPassword));
+        Assert.False(await SignsInAsync(email, VictimPassword));
+        Assert.True((await VerifyAsync(victimLink)).IsSuccess);
+
+        Assert.True(await SignsInAsync(email, VictimPassword));
+        Assert.False(await SignsInAsync(email, AttackerPassword));
+        Assert.Equal("Victim", (await LoadUserAsync(email)).DisplayName);
+        Assert.Equal(AuthError.InvalidOrExpiredToken, (await VerifyAsync(TokenFrom(mailbox.To(email)[0]))).Error);
+    }
+
+    [Fact]
+    public async Task Pre_hijacking_victim_first_attacker_registering_later_cannot_take_over()
+    {
+        string email = UniqueEmail();
+        await RegisterAsync(email, "Victim", VictimPassword);
+        await RegisterAsync(email, "Attacker", AttackerPassword);
+        string victimLink = TokenFrom(mailbox.To(email)[0]);
+        string attackerLink = TokenFrom(mailbox.To(email)[1]);
+
+        Assert.True((await VerifyAsync(victimLink)).IsSuccess);
+        await RegisterAsync(email, "Attacker", AttackerPassword);
+
+        Assert.True(await SignsInAsync(email, VictimPassword));
+        Assert.False(await SignsInAsync(email, AttackerPassword));
+        Assert.Equal(AuthError.InvalidOrExpiredToken, (await VerifyAsync(attackerLink)).Error);
+        Assert.True(await SignsInAsync(email, VictimPassword));
+        Assert.DoesNotContain("#token=", mailbox.To(email)[2].Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Verification_rotates_the_security_stamp_and_revokes_every_refresh_token()
     {
         string email = UniqueEmail();
         await RegisterAsync(email);
-        string oldToken = TokenFrom(mailbox.OnlyTo(email));
-        mailbox.Clear();
+        User before = await LoadUserAsync(email);
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<IRefreshTokenService>()
+                .IssueAsync(before.Id, null, new RefreshContext("203.0.113.9", "tests"), Ct);
+        }
 
-        await RegisterAsync(email);
-        string newToken = TokenFrom(mailbox.OnlyTo(email));
+        Assert.True((await VerifyAsync(TokenFrom(mailbox.OnlyTo(email)))).IsSuccess);
 
-        Assert.NotEqual(oldToken, newToken);
-        Assert.Equal(AuthError.InvalidOrExpiredToken, (await VerifyAsync(oldToken)).Error);
-        Assert.True((await VerifyAsync(newToken)).IsSuccess);
+        User after = await LoadUserAsync(email);
+        Assert.NotEqual(before.SecurityStamp, after.SecurityStamp);
+        List<RefreshToken> sessions = await WithContextAsync(context => context.RefreshToken.AsNoTracking().Where(t => t.UserId == before.Id).ToListAsync());
+        RefreshToken session = Assert.Single(sessions);
+        Assert.NotNull(session.RevokedUtc);
+        Assert.Equal(RefreshTokenRevokedReason.PasswordChange, session.RevokedReason);
+    }
+
+    /// <summary>Review LOW-1: keys come from EF's client-side sequential generator, so they ascend in SQL Server order.</summary>
+    [Fact]
+    public async Task New_user_and_link_ids_ascend_in_SQL_Server_order()
+    {
+        List<Guid> userIds = [];
+        List<Guid> tokenIds = [];
+        for (int i = 0; i < 5; i++)
+        {
+            string email = UniqueEmail();
+            await RegisterAsync(email);
+            User user = await LoadUserAsync(email);
+            userIds.Add(user.Id);
+            tokenIds.Add(Assert.Single(await LoadTokensAsync(user.Id)).Id);
+        }
+
+        Assert.True(IsAscending(userIds), "User ids are not sequential.");
+        Assert.True(IsAscending(tokenIds), "Link ids are not sequential.");
     }
 
     [Fact]
@@ -200,6 +287,18 @@ public sealed class RegistrationServiceTests : RepositoryTestBase, IAsyncDisposa
     }
 
     public async ValueTask DisposeAsync() => await services.DisposeAsync();
+
+    private static bool IsAscending(List<Guid> ids) =>
+        ids.Zip(ids.Skip(1)).All(pair => new SqlGuid(pair.First).CompareTo(new SqlGuid(pair.Second)) < 0);
+
+    /// <summary>Stand-in for the T13 sign-in check: the timing guard over the stored hash, usable only once verified and active.</summary>
+    private async Task<bool> SignsInAsync(string email, string password)
+    {
+        User user = await LoadUserAsync(email);
+        CredentialCheck check = await services.GetRequiredService<IAuthTimingGuard>()
+            .CheckPasswordAsync(password, user.PasswordHash, accountUsable: user.IsActive && user.EmailVerified, Ct);
+        return check is CredentialCheck.Valid or CredentialCheck.ValidNeedsRehash;
+    }
 
     private static string UniqueEmail() => "reg-" + Guid.NewGuid().ToString("N")[..12] + "@example.test";
 
@@ -298,6 +397,9 @@ public sealed class CapturingEmailSender : IEmailSender
             }
         }
     }
+
+    /// <summary>Messages to one address, in the order they were sent.</summary>
+    public IReadOnlyList<EmailMessage> To(string to) => [.. Messages.Where(m => string.Equals(m.To.Trim(), to.Trim(), StringComparison.OrdinalIgnoreCase))];
 
     public EmailMessage OnlyTo(string to) => Assert.Single(Messages, m => string.Equals(m.To.Trim(), to.Trim(), StringComparison.OrdinalIgnoreCase));
 

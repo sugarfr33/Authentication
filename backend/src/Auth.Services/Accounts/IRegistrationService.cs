@@ -25,13 +25,18 @@ public interface IRegistrationService
     /// Validates the request, then always answers <see cref="RegistrationResult.Accepted"/> for a valid one, whether
     /// the email is new or already registered. Both paths do the same work: one Argon2 hash, one lookup, one save and
     /// one email (a verification link for a new or still-unverified account, an "already registered" notice otherwise).
+    /// The password never becomes usable here: its hash is stored with the verification link it produced and reaches
+    /// the User row only when that link is redeemed, so nobody can pre-register someone else's email with a password
+    /// of their own (account pre-hijacking).
     /// </summary>
     /// <exception cref="PasswordHashingBusyException">No hashing slot freed up in time (the host answers 503).</exception>
     Task<RegistrationResult> RegisterAsync(RegisterRequest request, AuditContext audit, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Redeems a verification token: single use, unexpired, active account. Any failure is the one
-    /// <see cref="AuthError.InvalidOrExpiredToken"/>, so the reason is not revealed.
+    /// Redeems a verification token: single use, unexpired, active and not yet verified account. On success the
+    /// password and display name of the registration that produced THIS link become the account's, the security stamp
+    /// rotates, every refresh token of the user is revoked and the user's other links are retired. Any failure is the
+    /// one <see cref="AuthError.InvalidOrExpiredToken"/>, so the reason is not revealed.
     /// </summary>
     Task<Result> VerifyEmailAsync(string? token, AuditContext audit, CancellationToken cancellationToken);
 }
@@ -41,6 +46,7 @@ internal sealed class RegistrationService(
     IPasswordHasher hasher,
     IUserRepository users,
     IOneTimeTokenRepository<EmailVerificationToken> verificationTokens,
+    IRefreshTokenRepository refreshTokens,
     IAuditLogRepository auditLog,
     IUnitOfWork unitOfWork,
     ITokenGenerator generator,
@@ -48,6 +54,12 @@ internal sealed class RegistrationService(
     IClock clock,
     AccountEmailOptions options) : IRegistrationService
 {
+    /// <summary>
+    /// <c>User.PasswordHash</c> of an account that has never been verified: no usable password. It is not a PHC string,
+    /// so the sign-in timing guard treats the account like an unknown one (dummy Verify, the same generic failure).
+    /// </summary>
+    internal const string NoUsablePassword = "";
+
     /// <summary>Longer input cannot be one of our tokens (43 characters); skip hashing and the lookup.</summary>
     private const int MaxTokenLength = 256;
 
@@ -67,18 +79,17 @@ internal sealed class RegistrationService(
             return new RegistrationResult(errors);
         }
 
-        string email = request.Email.Trim();
-        string normalizedEmail = EmailNormalizer.Normalize(email)!;
-
         // Paid on every path, so a duplicate email costs the same Argon2 work as a new account. Async only: the
         // bounded gate queues without holding a thread.
         string passwordHash = await hasher.HashAsync(request.Password, cancellationToken);
+        Registrant registrant = new(request.Email.Trim(), request.DisplayName.Trim(), passwordHash);
+        string normalizedEmail = EmailNormalizer.Normalize(registrant.Email)!;
 
         User? existing = await users.GetByNormalizedEmailAsync(normalizedEmail, cancellationToken);
         EmailMessage message = existing is null
-            ? await CreateAccountAsync(email, normalizedEmail, request.DisplayName.Trim(), passwordHash, audit, cancellationToken)
-                ?? await ExistingAccountAsync(await LoadAfterRaceAsync(normalizedEmail, cancellationToken), audit, cancellationToken)
-            : await ExistingAccountAsync(existing, audit, cancellationToken);
+            ? await CreateAccountAsync(registrant, normalizedEmail, audit, cancellationToken)
+                ?? await ExistingAccountAsync(await LoadAfterRaceAsync(normalizedEmail, cancellationToken), registrant, audit, cancellationToken)
+            : await ExistingAccountAsync(existing, registrant, audit, cancellationToken);
 
         await emailSender.SendAsync(message, cancellationToken);
         return RegistrationResult.Accepted;
@@ -107,27 +118,30 @@ internal sealed class RegistrationService(
         }
     }
 
-    /// <summary>New account plus its first verification token and the audit row, in one save. Null when a concurrent sign-up won the email.</summary>
-    private async Task<EmailMessage?> CreateAccountAsync(
-        string email, string normalizedEmail, string displayName, string passwordHash, AuditContext audit, CancellationToken cancellationToken)
+    /// <summary>
+    /// New, unverified account WITHOUT a usable password, plus its first verification link (which holds this
+    /// registration's password hash and display name) and the audit row, in one save. Null when a concurrent sign-up
+    /// won the email.
+    /// </summary>
+    private async Task<EmailMessage?> CreateAccountAsync(Registrant registrant, string normalizedEmail, AuditContext audit, CancellationToken cancellationToken)
     {
         DateTime now = clock.UtcNow;
         User user = new()
         {
-            Id = Guid.NewGuid(),
-            Email = email,
+            Email = registrant.Email,
             NormalizedEmail = normalizedEmail,
             EmailVerified = false,
-            PasswordHash = passwordHash,
-            DisplayName = displayName,
+            PasswordHash = NoUsablePassword,
+            DisplayName = registrant.DisplayName,
             IsActive = true,
             SecurityStamp = Guid.NewGuid(),
             CreatedUtc = now,
             UpdatedUtc = now,
         };
 
+        // AddAsync assigns the sequential Id (EF client-side generator) that the link row needs.
         await users.AddAsync(user, cancellationToken);
-        string token = await AddVerificationTokenAsync(user.Id, now, cancellationToken);
+        string token = await AddVerificationTokenAsync(user.Id, registrant, now, cancellationToken);
         await auditLog.AddAsync(audit.Entry(AuditEventType.Registered, user.Id, now, """{"outcome":"created"}"""), cancellationToken);
 
         try
@@ -140,7 +154,7 @@ internal sealed class RegistrationService(
             return null;
         }
 
-        return VerificationMessage(email, token);
+        return VerificationMessage(registrant.Email, token);
     }
 
     private async Task<User> LoadAfterRaceAsync(string normalizedEmail, CancellationToken cancellationToken) =>
@@ -148,20 +162,18 @@ internal sealed class RegistrationService(
             ?? throw new InvalidOperationException("The email was reported as taken but no account was found.");
 
     /// <summary>
-    /// The email is already registered. A still-unverified active account gets a fresh verification link (older links
-    /// stop working), so a person who lost the first email can simply sign up again. Otherwise the owner is told that
-    /// someone tried to register with their address. The caller sees the same answer either way.
+    /// The email is already registered. A still-unverified active account gets one more verification link holding THIS
+    /// registration's password hash; earlier links keep their own and stay valid, so a later registration never changes
+    /// the password an earlier link activates. Otherwise the owner is told that someone tried to register with their
+    /// address, and the hash is discarded. Nothing on the User row changes. The caller sees the same answer either way.
     /// </summary>
-    private async Task<EmailMessage> ExistingAccountAsync(User user, AuditContext audit, CancellationToken cancellationToken)
+    private async Task<EmailMessage> ExistingAccountAsync(User user, Registrant registrant, AuditContext audit, CancellationToken cancellationToken)
     {
         DateTime now = clock.UtcNow;
-        await using IUnitOfWorkTransaction transaction = await unitOfWork.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-
         EmailMessage message;
         if (!user.EmailVerified && user.IsActive)
         {
-            await verificationTokens.InvalidateAllForUserAsync(user.Id, now, cancellationToken);
-            message = VerificationMessage(user.Email, await AddVerificationTokenAsync(user.Id, now, cancellationToken));
+            message = VerificationMessage(user.Email, await AddVerificationTokenAsync(user.Id, registrant, now, cancellationToken));
         }
         else
         {
@@ -175,21 +187,21 @@ internal sealed class RegistrationService(
 
         await auditLog.AddAsync(audit.Entry(AuditEventType.Registered, user.Id, now, """{"outcome":"duplicate"}"""), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
         return message;
     }
 
-    private async Task<string> AddVerificationTokenAsync(Guid userId, DateTime now, CancellationToken cancellationToken)
+    private async Task<string> AddVerificationTokenAsync(Guid userId, Registrant registrant, DateTime now, CancellationToken cancellationToken)
     {
         GeneratedToken token = generator.Generate();
         await verificationTokens.AddAsync(
             new EmailVerificationToken
             {
-                Id = Guid.NewGuid(),
                 UserId = userId,
                 TokenHash = token.Hash,
                 CreatedUtc = now,
                 ExpiresUtc = now + options.VerificationTokenLifetime,
+                PendingPasswordHash = registrant.PasswordHash,
+                PendingDisplayName = registrant.DisplayName,
             },
             cancellationToken);
         return token.Value;
@@ -206,7 +218,7 @@ internal sealed class RegistrationService(
     {
         DateTime now = clock.UtcNow;
         EmailVerificationToken? row = await verificationTokens.GetByHashAsync(hash, cancellationToken);
-        if (row is null || row.UsedUtc is not null || row.ExpiresUtc <= now)
+        if (row is null || row.UsedUtc is not null || row.ExpiresUtc <= now || string.IsNullOrEmpty(row.PendingPasswordHash))
         {
             return Result.Failure(AuthError.InvalidOrExpiredToken);
         }
@@ -219,18 +231,27 @@ internal sealed class RegistrationService(
             return Result.Failure(AuthError.InvalidOrExpiredToken);
         }
 
+        // A verified account is never changed by a leftover link (for example one created in a race with verification).
         User? user = await users.GetByIdAsync(row.UserId, cancellationToken);
-        if (user is null || !user.IsActive)
+        if (user is null || !user.IsActive || user.EmailVerified)
         {
             return Result.Failure(AuthError.InvalidOrExpiredToken);
         }
 
+        // Only now does a password become usable: the one chosen at the registration that produced this link.
+        user.PasswordHash = row.PendingPasswordHash;
+        user.DisplayName = string.IsNullOrEmpty(row.PendingDisplayName) ? user.DisplayName : row.PendingDisplayName;
         user.EmailVerified = true;
+        user.SecurityStamp = Guid.NewGuid();
         user.UpdatedUtc = now;
         await verificationTokens.InvalidateAllForUserAsync(user.Id, now, cancellationToken);
+        await refreshTokens.RevokeAllForUserAsync(user.Id, RefreshTokenRevokedReason.PasswordChange, now, cancellationToken);
         await auditLog.AddAsync(audit.Entry(AuditEventType.EmailVerified, user.Id, now), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return Result.Success();
     }
+
+    /// <summary>What one sign-up request chose. The hash is never written to the User row before verification.</summary>
+    private sealed record Registrant(string Email, string DisplayName, string PasswordHash);
 }
