@@ -86,8 +86,8 @@ No token or password reaches any log (tested).
 - **Expiry inside the UPDATE (INFO-2).** The link's expiry is checked just before the conditional UPDATE, not inside it,
   so a link can be redeemed in the sub-second between the two. Accepted (the shared single-use repository serves tables
   without an expiry column).
-- **Access tokens after a password change (INFO-1).** As for logout (sign-in-and-sessions.md): a copied access cookie
-  keeps working up to its 15 minute lifetime; the rotated SecurityStamp is not checked at validation yet.
+- **Access tokens after a password change (INFO-1, closed before T16).** A change or reset revokes every session, and
+  the live-session check (sign-in-and-sessions.md) then refuses the old access cookies within its cache time (5 s).
 
 ## Not done
 

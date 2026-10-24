@@ -70,6 +70,11 @@ internal sealed class RefreshTokenRepository(AuthDbContext context) : IRefreshTo
             return latest.Select(IRefreshSessionSummary (t) => new RefreshSessionSummary(t.FamilyId, started[t.FamilyId], t.CreatedUtc, t.IpAddress, t.UserAgent)).ToList();
         });
 
+    public Task<bool> IsSessionLiveAsync(Guid familyId, Guid userId, DateTime utcNow, CancellationToken cancellationToken) =>
+        SqlErrors.MapDeadlockAsync(() => context.RefreshToken.AnyAsync(
+            t => t.FamilyId == familyId && t.UserId == userId && t.RevokedUtc == null && t.ExpiresUtc > utcNow && t.User.IsActive,
+            cancellationToken));
+
     public Task<bool> FamilyBelongsToUserAsync(Guid familyId, Guid userId, CancellationToken cancellationToken) =>
         SqlErrors.MapDeadlockAsync(() => context.RefreshToken.AnyAsync(t => t.FamilyId == familyId && t.UserId == userId, cancellationToken));
 

@@ -102,6 +102,7 @@ public sealed class ApiFixture : IAsyncLifetime
         ["Errors:IncludeExceptionDetails"] = "true",
         ["Secrets:" + PrivateKeyReference] = PrivateKeyPem,
         ["RateLimiting:Paths:" + TestEndpoints.Prefix + "/login"] = "Login",
+        ["SessionLiveness:CacheDuration"] = "00:00:00",
         ["Serilog:MinimumLevel:Default"] = "Verbose",
         ["Serilog:MinimumLevel:Override:Microsoft"] = "Verbose",
         ["Serilog:MinimumLevel:Override:Microsoft.AspNetCore"] = "Verbose",

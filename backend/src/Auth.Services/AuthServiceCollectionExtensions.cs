@@ -107,6 +107,11 @@ public static class AuthServiceCollectionExtensions
             sp.GetRequiredService<Argon2PasswordHasher>(),
             sp.GetRequiredService<PasswordHashingLimits>().Validated()));
         services.AddSingleton<IAuthTimingGuard, AuthTimingGuard>();
+        services.TryAddSingleton(new SessionLivenessOptions());
+        services.AddSingleton<ISessionLiveness>(sp => new SessionLiveness(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<IClock>(),
+            sp.GetRequiredService<SessionLivenessOptions>()));
         services.AddSingleton<IPasswordPolicy, PasswordPolicy>();
 
         return services;

@@ -80,7 +80,7 @@ the session may still be live on the server.
 
 Needs a valid access cookie. Revokes every refresh family of the user (reason `LogoutAll`, one UPDATE), writes a
 `LogoutAll` audit row with the count, expires the cookies and reissues an anonymous XSRF token. Access tokens already
-issued elsewhere stay valid until they expire (short lifetime); they can no longer be refreshed.
+issued elsewhere stop working within the live-session cache time (see "Live-session check" below).
 
 ## Refresh (T15)
 
@@ -141,13 +141,33 @@ cookies, like logout. A revoked session cannot refresh (tested through `/refresh
 - **Sessions limiter is per IP** (60 per minute), not per user.
 - **Cross-tab refresh** (T23): serialise refresh in the SPA (see above).
 
+## Live-session check (T16 prerequisite)
+
+A signed, unexpired access cookie is not enough: after the signature check, `AccessTokenCookieHandler` asks
+`ISessionLiveness` whether the token's `sid` family still has a token that is neither revoked nor expired and whether the
+user (`sub`) is still active. That is one indexed query (`IsSessionLiveAsync`), cached per family for
+`SessionLiveness:CacheDuration` (default **5 s**, 0 to 30; 0 disables the cache) and bounded by
+`SessionLiveness:MaxEntries` (10 000; the cache is emptied when full). A cached entry is only reused for the same user.
+
+- Not live (revoked, expired, unknown family, inactive user) or **no `sid` claim**: the request is unauthenticated (401
+  on protected routes). Every way a password changes (change, reset) also revokes every family, so a SecurityStamp
+  check would add nothing: the `sid` check covers it.
+- **Fails closed:** if the lookup throws, the request is unauthenticated, a warning with the exception type only is
+  logged, and the 401 body is the usual bare one (tested).
+- `/logout`, `/refresh` and the login flow are anonymous and handle ended sessions themselves. Because antiforgery
+  tokens are user-bound, a browser whose session was ended elsewhere is anonymous again and must fetch an anonymous XSRF
+  pair (any GET under /api) before its next POST, the same SPA flow as after access-cookie expiry.
+- Tested: logout-all, revoking a session, a password change and deactivation each make another browser's access cookie
+  give 401 at once (cache time 0 in the API tests); the cache is unit-tested with a fake clock (reuse within the
+  duration, no reuse across users, bound, failure propagation).
+
 ## Residual risks
 
-- **Access tokens outlive logout (audit MEDIUM-2, accepted for now).** Access JWTs are stateless: a copied access cookie
-  keeps working for up to 15 minutes (+30 s skew) after logout, logout-all, a password change or deactivation, on every
-  authenticated endpoint except `/me` (which checks that the account is active). Planned mitigation, to be decided before
-  T16 (admin endpoints): on sensitive endpoints check that the `sid` family is not revoked and the user is active, via
-  one indexed lookup cached for a few seconds. Also to be listed in the threat model (T27).
+- **Access tokens after logout (audit MEDIUM-2, closed before T16).** A copied access cookie stops working within the
+  live-session cache time (default 5 s) after logout, logout-all, revoking the session, a password change or reset, or
+  deactivation, on every authenticated endpoint (see "Live-session check"). The remaining window is that cache time.
+  Resource APIs that validate the JWT themselves (T21) still see a stateless token valid up to 15 minutes; list this in
+  the threat model (T27).
 - **Login timing (audit LOW-3).** See "Residual timing difference" above. In addition, an empty password or one over
   the raw 1024 / 128 code-point caps is refused before any Verify for every account alike (it reveals nothing), but it
   still counts as a failure toward the lockout of the named account.

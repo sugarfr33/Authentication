@@ -92,6 +92,12 @@ public interface IRefreshTokenRepository
     /// </summary>
     Task<IReadOnlyList<IRefreshSessionSummary>> GetActiveSessionsAsync(Guid userId, DateTime utcNow, int max, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// True when the family still has a token of <paramref name="userId"/> that is neither revoked nor expired at
+    /// <paramref name="utcNow"/>, and the user is active. One query (the access-token live-session check).
+    /// </summary>
+    Task<bool> IsSessionLiveAsync(Guid familyId, Guid userId, DateTime utcNow, CancellationToken cancellationToken);
+
     /// <summary>True when the family has at least one token of <paramref name="userId"/>, in any state.</summary>
     Task<bool> FamilyBelongsToUserAsync(Guid familyId, Guid userId, CancellationToken cancellationToken);
 }

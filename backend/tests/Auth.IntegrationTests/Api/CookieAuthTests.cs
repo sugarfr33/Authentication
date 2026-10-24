@@ -4,9 +4,11 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Auth.Contracts;
+using Auth.Services.Tokens;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
@@ -301,9 +303,31 @@ public sealed partial class CookieAuthTests(ApiFixture api)
     [Fact]
     public async Task A_correctly_signed_token_in_the_cookie_is_accepted()
     {
-        HttpResponseMessage response = await GetMeWithCookieAsync(Sign(ValidDescriptor()));
+        SecurityTokenDescriptor descriptor = ValidDescriptor();
+        descriptor.Claims[AuthClaimTypes.SessionId] = (await LiveSessionAsync()).ToString();
+
+        HttpResponseMessage response = await GetMeWithCookieAsync(Sign(descriptor));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    /// <summary>Prerequisite 2 (T16): a correctly signed token is refused without a live session (no sid, or an unknown one).</summary>
+    [Fact]
+    public async Task A_correctly_signed_token_without_a_live_session_gets_401()
+    {
+        SecurityTokenDescriptor unknownSession = ValidDescriptor();
+        unknownSession.Claims[AuthClaimTypes.SessionId] = Guid.NewGuid().ToString();
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await GetMeWithCookieAsync(Sign(ValidDescriptor()))).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await GetMeWithCookieAsync(Sign(unknownSession))).StatusCode);
+    }
+
+    /// <summary>A fresh refresh family for the seeded user, so a hand-signed token can name a live session.</summary>
+    private async Task<Guid> LiveSessionAsync()
+    {
+        await using AsyncServiceScope scope = api.Factory.Services.CreateAsyncScope();
+        IRefreshTokenService refresh = scope.ServiceProvider.GetRequiredService<IRefreshTokenService>();
+        return (await refresh.IssueAsync(ApiFixture.UserId, null, new RefreshContext("203.0.113.1", "cookie-tests"), CancellationToken.None)).FamilyId;
     }
 
     [Fact]

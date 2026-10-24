@@ -115,7 +115,12 @@ public sealed class SessionsListApiTests(ApiFixture api) : IAsyncLifetime
 
         HttpResponseMessage revoke = await laptop.SendAsync(HttpMethod.Delete, Sessions + "/" + phoneSession);
         HttpResponseMessage again = await laptop.SendAsync(HttpMethod.Delete, Sessions + "/" + phoneSession);
+
+        // The phone's access cookie stops working at once (live-session check), so it is anonymous again and fetches an
+        // anonymous XSRF pair first, as the SPA does; its refresh is then refused.
+        HttpResponseMessage phoneMe = await phone.GetAsync(Me);
         HttpResponseMessage phoneRefresh = await phone.SendAsync(HttpMethod.Post, Refresh);
+        Assert.Equal(HttpStatusCode.Unauthorized, phoneMe.StatusCode);
 
         Assert.Equal(HttpStatusCode.NoContent, revoke.StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, again.StatusCode);

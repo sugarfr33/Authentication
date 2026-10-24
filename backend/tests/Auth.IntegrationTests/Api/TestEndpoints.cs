@@ -26,11 +26,11 @@ internal sealed class TestEndpoints : IEndpointModule
         // Stands in for the T13 login: issues both cookies for the seeded user. The body carries no token.
         test.MapPost("/session", async (ITokenService tokens, IRefreshTokenService refresh, ICookieWriter cookies, HttpContext http, CancellationToken cancellationToken) =>
         {
-            AccessToken access = await tokens.CreateAccessTokenAsync(
-                new AccessTokenRequest(ApiFixture.UserId, "api.user@example.test", "Api User", ["User"], ["users.read"], ApiFixture.Issuer, null, null),
-                cancellationToken);
             IssuedRefreshToken refreshToken = await refresh.IssueAsync(
                 ApiFixture.UserId, null, new RefreshContext("203.0.113.1", http.Request.Headers.UserAgent.ToString()), cancellationToken);
+            AccessToken access = await tokens.CreateAccessTokenAsync(
+                new AccessTokenRequest(ApiFixture.UserId, "api.user@example.test", "Api User", ["User"], ["users.read"], ApiFixture.Issuer, null, refreshToken.FamilyId),
+                cancellationToken);
 
             cookies.WriteAccessToken(http.Response, access);
             cookies.WriteRefreshToken(http.Response, refreshToken);

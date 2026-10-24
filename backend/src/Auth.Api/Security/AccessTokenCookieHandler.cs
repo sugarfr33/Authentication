@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Auth.Contracts;
+using Auth.Services.Security;
 using Auth.Services.Tokens;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
@@ -14,12 +15,13 @@ namespace Auth.Api.Security;
 /// the token service's parameters, fetched per request from the cached key provider. Failures give a bare 401
 /// ProblemDetails that does not say why.
 /// </summary>
-internal sealed class AccessTokenCookieHandler(
+internal sealed partial class AccessTokenCookieHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
     ILoggerFactory logger,
     UrlEncoder encoder,
     ITokenService tokens,
     ICookieWriter cookies,
+    ISessionLiveness sessions,
     IProblemDetailsService problemDetails) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "AccessTokenCookie";
@@ -45,8 +47,33 @@ internal sealed class AccessTokenCookieHandler(
             return AuthenticateResult.Fail("Invalid access token.");
         }
 
+        // A valid signature is not enough: the session (sid) must still be live and the user active, so logout,
+        // revoking a session, a password change and deactivation take effect within the short cache time. A token
+        // without a session, or a failed lookup, fails closed.
+        if (!Guid.TryParse(result.ClaimsIdentity.FindFirst(AuthClaimTypes.Subject)?.Value, out Guid userId)
+            || !Guid.TryParse(result.ClaimsIdentity.FindFirst(AuthClaimTypes.SessionId)?.Value, out Guid sessionId))
+        {
+            return AuthenticateResult.Fail("Invalid access token.");
+        }
+
+        try
+        {
+            if (!await sessions.IsLiveAsync(userId, sessionId, Context.RequestAborted))
+            {
+                return AuthenticateResult.Fail("Session ended.");
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogLivenessCheckFailed(Logger, ex.GetType().Name);
+            return AuthenticateResult.Fail("Session check unavailable.");
+        }
+
         return AuthenticateResult.Success(new AuthenticationTicket(PrincipalFrom(result.ClaimsIdentity), Scheme.Name));
     }
+
+    [LoggerMessage(EventId = 5330, Level = LogLevel.Warning, Message = "Live-session check failed ({ExceptionType}); the request is treated as unauthenticated")]
+    private static partial void LogLivenessCheckFailed(ILogger logger, string exceptionType);
 
     /// <summary>The principal for a validated access token: the same one every later request will authenticate as.</summary>
     internal static ClaimsPrincipal PrincipalFrom(ClaimsIdentity validated) =>
