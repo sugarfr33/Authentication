@@ -146,7 +146,7 @@ internal sealed class RefreshTokenService(
         }
 
         RefreshToken? row = await refreshTokens.GetByHashAsync(generator.Hash(rawToken), cancellationToken);
-        return row is null ? null : new RefreshSession(row.UserId, row.FamilyId);
+        return row is null ? null : new RefreshSession(row.UserId, row.FamilyId, row.ClientApplicationId);
     }
 
     public Task<int> RevokeAllAsync(Guid userId, string reason, CancellationToken cancellationToken) =>

@@ -215,7 +215,7 @@ public sealed class SessionsListApiTests(ApiFixture api) : IAsyncLifetime
     {
         string alice = await SeedUserAsync();
         using Browser browser = await ReadyBrowserAsync();
-        string userAgent = "Evil<script>alert(1)</script>" + '\u0007' + '​' + new string('x', 600);
+        string userAgent = "Evil<script>alert(1)</script>&\"'" + '\u0007' + '​' + new string('x', 600);
         await browser.SendAsync(HttpMethod.Post, Login, configure: r =>
         {
             r.Content = LoginJson(alice);
@@ -228,9 +228,49 @@ public sealed class SessionsListApiTests(ApiFixture api) : IAsyncLifetime
         Assert.True(shown.Length <= 256);
         Assert.DoesNotContain('\u0007', shown);
         Assert.DoesNotContain('​', shown);
+        Assert.DoesNotContain('&', shown);
+        Assert.DoesNotContain('"', shown);
+        Assert.DoesNotContain('\'', shown);
         Assert.DoesNotContain('<', shown);
         Assert.DoesNotContain('>', shown);
         Assert.StartsWith("Evilscriptalert(1)/script", shown, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Audit LOW-4: after the access cookie is gone the browser is anonymous, so its user-bound XSRF token no longer fits:
+    /// /refresh answers 400 until a GET under /api issues an anonymous pair. Then refresh works and reissues the user pair.
+    /// </summary>
+    [Fact]
+    public async Task After_the_access_cookie_expires_the_SPA_must_GET_first_then_refresh()
+    {
+        string alice = await SeedUserAsync();
+        using Browser browser = await SignedInAsync(alice);
+        await browser.GetAsync(Me);
+        browser.Forget(AuthCookieNames.Access);
+
+        HttpResponseMessage withUserXsrf = await browser.SendAsync(HttpMethod.Post, Refresh);
+        HttpResponseMessage me = await browser.GetAsync(Me);
+        HttpResponseMessage refreshed = await browser.SendAsync(HttpMethod.Post, Refresh);
+        HttpResponseMessage revokeAfter = await browser.SendAsync(HttpMethod.Delete, Sessions + "/" + Guid.NewGuid());
+
+        Assert.Equal(HttpStatusCode.BadRequest, withUserXsrf.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, me.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, refreshed.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync(Me)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, revokeAfter.StatusCode);
+    }
+
+    [Fact]
+    public async Task Refused_refreshes_are_counted_in_a_warning_without_values()
+    {
+        using Browser browser = await ReadyBrowserAsync();
+        browser.Plant(AuthCookieNames.Refresh, "guessed-refresh-token-value", "/api/v1/auth");
+
+        HttpResponseMessage refresh = await browser.SendAsync(HttpMethod.Post, Refresh);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, refresh.StatusCode);
+        Assert.Contains(api.Logs.Texts, t => t.Contains("refresh request(s) refused", StringComparison.Ordinal));
+        Assert.DoesNotContain(api.Logs.Texts, t => t.Contains("guessed-refresh-token-value", StringComparison.Ordinal));
     }
 
     private static Guid SessionOf(Browser browser) =>

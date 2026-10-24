@@ -35,4 +35,10 @@ public enum AuditEventType
 
     /// <summary>A change-password attempt failed (wrong current password or rejected new password). Never holds a password.</summary>
     PasswordChangeFailed,
+
+    /// <summary>
+    /// A refresh was refused without theft signs: a token of an already ended session was replayed (logout, password
+    /// change, revoked session), or the session changed while refreshing. Holds a reason only.
+    /// </summary>
+    RefreshRejected,
 }

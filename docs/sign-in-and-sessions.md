@@ -86,11 +86,29 @@ issued elsewhere stay valid until they expire (short lifetime); they can no long
 
 `POST /refresh` rotates the refresh cookie with the T08 rules (`IRefreshTokenService.RotateAsync`: one winner of a
 race, a replayed token revokes its whole family) and mints a new access token for the default audience with the same
-`sid`. Audit: `TokenRefreshed`, or `TokenReuse` with the revoked count. A rotated token whose user is no longer active
-and verified gets its family revoked. Like every POST it needs an allowed Origin and the antiforgery token. Note for the
-SPA (T23): when the access cookie has expired the user is anonymous again, so the XSRF token must be an anonymous one;
-any GET under /api (for example the 401 from `/me`) issues it. After a successful refresh the XSRF token is reissued
-for the user.
+`sid`. Like every POST it needs an allowed Origin and the antiforgery token. It runs in three steps (T15 audit fix):
+
+1. **Read-only preparation, before anything changes:** find the session of the cookie, refuse a client-application
+   family (it keeps its own audience and is refreshed by the OAuth flow, never converted to the default audience),
+   load the user (inactive or unverified: the family is revoked, 401), build the profile and **mint the access token**.
+   A failure here (database, signing) leaves the presented token untouched, so the client can just retry.
+2. **The rotation** (its own transaction).
+3. **After the commit:** the user is read again (not the tracked copy). If the SecurityStamp changed (a password change
+   raced the rotation) or the account was disabled meanwhile, or any step fails, the new family is revoked and the
+   answer is a clean 401 with `RefreshRejected` audited: no orphaned successor stays live, and the client never gets a
+   500 that loses its new token. The `TokenRefreshed` audit row is best effort (a failure is logged as a warning and does
+   not change the answer).
+
+Audit precision: `TokenReuse` only when a replay actually revoked a live family (a theft signal). A replayed token of
+a session that had already ended (logout, logout-all, password change, revoked session) is `RefreshRejected`
+(`ended_session_replayed`), not reuse. Refused refreshes are counted and logged as one warning at most once a minute
+(no values), so cookie guessing is visible beyond the 429s.
+
+**SPA flow (T23):** antiforgery tokens are bound to the user. When the access cookie has expired the browser is
+anonymous again, so the XSRF pair it holds (issued while signed in) no longer fits and `POST /refresh` answers **400**
+(tested). The SPA must first do a GET under `/api` (the 401 from `/me` is enough) to get an anonymous pair, then refresh;
+or retry once after a 400. After a successful refresh the pair is reissued for the user. Refresh calls should also be
+serialised across tabs: two tabs refreshing outside the 10 s grace window look like reuse and end the session.
 
 ## Active sessions (T15)
 
@@ -102,7 +120,7 @@ a token that is neither revoked nor expired, most recently used first, at most 5
 | `familyId` | opaque session id (the refresh family id; also the access token `sid`) |
 | `createdUtc` | when the session started: the earliest token of the family (the T08 anchor of the 30-day cap) |
 | `lastUsedUtc` | when it was last refreshed (its live token) |
-| `ip`, `userAgent` | of the last refresh; for display, control and invisible characters and `<` `>` are removed and they are capped at 45 and 256 characters (stored values unchanged) |
+| `ip`, `userAgent` | of the last refresh; for display, control and invisible characters and `<` `>` `&` `"` `'` are removed and they are capped at 45 and 256 characters (stored values unchanged). The UI must still render them as **text**, never as HTML |
 | `isCurrent` | true for the family named by the caller's own `sid` |
 
 No token, hash, SecurityStamp, row id or user id is returned (tested). The DAL returns a read model
@@ -113,6 +131,15 @@ No token, hash, SecurityStamp, row id or user id is returned (tested). The DAL r
 **identical 404** (tested), so ids of other users cannot be probed. Revoking an already revoked own session is **204**
 again (idempotent; audited only when something was revoked). Revoking the current session also expires this browser's
 cookies, like logout. A revoked session cannot refresh (tested through `/refresh`: 401).
+
+## Deferred (notes from the T15 review and audit)
+
+- **No cap on live sessions per user** (T17): anyone with the password can create unlimited families; the list shows
+  the 50 most recent and logout-all ends them all. Option: revoke the oldest family on login above a cap.
+- **Audit volume** (T17 retention): `TokenRefreshed` writes one row per refresh (about every 15 minutes per active
+  session), plus `SessionRevoked`; decide whether to keep, sample or drop `TokenRefreshed`.
+- **Sessions limiter is per IP** (60 per minute), not per user.
+- **Cross-tab refresh** (T23): serialise refresh in the SPA (see above).
 
 ## Residual risks
 

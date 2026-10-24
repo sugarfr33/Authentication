@@ -56,6 +56,8 @@ else
 
 builder.Services.AddSingleton<IEndpointModule, AccountEndpoints>();
 builder.Services.AddSingleton<IEndpointModule, SessionEndpoints>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<RefreshRejectionLog>();
 builder.Services.AddSingleton<IEndpointModule, PasswordEndpoints>();
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
     context.ProblemDetails.Extensions["traceId"] = Activity.Current?.Id ?? context.HttpContext.TraceIdentifier);

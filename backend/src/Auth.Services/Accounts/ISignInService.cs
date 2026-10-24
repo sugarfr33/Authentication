@@ -16,7 +16,10 @@ namespace Auth.Services.Accounts;
 public sealed record SignedIn(AccessToken AccessToken, IssuedRefreshToken RefreshToken, UserProfileResponse Profile);
 
 /// <summary>Outcome of a refresh: <see cref="Session"/> is set only when the status is Rotated.</summary>
-public sealed record RefreshOutcome(RotationStatus Status, SignedIn? Session);
+/// <param name="Status">Rotated, Concurrent, ReuseDetected or Invalid.</param>
+/// <param name="Session">The new tokens and profile, when rotated.</param>
+/// <param name="AuditFailure">The exception type name when the best-effort audit row could not be written (the host logs it).</param>
+public sealed record RefreshOutcome(RotationStatus Status, SignedIn? Session, string? AuditFailure = null);
 
 /// <summary>Email and password sign-in, sign-out and the signed-in profile (T13).</summary>
 public interface ISignInService
@@ -157,39 +160,127 @@ internal sealed class SignInService(
     public async Task<RefreshOutcome> RefreshAsync(string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(audit);
-        if (string.IsNullOrEmpty(presentedRefreshToken))
+
+        // 1. Read-only preparation BEFORE rotating, so a failure here (database, signing) leaves the presented token
+        //    untouched and the client can simply retry: the session, its user, the profile and the new access token.
+        RefreshSession? session = await refreshTokens.FindSessionAsync(presentedRefreshToken, cancellationToken);
+        if (session is null)
         {
             return new RefreshOutcome(RotationStatus.Invalid, null);
         }
 
-        // RotateAsync may clear the change tracker on its retry, so audit rows are staged only after it returns.
+        if (session.ClientApplicationId is not null)
+        {
+            // Cookie refresh is for the browser's own sessions only; a client-application family keeps its own audience
+            // and is refreshed by the OAuth flow, never silently converted to the default audience.
+            return new RefreshOutcome(RotationStatus.Invalid, null);
+        }
+
+        User? user = await users.GetByIdAsync(session.UserId, cancellationToken);
+        if (user is not { IsActive: true, EmailVerified: true })
+        {
+            await refreshTokens.RevokeFamilyForUserAsync(session.FamilyId, session.UserId, RefreshTokenRevokedReason.Admin, cancellationToken);
+            return new RefreshOutcome(RotationStatus.Invalid, null);
+        }
+
+        Guid stamp = user.SecurityStamp;
+        UserProfileResponse profile = await ProfileAsync(user, cancellationToken);
+        AccessToken access = await tokens.CreateAccessTokenAsync(
+            new AccessTokenRequest(user.Id, user.Email, user.DisplayName, profile.Roles, profile.Permissions, tokenOptions.DefaultAudience, null, session.FamilyId),
+            cancellationToken);
+
+        // 2. The rotation (its own transaction; may clear the change tracker on its retry).
         RotationResult rotation = await refreshTokens.RotateAsync(
-            presentedRefreshToken, new RefreshContext(audit.IpAddress ?? string.Empty, audit.UserAgent ?? string.Empty), cancellationToken);
+            presentedRefreshToken!, new RefreshContext(audit.IpAddress ?? string.Empty, audit.UserAgent ?? string.Empty), cancellationToken);
+
         switch (rotation.Status)
         {
             case RotationStatus.Rotated when rotation.Token is IssuedRefreshToken token:
-                User? user = await users.GetByIdAsync(token.UserId, cancellationToken);
-                if (user is not { IsActive: true, EmailVerified: true })
+                // 3. After the commit nothing may fail silently: a session that cannot be completed is revoked, so no
+                //    orphaned successor stays live and the client gets a clean 401 instead of a 500.
+                string? rejection;
+                try
                 {
-                    await refreshTokens.RevokeFamilyForUserAsync(token.FamilyId, token.UserId, RefreshTokenRevokedReason.Admin, cancellationToken);
-                    return new RefreshOutcome(RotationStatus.Invalid, null);
+                    rejection = await CheckAfterRotationAsync(token, session, stamp, cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    rejection = "post_rotation_failure";
                 }
 
-                UserProfileResponse profile = await ProfileAsync(user, cancellationToken);
-                AccessToken access = await tokens.CreateAccessTokenAsync(
-                    new AccessTokenRequest(user.Id, user.Email, user.DisplayName, profile.Roles, profile.Permissions, tokenOptions.DefaultAudience, null, token.FamilyId),
-                    cancellationToken);
-                await AuditAsync(AuditEventType.TokenRefreshed, user.Id, null, audit, cancellationToken);
-                return new RefreshOutcome(RotationStatus.Rotated, new SignedIn(access, token, profile));
+                if (rejection is not null)
+                {
+                    await TryRevokeAsync(token.FamilyId, token.UserId, cancellationToken);
+                    string? auditFailure = await TryAuditAsync(AuditEventType.RefreshRejected, token.UserId, Reason(rejection), audit, cancellationToken);
+                    return new RefreshOutcome(RotationStatus.Invalid, null, auditFailure);
+                }
+
+                string? refreshedAuditFailure = await TryAuditAsync(AuditEventType.TokenRefreshed, user.Id, null, audit, cancellationToken);
+                return new RefreshOutcome(RotationStatus.Rotated, new SignedIn(access, token, profile), refreshedAuditFailure);
 
             case RotationStatus.ReuseDetected when rotation.Reuse is TokenReuseDetected reuse:
-                await AuditAsync(AuditEventType.TokenReuse, reuse.UserId, "{\"revoked\":" + reuse.RevokedCount.ToString(CultureInfo.InvariantCulture) + "}", audit, cancellationToken);
-                return new RefreshOutcome(RotationStatus.ReuseDetected, null);
+                // Only a replay that actually revoked a live family is a theft signal. A token of a session that had
+                // already ended (logout, password change, revoked session) is just rejected.
+                string? reuseAuditFailure = reuse.RevokedCount > 0
+                    ? await TryAuditAsync(AuditEventType.TokenReuse, reuse.UserId, "{\"revoked\":" + reuse.RevokedCount.ToString(CultureInfo.InvariantCulture) + "}", audit, cancellationToken)
+                    : await TryAuditAsync(AuditEventType.RefreshRejected, reuse.UserId, Reason("ended_session_replayed"), audit, cancellationToken);
+                return new RefreshOutcome(RotationStatus.ReuseDetected, null, reuseAuditFailure);
 
             default:
                 return new RefreshOutcome(rotation.Status, null);
         }
     }
+
+    /// <summary>
+    /// Re-reads the user after the rotation (not the tracked copy): if the password changed (new SecurityStamp) or the
+    /// account was disabled while refreshing, the successor must not live. Returns a rejection reason or null.
+    /// </summary>
+    private async Task<string?> CheckAfterRotationAsync(IssuedRefreshToken token, RefreshSession session, Guid stamp, CancellationToken cancellationToken)
+    {
+        if (token.FamilyId != session.FamilyId || token.UserId != session.UserId)
+        {
+            return "session_mismatch";
+        }
+
+        unitOfWork.ClearChanges();
+        User? current = await users.GetByIdAsync(token.UserId, cancellationToken);
+        return current switch
+        {
+            null => "unknown_user",
+            { IsActive: false } or { EmailVerified: false } => "account_disabled",
+            _ when current.SecurityStamp != stamp => "credentials_changed",
+            _ => null,
+        };
+    }
+
+    private async Task TryRevokeAsync(Guid familyId, Guid userId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await refreshTokens.RevokeFamilyForUserAsync(familyId, userId, RefreshTokenRevokedReason.Admin, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Best effort: the rotated token was never handed out, so the family is unusable to the client anyway.
+        }
+    }
+
+    /// <summary>Best-effort audit row: returns the exception type name when it could not be written (the host logs it).</summary>
+    private async Task<string?> TryAuditAsync(AuditEventType type, Guid userId, string? detail, AuditContext audit, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await AuditAsync(type, userId, detail, audit, cancellationToken);
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            unitOfWork.ClearChanges();
+            return ex.GetType().Name;
+        }
+    }
+
+    private static string Reason(string reason) => "{\"reason\":\"" + reason + "\"}";
 
     public async Task<IReadOnlyList<SessionResponse>> ListSessionsAsync(Guid userId, Guid? currentSessionId, int max, CancellationToken cancellationToken)
     {
@@ -312,7 +403,7 @@ internal sealed class SignInService(
     /// </summary>
     private static string ForDisplay(string value, int max)
     {
-        string clean = new string([.. value.Where(c => !char.IsControl(c) && char.GetUnicodeCategory(c) != UnicodeCategory.Format && c is not ('<' or '>'))]).Trim();
+        string clean = new string([.. value.Where(c => !char.IsControl(c) && char.GetUnicodeCategory(c) != UnicodeCategory.Format && c is not ('<' or '>' or '&' or '"' or '\''))]).Trim();
         return clean.Length <= max ? clean : clean[..max];
     }
 

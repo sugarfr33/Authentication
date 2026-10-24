@@ -60,7 +60,7 @@ public sealed record RotationResult(RotationStatus Status, IssuedRefreshToken? T
 }
 
 /// <summary>The session a refresh token belongs to (whatever its state), as read from its hash.</summary>
-public sealed record RefreshSession(Guid UserId, Guid FamilyId);
+public sealed record RefreshSession(Guid UserId, Guid FamilyId, Guid? ClientApplicationId = null);
 
 /// <summary>Opaque, rotating refresh tokens with reuse detection. A session is one token family.</summary>
 public interface IRefreshTokenService
