@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using Auth.Services.Authorization;
 using Auth.Services.Security;
 
 namespace Auth.Api.Hosting;
@@ -29,6 +30,44 @@ internal sealed partial class TimingGuardWarmUp(IAuthTimingGuard guard, ILogger<
 
     [LoggerMessage(EventId = 5100, Level = LogLevel.Warning, Message = "Timing-guard warm-up failed; the dummy hash will be created on first use")]
     private static partial void LogWarmUpFailed(ILogger logger, Exception exception);
+}
+
+/// <summary>
+/// Seeds the system permissions and roles at startup (idempotent; T16). A failure is logged and never stops the host:
+/// existing authorization data keeps working, and the next start tries again.
+/// </summary>
+internal sealed partial class AuthorizationSeedOnStartup(
+    IServiceScopeFactory scopes,
+    AuthorizationSeedOptions options,
+    ILogger<AuthorizationSeedOnStartup> logger) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (!options.SeedOnStartup)
+        {
+            return;
+        }
+
+        try
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            AuthorizationSeedResult result = await scope.ServiceProvider.GetRequiredService<IAuthorizationSeeder>().SeedAsync(stoppingToken);
+            LogSeeded(logger, result.PermissionsAdded, result.RolesAdded, result.GrantsAdded, result.BootstrapAdminAssigned);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            LogSeedFailed(logger, ex.GetType().Name);
+        }
+    }
+
+    [LoggerMessage(EventId = 5400, Level = LogLevel.Information, Message = "Authorization seed: {Permissions} permission(s), {Roles} role(s), {Grants} grant(s) added; bootstrap admin assigned: {Bootstrap}")]
+    private static partial void LogSeeded(ILogger logger, int permissions, int roles, int grants, bool bootstrap);
+
+    [LoggerMessage(EventId = 5401, Level = LogLevel.Warning, Message = "Authorization seed failed ({ExceptionType}); existing roles and permissions are unchanged")]
+    private static partial void LogSeedFailed(ILogger logger, string exceptionType);
 }
 
 /// <summary>

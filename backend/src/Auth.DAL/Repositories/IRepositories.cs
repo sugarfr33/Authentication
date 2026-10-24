@@ -33,6 +33,25 @@ public interface IRoleRepository
 
     /// <summary>Distinct permission codes granted by the roles <see cref="GetForUserAsync"/> returns.</summary>
     Task<IReadOnlyList<string>> GetPermissionCodesForUserAsync(Guid userId, Guid? clientApplicationId, CancellationToken cancellationToken);
+
+    /// <summary>Every permission row (tracked).</summary>
+    Task<IReadOnlyList<Permission>> GetPermissionsAsync(CancellationToken cancellationToken);
+
+    Task AddPermissionAsync(Permission permission, CancellationToken cancellationToken);
+
+    /// <summary>The global role (no client application) with this normalized name, or null.</summary>
+    Task<Role?> GetGlobalRoleAsync(string normalizedName, CancellationToken cancellationToken);
+
+    Task AddRoleAsync(Role role, CancellationToken cancellationToken);
+
+    /// <summary>Ids of the permissions granted to the role.</summary>
+    Task<IReadOnlyList<Guid>> GetPermissionIdsOfRoleAsync(Guid roleId, CancellationToken cancellationToken);
+
+    Task AddRolePermissionAsync(RolePermission grant, CancellationToken cancellationToken);
+
+    Task<bool> UserHasRoleAsync(Guid userId, Guid roleId, CancellationToken cancellationToken);
+
+    Task AddUserRoleAsync(UserRole assignment, CancellationToken cancellationToken);
 }
 
 /// <summary>

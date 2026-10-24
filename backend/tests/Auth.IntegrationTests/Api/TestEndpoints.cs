@@ -17,6 +17,9 @@ internal sealed class TestEndpoints : IEndpointModule
 {
     public const string Prefix = "/api/v1/__test";
 
+    /// <summary>Every policy of the API: one per permission plus the Admin role policy.</summary>
+    public static readonly IReadOnlyList<string> PolicyNames = [.. Auth.Contracts.AuthPermissions.All, Auth.Contracts.AuthPolicies.AdminRole];
+
     public void Map(IEndpointRouteBuilder api)
     {
         RouteGroupBuilder test = api.MapGroup("/__test");
@@ -47,6 +50,12 @@ internal sealed class TestEndpoints : IEndpointModule
         test.MapMethods("/echo", [HttpMethods.Post, HttpMethods.Put, HttpMethods.Patch, HttpMethods.Delete], () => Results.Ok(new { echoed = true }));
 
         test.MapPost("/protected", () => Results.Ok(new { done = true })).RequireAuthorization();
+
+        // T16: one GET per policy, to prove the allow/deny matrix through the real pipeline.
+        foreach (string policy in PolicyNames)
+        {
+            test.MapGet("/policy/" + policy, () => Results.Ok(new { allowed = true })).RequireAuthorization(policy);
+        }
 
         // Rate-limit target (mapped to Login by the fixture). Echoes what it read, to prove the body survives the account-key reader.
         test.MapPost("/login", async (HttpRequest request) =>

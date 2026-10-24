@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Auth.Services;
 using Auth.Services.Accounts;
+using Auth.Services.Authorization;
 using Auth.Services.ClientApplications;
 using Auth.Services.Passwords;
 using Auth.Services.Security;
@@ -74,7 +75,11 @@ builder.Services.AddOptions<BrowserProtectionOptions>().Bind(builder.Configurati
 builder.Services.AddSingleton<ICookieWriter, CookieWriter>();
 builder.Services.AddAuthentication(AccessTokenCookieHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, AccessTokenCookieHandler>(AccessTokenCookieHandler.SchemeName, configureOptions: null);
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(AuthorizationPolicies.Configure);
+
+// Authorization data (T16): system permissions and roles are seeded at startup (idempotent).
+builder.Services.AddSingleton(builder.Configuration.GetSection(AuthorizationSeedOptions.SectionName).Get<AuthorizationSeedOptions>() ?? new AuthorizationSeedOptions());
+builder.Services.AddHostedService<AuthorizationSeedOnStartup>();
 
 // CSRF: antiforgery tokens bound to the user; the request token reaches script via the readable XSRF-TOKEN cookie.
 builder.Services.AddAntiforgery(options =>

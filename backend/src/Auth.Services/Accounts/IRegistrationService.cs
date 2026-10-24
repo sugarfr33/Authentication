@@ -48,6 +48,7 @@ internal sealed class RegistrationService(
     IUserRepository users,
     IOneTimeTokenRepository<EmailVerificationToken> verificationTokens,
     IRefreshTokenRepository refreshTokens,
+    IRoleRepository roles,
     IAuditLogRepository auditLog,
     IUnitOfWork unitOfWork,
     ITokenGenerator generator,
@@ -283,6 +284,13 @@ internal sealed class RegistrationService(
         user.UpdatedUtc = now;
         await verificationTokens.InvalidateAllForUserAsync(user.Id, now, cancellationToken);
         await refreshTokens.RevokeAllForUserAsync(user.Id, RefreshTokenRevokedReason.PasswordChange, now, cancellationToken);
+
+        // Every verified account holds the default User role (when the seeder has created it).
+        if (await roles.GetGlobalRoleAsync(AuthRoles.User.ToUpperInvariant(), cancellationToken) is Role defaultRole
+            && !await roles.UserHasRoleAsync(user.Id, defaultRole.Id, cancellationToken))
+        {
+            await roles.AddUserRoleAsync(new UserRole { UserId = user.Id, RoleId = defaultRole.Id, AssignedUtc = now }, cancellationToken);
+        }
         await auditLog.AddAsync(audit.Entry(AuditEventType.EmailVerified, user.Id, now), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);

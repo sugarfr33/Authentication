@@ -82,6 +82,9 @@ public sealed class ApiFixture : IAsyncLifetime
         await using AsyncServiceScope scope = Factory.Services.CreateAsyncScope();
         await scope.ServiceProvider.GetRequiredService<ISigningKeyRotation>()
             .AddKeyAsync(SigningKid, SigningKeyAlgorithm.ES256, PrivateKeyReference, DateTime.UtcNow, CancellationToken.None);
+
+        // The host also seeds in the background at start; seeding here too makes the roles certain before any test.
+        await scope.ServiceProvider.GetRequiredService<Auth.Services.Authorization.IAuthorizationSeeder>().SeedAsync(CancellationToken.None);
     }
 
     public async Task DisposeAsync()

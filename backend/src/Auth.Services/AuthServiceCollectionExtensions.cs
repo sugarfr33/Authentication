@@ -2,6 +2,7 @@ using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
 using Auth.Services.Accounts;
+using Auth.Services.Authorization;
 using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
@@ -39,6 +40,8 @@ public static class AuthServiceCollectionExtensions
         services.AddSingleton<IClientApplicationOriginProvider, ClientApplicationOriginProvider>();
         services.AddTokenServices(configuration);
         services.AddAccountServices();
+        services.TryAddSingleton(new AuthorizationSeedOptions());
+        services.AddScoped<IAuthorizationSeeder, AuthorizationSeeder>();
 
         return services;
     }
@@ -57,6 +60,7 @@ public static class AuthServiceCollectionExtensions
             sp.GetRequiredService<IUserRepository>(),
             sp.GetRequiredService<IOneTimeTokenRepository<EmailVerificationToken>>(),
             sp.GetRequiredService<IRefreshTokenRepository>(),
+            sp.GetRequiredService<IRoleRepository>(),
             sp.GetRequiredService<IAuditLogRepository>(),
             sp.GetRequiredService<IUnitOfWork>(),
             sp.GetRequiredService<ITokenGenerator>(),
