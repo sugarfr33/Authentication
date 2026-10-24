@@ -9,6 +9,7 @@ Add new packages only through the task that needs them, and add a line here when
 |---|---|---|---|
 | Microsoft.EntityFrameworkCore.SqlServer | 10.0.13 | Auth.DAL | EF Core provider for the SQL Server `CentralAuth` database; compile assets kept private to DAL so Services cannot use EF. |
 | Microsoft.Extensions.DependencyInjection.Abstractions | 10.0.13 | Auth.DAL, Auth.Services | `IServiceCollection` for the `AddDataAccess` / `AddAuthServices` registration extensions. |
+| Konscious.Security.Cryptography.Argon2 | 1.3.1 | Auth.Services | Argon2id password hashing (plan A9: m=64 MiB, t=3, p=1), managed code, MIT. Pulls Konscious.Security.Cryptography.Blake2 1.1.1 (same author, MIT). Output checked against the RFC 9106 Argon2id test vector in the unit tests. |
 | Microsoft.Extensions.Configuration.Abstractions | 10.0.13 | Auth.Services | `IConfiguration` for `AddAuthServices` to read the connection string and options. |
 
 ## Design time
@@ -35,5 +36,5 @@ Add new packages only through the task that needs them, and add a line here when
 
 ## Planned (added by later tasks, approved in the T00 plan)
 
-FluentValidation (T12), Serilog.AspNetCore (T09), Konscious.Security.Cryptography.Argon2 (T06),
+FluentValidation (T12), Serilog.AspNetCore (T09),
 NSubstitute (first unit tests), Microsoft.AspNetCore.Mvc.Testing (integration tests), Testcontainers.MsSql (optional; local SQL Express is the default).

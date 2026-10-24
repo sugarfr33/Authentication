@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="Konscious.Security.Cryptography.Argon2" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
@@ -9,6 +10,16 @@
     <ProjectReference Include="..\Auth.DAL\Auth.DAL.csproj" />
     <ProjectReference Include="..\Auth.Entities\Auth.Entities.csproj" />
     <ProjectReference Include="..\Auth.Contracts\Auth.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Password internals (hasher, policy, list) are exercised directly by the unit tests. -->
+    <InternalsVisibleTo Include="Auth.UnitTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Top 100,000 common passwords (SecLists, MIT); provenance in docs/third-party-data.md. -->
+    <EmbeddedResource Include="Passwords\common-passwords.txt" LogicalName="Auth.Services.Passwords.common-passwords.txt" />
   </ItemGroup>
 
 </Project>

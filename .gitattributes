@@ -1,0 +1,2 @@
+# Bundled third-party data: keep the exact upstream bytes so the SHA-256 in docs/third-party-data.md stays verifiable.
+backend/src/Auth.Services/Passwords/common-passwords.txt -text
