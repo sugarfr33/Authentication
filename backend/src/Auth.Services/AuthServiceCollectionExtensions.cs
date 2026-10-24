@@ -1,5 +1,7 @@
 using Auth.DAL;
+using Auth.Services.Common;
 using Auth.Services.Passwords;
+using Auth.Services.Tokens;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -21,6 +23,26 @@ public static class AuthServiceCollectionExtensions
 
         services.AddDataAccess(connectionString);
         services.AddPasswordServices();
+        services.AddTokenServices(configuration);
+
+        return services;
+    }
+
+    /// <summary>
+    /// Clock, secret store, signing-key provider (singleton) and rotation (scoped). Keeps any IClock, ISecretStore or
+    /// TokenOptions registered earlier. TokenOptions.Issuer comes from Auth:Issuer and is checked when first resolved.
+    /// </summary>
+    internal static IServiceCollection AddTokenServices(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.TryAddSingleton<IClock, SystemClock>();
+        services.TryAddSingleton<ISecretStore>(new ConfigurationSecretStore(configuration));
+        services.TryAddSingleton(_ => new TokenOptions
+        {
+            Issuer = configuration["Auth:Issuer"] ?? throw new InvalidOperationException("Configuration value 'Auth:Issuer' is missing."),
+        }.Validated());
+        services.AddSingleton<SigningKeyProvider>();
+        services.AddSingleton<ISigningKeyProvider>(sp => sp.GetRequiredService<SigningKeyProvider>());
+        services.AddScoped<ISigningKeyRotation, SigningKeyRotation>();
 
         return services;
     }
