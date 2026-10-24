@@ -59,6 +59,9 @@ public sealed record RotationResult(RotationStatus Status, IssuedRefreshToken? T
     internal static readonly RotationResult Concurrent = new(RotationStatus.Concurrent, null, null);
 }
 
+/// <summary>The session a refresh token belongs to (whatever its state), as read from its hash.</summary>
+public sealed record RefreshSession(Guid UserId, Guid FamilyId);
+
 /// <summary>Opaque, rotating refresh tokens with reuse detection. A session is one token family.</summary>
 public interface IRefreshTokenService
 {
@@ -73,6 +76,15 @@ public interface IRefreshTokenService
 
     /// <summary>Revokes every live token of one session (one set-based UPDATE). <paramref name="reason"/> is a RefreshTokenRevokedReason value.</summary>
     Task<int> RevokeFamilyAsync(Guid familyId, string reason, CancellationToken cancellationToken);
+
+    /// <summary>Revokes every live token of one session of <paramref name="userId"/> only (one set-based UPDATE).</summary>
+    Task<int> RevokeFamilyForUserAsync(Guid familyId, Guid userId, string reason, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The session of a raw refresh token, found by its hash, or null for an unknown or malformed value. It does not
+    /// check expiry or revocation: it is for ending a session (logout, re-login), never for granting access.
+    /// </summary>
+    Task<RefreshSession?> FindSessionAsync(string? rawToken, CancellationToken cancellationToken);
 
     /// <summary>Revokes every live token of the user, i.e. all sessions (one set-based UPDATE).</summary>
     Task<int> RevokeAllAsync(Guid userId, string reason, CancellationToken cancellationToken);

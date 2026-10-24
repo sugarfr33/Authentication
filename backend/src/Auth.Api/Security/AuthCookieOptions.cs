@@ -14,8 +14,11 @@ public sealed class AuthCookieOptions
     /// <summary>SameSite for the access cookie: Lax (default) or Strict. None is refused.</summary>
     public SameSiteMode AccessSameSite { get; set; } = SameSiteMode.Lax;
 
-    /// <summary>The only path the refresh cookie is sent to.</summary>
-    public string RefreshPath { get; set; } = "/api/v1/auth/refresh";
+    /// <summary>
+    /// The only path the refresh cookie is sent to: the auth endpoints, so /refresh can rotate it and /logout and /login
+    /// can end the session it belongs to even after the access cookie has expired. No other route reads it.
+    /// </summary>
+    public string RefreshPath { get; set; } = "/api/v1/auth";
 
     internal bool IsValid() =>
         AccessSameSite is SameSiteMode.Lax or SameSiteMode.Strict

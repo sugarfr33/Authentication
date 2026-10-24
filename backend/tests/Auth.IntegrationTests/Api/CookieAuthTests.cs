@@ -47,7 +47,7 @@ public sealed partial class CookieAuthTests(ApiFixture api)
         Assert.True(refresh.HasFlag("httponly"));
         Assert.True(refresh.HasFlag("secure"));
         Assert.Equal("strict", refresh["samesite"]);
-        Assert.Equal("/api/v1/auth/refresh", refresh["path"]);
+        Assert.Equal("/api/v1/auth", refresh["path"]);
         Assert.Null(refresh["domain"]);
         Assert.InRange(int.Parse(refresh["max-age"]!, System.Globalization.CultureInfo.InvariantCulture), 1_209_590, 1_209_600);
     }

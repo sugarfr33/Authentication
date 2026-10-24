@@ -28,6 +28,13 @@ internal sealed class RefreshTokenRepository(AuthDbContext context) : IRefreshTo
                 s => s.SetProperty(t => t.RevokedUtc, revokedUtc).SetProperty(t => t.RevokedReason, reason),
                 cancellationToken));
 
+    public Task<int> RevokeFamilyForUserAsync(Guid familyId, Guid userId, string reason, DateTime revokedUtc, CancellationToken cancellationToken) =>
+        SqlErrors.MapDeadlockAsync(() => context.RefreshToken
+            .Where(t => t.FamilyId == familyId && t.UserId == userId && t.RevokedUtc == null)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(t => t.RevokedUtc, revokedUtc).SetProperty(t => t.RevokedReason, reason),
+                cancellationToken));
+
     public Task<int> RevokeAllForUserAsync(Guid userId, string reason, DateTime revokedUtc, CancellationToken cancellationToken) =>
         SqlErrors.MapDeadlockAsync(() => context.RefreshToken
             .Where(t => t.UserId == userId && t.RevokedUtc == null)

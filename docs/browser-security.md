@@ -8,7 +8,7 @@ them; an integration test scans every response for JWTs and the token values.
 | Cookie | Flags | Path | Max-Age |
 |---|---|---|---|
 | `__Host-access` (access JWT) | HttpOnly, Secure, SameSite=Lax (configurable Strict), no Domain | `/` | remaining token lifetime (15 min) |
-| `__Secure-refresh` (opaque refresh token) | HttpOnly, Secure, SameSite=Strict | `/api/v1/auth/refresh` only | remaining refresh lifetime (up to 14 days) |
+| `__Secure-refresh` (opaque refresh token) | HttpOnly, Secure, SameSite=Strict | `/api/v1/auth` only (T13 fix: was `/api/v1/auth/refresh`) | remaining refresh lifetime (up to 14 days) |
 | `__Host-antiforgery` (antiforgery cookie token) | HttpOnly, Secure, SameSite=Strict | `/` | session |
 | `XSRF-TOKEN` (antiforgery request token) | **readable by script, by design**, Secure, SameSite=Strict | `/` | session |
 

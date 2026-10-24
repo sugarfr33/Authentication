@@ -6,18 +6,20 @@ using Auth.Contracts.Responses;
 using Auth.Services.Accounts;
 using Auth.Services.Tokens;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Auth.Api.Endpoints;
 
 /// <summary>
-/// T13 sign-in and sign-out under /api/v1/auth. Tokens travel only in HttpOnly cookies (ICookieWriter), never in a
+/// T13 sign-in and sign-out under /api/v1/auth. Only login and logout read the refresh cookie, and only to END the
+/// session it belongs to; no endpoint here refreshes anything. Tokens travel only in HttpOnly cookies (ICookieWriter), never in a
 /// body. Every POST passes the origin check and the antiforgery token (BrowserProtectionMiddleware); login also passes
 /// the per-IP and per-account limits and the 16 KB body cap. Login and both logouts issue a new XSRF token for the new
 /// user, because antiforgery tokens are bound to the signed-in user.
 /// </summary>
-internal sealed class SessionEndpoints : IEndpointModule
+internal sealed partial class SessionEndpoints : IEndpointModule
 {
     /// <summary>The one answer to every failed sign-in, whatever the reason.</summary>
     internal const string InvalidCredentialsTitle = "Invalid email or password.";
@@ -55,7 +57,7 @@ internal sealed class SessionEndpoints : IEndpointModule
         HttpContext http,
         CancellationToken cancellationToken)
     {
-        Result<SignedIn> result = await signIn.LoginAsync(request, AccountEndpoints.AuditFrom(http), cancellationToken);
+        Result<SignedIn> result = await signIn.LoginAsync(request, RefreshCookie(http), AccountEndpoints.AuditFrom(http), cancellationToken);
         if (!result.IsSuccess)
         {
             return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: InvalidCredentialsTitle);
@@ -81,19 +83,31 @@ internal sealed class SessionEndpoints : IEndpointModule
         ITokenService tokens,
         ICookieWriter cookies,
         IAntiforgery antiforgery,
+        ILogger<SessionEndpoints> logger,
         HttpContext http,
         CancellationToken cancellationToken)
     {
-        // The session to end comes from the signed access token (sid), even if it has just expired: the refresh cookie
-        // is scoped to the refresh path and never reaches this endpoint.
-        if (http.Request.Cookies.TryGetValue(cookies.AccessCookieName, out string? jwt) && jwt is { Length: > 0 and <= 8192 })
+        try
         {
-            TokenValidationResult validated = await tokens.ValidateIgnoringLifetimeAsync(jwt, cancellationToken);
-            if (validated is { IsValid: true, ClaimsIdentity: not null } && TryGetGuid(validated.ClaimsIdentity, AuthClaimTypes.Subject, out Guid userId))
+            // The session to end comes from either cookie: the sid of the signed access cookie (even if just expired)
+            // and the family of the refresh cookie (which outlives the access cookie).
+            Guid? userId = null;
+            Guid? sessionId = null;
+            if (http.Request.Cookies.TryGetValue(cookies.AccessCookieName, out string? jwt) && jwt is { Length: > 0 and <= 8192 })
             {
-                Guid? sessionId = TryGetGuid(validated.ClaimsIdentity, AuthClaimTypes.SessionId, out Guid sid) ? sid : null;
-                await signIn.LogoutAsync(userId, sessionId, AccountEndpoints.AuditFrom(http), cancellationToken);
+                TokenValidationResult validated = await tokens.ValidateIgnoringLifetimeAsync(jwt, cancellationToken);
+                if (validated is { IsValid: true, ClaimsIdentity: not null } && TryGetGuid(validated.ClaimsIdentity, AuthClaimTypes.Subject, out Guid sub))
+                {
+                    userId = sub;
+                    sessionId = TryGetGuid(validated.ClaimsIdentity, AuthClaimTypes.SessionId, out Guid sid) ? sid : null;
+                }
             }
+
+            await signIn.LogoutAsync(userId, sessionId, RefreshCookie(http), AccountEndpoints.AuditFrom(http), cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return SignOutAfterFailure(http, cookies, antiforgery, logger, ex);
         }
 
         SignOut(http, cookies, antiforgery);
@@ -104,6 +118,7 @@ internal sealed class SessionEndpoints : IEndpointModule
         ISignInService signIn,
         ICookieWriter cookies,
         IAntiforgery antiforgery,
+        ILogger<SessionEndpoints> logger,
         HttpContext http,
         CancellationToken cancellationToken)
     {
@@ -112,7 +127,15 @@ internal sealed class SessionEndpoints : IEndpointModule
             return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Authentication required.");
         }
 
-        await signIn.LogoutAllAsync(userId, AccountEndpoints.AuditFrom(http), cancellationToken);
+        try
+        {
+            await signIn.LogoutAllAsync(userId, AccountEndpoints.AuditFrom(http), cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return SignOutAfterFailure(http, cookies, antiforgery, logger, ex);
+        }
+
         SignOut(http, cookies, antiforgery);
         return TypedResults.NoContent();
     }
@@ -130,6 +153,24 @@ internal sealed class SessionEndpoints : IEndpointModule
 
         return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Authentication required.");
     }
+
+    /// <summary>
+    /// The server-side part of a sign-out failed (database error): the browser is still signed out (the answer is built
+    /// here, so the exception handler cannot drop the cookie headers), and the 500 tells the caller the session may
+    /// still be live on the server. Logged as a warning with the exception type only.
+    /// </summary>
+    private static ProblemHttpResult SignOutAfterFailure(HttpContext http, ICookieWriter cookies, IAntiforgery antiforgery, ILogger logger, Exception exception)
+    {
+        LogSignOutFailed(logger, exception.GetType().Name);
+        SignOut(http, cookies, antiforgery);
+        return TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Signed out in this browser, but the session could not be ended on the server.");
+    }
+
+    private static string? RefreshCookie(HttpContext http) =>
+        http.Request.Cookies.TryGetValue(AuthCookieNames.Refresh, out string? value) && value is { Length: > 0 } ? value : null;
+
+    [LoggerMessage(EventId = 5300, Level = LogLevel.Warning, Message = "Sign-out could not be completed on the server ({ExceptionType}); the browser cookies were cleared")]
+    private static partial void LogSignOutFailed(ILogger logger, string exceptionType);
 
     /// <summary>Expires both auth cookies and issues an anonymous XSRF token for the signed-out browser.</summary>
     private static void SignOut(HttpContext http, ICookieWriter cookies, IAntiforgery antiforgery)

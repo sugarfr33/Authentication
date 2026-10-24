@@ -54,6 +54,12 @@ internal sealed class Browser(WebApplicationFactory<Program> factory, string ori
 
     public string CookieValue(string name) => jar[name].Value;
 
+    /// <summary>Drops a cookie, as a browser does when its Max-Age runs out.</summary>
+    public void Forget(string name) => jar.Remove(name);
+
+    /// <summary>Puts a cookie into the jar directly (for example a forged or backdated token).</summary>
+    public void Plant(string name, string value, string path = "/") => jar[name] = (value, path);
+
     public Task<HttpResponseMessage> GetAsync(string path) => SendAsync(HttpMethod.Get, path, sendOrigin: false, sendXsrf: false);
 
     public async Task<HttpResponseMessage> SendAsync(

@@ -135,6 +135,20 @@ internal sealed class RefreshTokenService(
     public Task<int> RevokeFamilyAsync(Guid familyId, string reason, CancellationToken cancellationToken) =>
         refreshTokens.RevokeFamilyAsync(familyId, CheckReason(reason), clock.UtcNow, cancellationToken);
 
+    public Task<int> RevokeFamilyForUserAsync(Guid familyId, Guid userId, string reason, CancellationToken cancellationToken) =>
+        refreshTokens.RevokeFamilyForUserAsync(familyId, userId, CheckReason(reason), clock.UtcNow, cancellationToken);
+
+    public async Task<RefreshSession?> FindSessionAsync(string? rawToken, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(rawToken) || rawToken.Length > MaxTokenLength)
+        {
+            return null;
+        }
+
+        RefreshToken? row = await refreshTokens.GetByHashAsync(generator.Hash(rawToken), cancellationToken);
+        return row is null ? null : new RefreshSession(row.UserId, row.FamilyId);
+    }
+
     public Task<int> RevokeAllAsync(Guid userId, string reason, CancellationToken cancellationToken) =>
         refreshTokens.RevokeAllForUserAsync(userId, CheckReason(reason), clock.UtcNow, cancellationToken);
 

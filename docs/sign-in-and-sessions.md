@@ -1,8 +1,12 @@
 # Sign-in, sign-out and the profile (T13)
 
 All under `/api/v1/auth`. Tokens travel **only** in HttpOnly, Secure cookies (`__Host-access`, path `/`;
-`__Secure-refresh`, path `/api/v1/auth/refresh`); no response body, URL or readable header ever carries one. Every
-POST needs an allowed Origin and the `X-XSRF-TOKEN` header (browser-security.md).
+`__Secure-refresh`, path `/api/v1/auth`); no response body, URL or readable header ever carries one. Every POST needs
+an allowed Origin and the `X-XSRF-TOKEN` header (browser-security.md).
+
+The refresh cookie path is `/api/v1/auth` (still `__Secure-`, HttpOnly, Secure, SameSite=Strict) so that logout and
+login can end the session it belongs to. Only `/refresh` rotates it; `/login` and `/logout` only read it to **revoke**
+its family; every other route ignores it (tested: with only the refresh cookie, `/me` is 401 and sets no cookie).
 
 | Endpoint | Auth | Body | Success | Failure |
 |---|---|---|---|---|
@@ -37,7 +41,12 @@ counters or secrets.
 Audit rows are staged only **after** `RegisterFailureAsync`/`ResetAsync`, because their concurrency retry clears the
 change tracker (the same rule as for `RotateAsync`).
 
-`LoginRequest.ClientId` is ignored here: client-application sign-in is the authorization-code flow (later task).
+`LoginRequest.ClientId` is accepted but **ignored** until the OAuth authorization-code flow (T15+): refresh families are
+created with no client application and the access token is for the default audience.
+
+**Re-login replaces the old session:** if the browser presents a refresh cookie when signing in successfully, that
+family is revoked (reason Logout, only for its own user) before the new one is created, so no orphan session is left
+alive (tested).
 
 ### Residual timing difference
 
@@ -47,12 +56,22 @@ about 100 ms of Argon2. Locked accounts do no UPDATE either (failures while lock
 
 ## Logout
 
-The refresh cookie is scoped to the refresh path and never reaches `/logout`, so the session to end comes from the
-**signed access cookie**: `sub` and `sid` are read after a full signature, issuer, audience and type check, with only
-the lifetime check skipped (`ITokenService.ValidateIgnoringLifetimeAsync`, used for nothing else). So a user whose
-access token just expired can still end the session. The family is revoked (reason `Logout`) and a `Logout` audit
-row is written. Without a valid access cookie nothing is revoked, but the cookies are still expired: the browser
-loses its refresh token, and the unreachable family expires on its own.
+The session to end is found from **either** cookie:
+
+- the **refresh cookie** (it outlives the access cookie): its hash is looked up and its family revoked, so logout works
+  after the 15-minute access cookie has expired and been dropped (tested);
+- the **signed access cookie**: `sub` and `sid` are read after a full signature, issuer, audience and type check, with
+  only the lifetime check skipped (`ITokenService.ValidateIgnoringLifetimeAsync`, used for nothing else), so an expired
+  access cookie alone still works (tested with a backdated, correctly signed token).
+
+Families are revoked with `RevokeFamilyForUserAsync(familyId, userId)` (reason `Logout`): a token can end only a
+family of its own user (tested with a forged sid of another user). A `Logout` audit row is written; its user id is
+left empty when the account no longer exists (AuditLog has a foreign key to User), so a deleted account's browser still
+signs out with 204 (tested).
+
+Both logouts **always** clear the cookies: if the server-side part fails (database error) the cookies are still
+expired, the XSRF token reissued, a warning logged (exception type only) and the answer is a 500 ProblemDetails saying
+the session may still be live on the server.
 
 ## Logout-all
 
@@ -60,12 +79,27 @@ Needs a valid access cookie. Revokes every refresh family of the user (reason `L
 `LogoutAll` audit row with the count, expires the cookies and reissues an anonymous XSRF token. Access tokens already
 issued elsewhere stay valid until they expire (short lifetime); they can no longer be refreshed.
 
+## Residual risks
+
+- **Access tokens outlive logout (audit MEDIUM-2, accepted for now).** Access JWTs are stateless: a copied access cookie
+  keeps working for up to 15 minutes (+30 s skew) after logout, logout-all, a password change or deactivation, on every
+  authenticated endpoint except `/me` (which checks that the account is active). Planned mitigation, to be decided before
+  T16 (admin endpoints): on sensitive endpoints check that the `sid` family is not revoked and the user is active, via
+  one indexed lookup cached for a few seconds. Also to be listed in the threat model (T27).
+- **Login timing (audit LOW-3).** See "Residual timing difference" above. In addition, an empty password or one over
+  the raw 1024 / 128 code-point caps is refused before any Verify for every account alike (it reveals nothing), but it
+  still counts as a failure toward the lockout of the named account.
+- **Audit volume.** `LoginFailed` rows are written for unauthenticated requests (bounded by the login rate limits) and
+  their reason names the real cause: keep them in the T17 retention job and keep audit reads restricted.
+
 ## Signing keys in one process
 
 `TokenService` builds its IdentityModel keys with signature-provider caching **off**. The default factory caches
 providers process-wide by key id, so a provider could keep using a key object that `SigningKeyProvider` had already
 disposed (a second host in the same process, or a reload), and signing failed with ObjectDisposedException. Found by
-the T13 API tests, which start a fresh host per test.
+the T13 API tests, which start a fresh host per test. Every validation now builds a fresh signature provider: correct,
+slightly more CPU per request; re-measure under load in T22 (performance) and consider caching providers in
+`SigningKeyProvider` with the key objects' lifetime instead.
 
 ## Not done (optional item)
 

@@ -51,6 +51,12 @@ public interface IRefreshTokenRepository
     /// <summary>Revokes every not-yet-revoked token of the family in one UPDATE. Returns the number revoked.</summary>
     Task<int> RevokeFamilyAsync(Guid familyId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Like <see cref="RevokeFamilyAsync"/>, but only tokens of the family that belong to <paramref name="userId"/>, so a
+    /// caller holding a family id can never end someone else's session. Returns the number revoked.
+    /// </summary>
+    Task<int> RevokeFamilyForUserAsync(Guid familyId, Guid userId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
+
     /// <summary>Revokes every not-yet-revoked token of the user in one UPDATE. Returns the number revoked.</summary>
     Task<int> RevokeAllForUserAsync(Guid userId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
 

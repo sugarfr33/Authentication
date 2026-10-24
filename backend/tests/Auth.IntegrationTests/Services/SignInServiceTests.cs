@@ -136,7 +136,7 @@ public sealed class SignInServiceTests : RepositoryTestBase, IAsyncDisposable
     public async ValueTask DisposeAsync() => await services.DisposeAsync();
 
     private Task<Result<SignedIn>> LoginAsync(string email, string password) =>
-        InScopeAsync(s => s.LoginAsync(new LoginRequest(email, password, null), new AuditContext("203.0.113.5", "tests", null), Ct));
+        InScopeAsync(s => s.LoginAsync(new LoginRequest(email, password, null), null, new AuditContext("203.0.113.5", "tests", null), Ct));
 
     private async Task<T> InScopeAsync<T>(Func<ISignInService, Task<T>> action)
     {

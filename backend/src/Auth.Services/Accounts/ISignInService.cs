@@ -24,11 +24,21 @@ public interface ISignInService
     /// <see cref="AuthError.GenericInvalidCredentials"/>, after the same work: one Argon2 Verify (a dummy hash when the
     /// account cannot sign in), one lockout round trip and one audit row.
     /// </summary>
+    /// <param name="request">Email and password. <see cref="LoginRequest.ClientId"/> is ignored: client sign-in is the OAuth flow.</param>
+    /// <param name="presentedRefreshToken">The refresh cookie the browser sent, if any: on success its session is revoked,
+    /// so signing in again never leaves the previous session alive.</param>
+    /// <param name="audit">Who is asking.</param>
+    /// <param name="cancellationToken">Request cancellation.</param>
     /// <exception cref="PasswordHashingBusyException">No hashing slot freed up in time (the host answers 503).</exception>
-    Task<Result<SignedIn>> LoginAsync(LoginRequest request, AuditContext audit, CancellationToken cancellationToken);
+    Task<Result<SignedIn>> LoginAsync(LoginRequest request, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken);
 
-    /// <summary>Ends one session: revokes its refresh family (when known) and writes a Logout audit row.</summary>
-    Task LogoutAsync(Guid userId, Guid? sessionId, AuditContext audit, CancellationToken cancellationToken);
+    /// <summary>
+    /// Ends the browser's session, found from either cookie: the <paramref name="accessSessionId"/> (sid) of the signed
+    /// access cookie, and the family of the <paramref name="presentedRefreshToken"/>. Each family is revoked only for its
+    /// own user. Writes a Logout audit row (without a user id when the account no longer exists). Returns the number of
+    /// tokens revoked.
+    /// </summary>
+    Task<int> LogoutAsync(Guid? accessUserId, Guid? accessSessionId, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken);
 
     /// <summary>Ends every session of the user: revokes all refresh families and writes a LogoutAll audit row.</summary>
     Task<int> LogoutAllAsync(Guid userId, AuditContext audit, CancellationToken cancellationToken);
@@ -50,7 +60,7 @@ internal sealed class SignInService(
     TokenOptions tokenOptions,
     IClock clock) : ISignInService
 {
-    public async Task<Result<SignedIn>> LoginAsync(LoginRequest request, AuditContext audit, CancellationToken cancellationToken)
+    public async Task<Result<SignedIn>> LoginAsync(LoginRequest request, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(audit);
@@ -80,14 +90,38 @@ internal sealed class SignInService(
             return Result.Failure<SignedIn>(AuthError.GenericInvalidCredentials);
         }
 
+        // Re-login replaces the browser's previous session instead of leaving it alive with no cookie pointing at it.
+        if (await refreshTokens.FindSessionAsync(presentedRefreshToken, cancellationToken) is RefreshSession previous)
+        {
+            await refreshTokens.RevokeFamilyForUserAsync(previous.FamilyId, previous.UserId, RefreshTokenRevokedReason.Logout, cancellationToken);
+        }
+
         return Result.Success(await StartSessionAsync(user!, check == CredentialCheck.ValidNeedsRehash ? password : null, audit, cancellationToken));
     }
 
-    public async Task LogoutAsync(Guid userId, Guid? sessionId, AuditContext audit, CancellationToken cancellationToken)
+    public async Task<int> LogoutAsync(Guid? accessUserId, Guid? accessSessionId, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(audit);
-        int revoked = sessionId is null ? 0 : await refreshTokens.RevokeFamilyAsync(sessionId.Value, RefreshTokenRevokedReason.Logout, cancellationToken);
-        await AuditAsync(AuditEventType.Logout, userId, "{\"revoked\":" + revoked.ToString(CultureInfo.InvariantCulture) + "}", audit, cancellationToken);
+        int revoked = 0;
+        if (accessUserId is Guid owner && accessSessionId is Guid sid)
+        {
+            revoked += await refreshTokens.RevokeFamilyForUserAsync(sid, owner, RefreshTokenRevokedReason.Logout, cancellationToken);
+        }
+
+        // The refresh cookie still ends the session after the access cookie has expired and been dropped.
+        RefreshSession? fromRefresh = await refreshTokens.FindSessionAsync(presentedRefreshToken, cancellationToken);
+        if (fromRefresh is not null && (fromRefresh.FamilyId != accessSessionId || fromRefresh.UserId != accessUserId))
+        {
+            revoked += await refreshTokens.RevokeFamilyForUserAsync(fromRefresh.FamilyId, fromRefresh.UserId, RefreshTokenRevokedReason.Logout, cancellationToken);
+        }
+
+        Guid? userId = accessUserId ?? fromRefresh?.UserId;
+        if (userId is not null)
+        {
+            await AuditAsync(AuditEventType.Logout, userId.Value, "{\"revoked\":" + revoked.ToString(CultureInfo.InvariantCulture) + "}", audit, cancellationToken);
+        }
+
+        return revoked;
     }
 
     public async Task<int> LogoutAllAsync(Guid userId, AuditContext audit, CancellationToken cancellationToken)
@@ -189,9 +223,14 @@ internal sealed class SignInService(
             [.. permissions.Order(StringComparer.Ordinal)]);
     }
 
+    /// <summary>
+    /// Writes a session audit row. The user id is kept only if the account still exists (AuditLog has a foreign key to
+    /// User): a token of a deleted account must still be able to sign out without a database error.
+    /// </summary>
     private async Task AuditAsync(AuditEventType type, Guid userId, string detail, AuditContext audit, CancellationToken cancellationToken)
     {
-        await auditLog.AddAsync(audit.Entry(type, userId, clock.UtcNow, detail), cancellationToken);
+        Guid? existing = await users.GetByIdAsync(userId, cancellationToken) is null ? null : userId;
+        await auditLog.AddAsync(audit.Entry(type, existing, clock.UtcNow, detail), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 }

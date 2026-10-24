@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -12,6 +14,8 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
 
 namespace Auth.IntegrationTests.Api;
 
@@ -67,7 +71,7 @@ public sealed class SessionApiTests(ApiFixture api) : IAsyncLifetime
         SetCookie refresh = Assert.Single(cookies, c => c.Name == AuthCookieNames.Refresh);
         Assert.All([access, refresh], c => Assert.True(c.HasFlag("httponly") && c.HasFlag("secure")));
         Assert.Equal("/", access["path"]);
-        Assert.Equal("/api/v1/auth/refresh", refresh["path"]);
+        Assert.Equal("/api/v1/auth", refresh["path"]);
         Assert.DoesNotContain(access.Value, body, StringComparison.Ordinal);
         Assert.DoesNotContain(refresh.Value, body, StringComparison.Ordinal);
         Assert.DoesNotContain("token", body, StringComparison.OrdinalIgnoreCase);
@@ -250,6 +254,138 @@ public sealed class SessionApiTests(ApiFixture api) : IAsyncLifetime
         Assert.NotNull(user.LastLoginUtc);
         Assert.Contains(await AuditAsync(user.Id), a => a.EventType == nameof(AuditEventType.LoginSucceeded) && a.UserAgent == "SessionTests/1.0");
         Assert.DoesNotContain(api.Logs.Texts, t => t.Contains(Password, StringComparison.Ordinal));
+    }
+
+    /// <summary>Audit MEDIUM-1: after the access cookie has expired and been dropped, the refresh cookie still ends the session.</summary>
+    [Fact]
+    public async Task Logout_after_the_access_cookie_is_gone_revokes_the_family_through_the_refresh_cookie()
+    {
+        string email = await SeedUserAsync();
+        using Browser browser = await ReadyBrowserAsync();
+        await LoginAsync(browser, email, Password);
+        Guid userId = (await LoadUserAsync(email)).Id;
+        browser.Forget(AuthCookieNames.Access);
+        await browser.GetAsync(TestEndpoints.Prefix + "/ping");
+
+        HttpResponseMessage logout = await browser.SendAsync(HttpMethod.Post, Logout);
+
+        Assert.Equal(HttpStatusCode.NoContent, logout.StatusCode);
+        Assert.Equal(RefreshTokenRevokedReason.Logout, Assert.Single(await RefreshTokensAsync(userId)).RevokedReason);
+        Assert.False(browser.HasCookie(AuthCookieNames.Refresh));
+        Assert.Contains(await AuditAsync(userId), a => a.EventType == nameof(AuditEventType.Logout) && a.Detail == """{"revoked":1}""");
+    }
+
+    /// <summary>Reviewer (d): an expired (backdated) access cookie alone still names the session to end.</summary>
+    [Fact]
+    public async Task Logout_with_only_an_expired_access_cookie_revokes_its_session()
+    {
+        string email = await SeedUserAsync();
+        using Browser browser = await ReadyBrowserAsync();
+        await LoginAsync(browser, email, Password);
+        (Guid userId, Guid sessionId) = ReadSession(browser.CookieValue(AuthCookieNames.Access));
+        browser.Plant(AuthCookieNames.Access, ForgeAccessToken(userId, sessionId, expiresUtc: DateTime.UtcNow.AddHours(-1)));
+        browser.Forget(AuthCookieNames.Refresh);
+        await browser.GetAsync(TestEndpoints.Prefix + "/ping");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await browser.GetAsync(Me)).StatusCode);
+        HttpResponseMessage logout = await browser.SendAsync(HttpMethod.Post, Logout);
+
+        Assert.Equal(HttpStatusCode.NoContent, logout.StatusCode);
+        Assert.Equal(RefreshTokenRevokedReason.Logout, Assert.Single(await RefreshTokensAsync(userId)).RevokedReason);
+    }
+
+    /// <summary>Audit LOW-2: a token can end only a family of its own user.</summary>
+    [Fact]
+    public async Task Logout_never_revokes_a_family_of_another_user()
+    {
+        string victimEmail = await SeedUserAsync();
+        using Browser victim = await ReadyBrowserAsync();
+        await LoginAsync(victim, victimEmail, Password);
+        (Guid victimId, Guid victimSession) = ReadSession(victim.CookieValue(AuthCookieNames.Access));
+        using Browser attacker = await ReadyBrowserAsync();
+        attacker.Plant(AuthCookieNames.Access, ForgeAccessToken(Guid.NewGuid(), victimSession, DateTime.UtcNow.AddHours(-1)));
+
+        HttpResponseMessage logout = await attacker.SendAsync(HttpMethod.Post, Logout);
+
+        Assert.Equal(HttpStatusCode.NoContent, logout.StatusCode);
+        Assert.Null(Assert.Single(await RefreshTokensAsync(victimId)).RevokedUtc);
+    }
+
+    /// <summary>Audit LOW-1: a token of an account that no longer exists still signs the browser out, without a 500.</summary>
+    [Fact]
+    public async Task Logout_for_a_deleted_account_still_clears_the_cookies()
+    {
+        using Browser browser = await ReadyBrowserAsync();
+        browser.Plant(AuthCookieNames.Access, ForgeAccessToken(Guid.NewGuid(), Guid.NewGuid(), DateTime.UtcNow.AddMinutes(10)));
+        browser.Plant(AuthCookieNames.Refresh, "not-a-real-refresh-token", "/api/v1/auth");
+        await browser.GetAsync(TestEndpoints.Prefix + "/ping");
+
+        HttpResponseMessage logout = await browser.SendAsync(HttpMethod.Post, Logout);
+
+        Assert.Equal(HttpStatusCode.NoContent, logout.StatusCode);
+        Assert.True(Assert.Single(SetCookie.From(logout), c => c.Name == AuthCookieNames.Access).IsExpired);
+        Assert.True(Assert.Single(SetCookie.From(logout), c => c.Name == AuthCookieNames.Refresh).IsExpired);
+    }
+
+    /// <summary>Reviewer (a): signing in again replaces the browser's previous session.</summary>
+    [Fact]
+    public async Task Signing_in_again_revokes_the_previous_session_of_the_browser()
+    {
+        string email = await SeedUserAsync();
+        using Browser browser = await ReadyBrowserAsync();
+        await LoginAsync(browser, email, Password);
+        (Guid userId, Guid firstSession) = ReadSession(browser.CookieValue(AuthCookieNames.Access));
+
+        await LoginAsync(browser, email, Password);
+        (_, Guid secondSession) = ReadSession(browser.CookieValue(AuthCookieNames.Access));
+
+        List<RefreshToken> families = await RefreshTokensAsync(userId);
+        Assert.Equal(RefreshTokenRevokedReason.Logout, Assert.Single(families, t => t.FamilyId == firstSession).RevokedReason);
+        Assert.Null(Assert.Single(families, t => t.FamilyId == secondSession).RevokedUtc);
+    }
+
+    [Fact]
+    public async Task The_refresh_cookie_reaches_the_auth_routes_only_and_never_signs_anyone_in()
+    {
+        string email = await SeedUserAsync();
+        using Browser browser = await ReadyBrowserAsync();
+        HttpResponseMessage login = await LoginAsync(browser, email, Password);
+        browser.Forget(AuthCookieNames.Access);
+
+        HttpResponseMessage me = await browser.GetAsync(Me);
+
+        Assert.Equal("/api/v1/auth", Assert.Single(SetCookie.From(login), c => c.Name == AuthCookieNames.Refresh)["path"]);
+        Assert.Equal("strict", Assert.Single(SetCookie.From(login), c => c.Name == AuthCookieNames.Refresh)["samesite"]?.ToLowerInvariant());
+        Assert.Equal(HttpStatusCode.Unauthorized, me.StatusCode);
+        Assert.DoesNotContain(SetCookie.From(me), c => c.Name is AuthCookieNames.Access or AuthCookieNames.Refresh);
+    }
+
+    private static (Guid UserId, Guid SessionId) ReadSession(string jwt)
+    {
+        JsonWebToken token = new(jwt);
+        return (Guid.Parse(token.Subject), Guid.Parse(token.GetClaim(AuthClaimTypes.SessionId).Value));
+    }
+
+    /// <summary>A correctly signed access token (the fixture's real key) with any subject, session and expiry.</summary>
+    private string ForgeAccessToken(Guid userId, Guid sessionId, DateTime expiresUtc)
+    {
+        using ECDsa key = ECDsa.Create();
+        key.ImportFromPem(api.PrivateKeyPem);
+        ECDsa detached = ECDsa.Create(key.ExportParameters(includePrivateParameters: true));
+        SecurityTokenDescriptor descriptor = new()
+        {
+            Issuer = ApiFixture.Issuer,
+            Audience = ApiFixture.Issuer,
+            IssuedAt = expiresUtc.AddMinutes(-15),
+            NotBefore = expiresUtc.AddMinutes(-15),
+            Expires = expiresUtc,
+            TokenType = "at+jwt",
+            Subject = new ClaimsIdentity([new Claim(AuthClaimTypes.Subject, userId.ToString()), new Claim(AuthClaimTypes.SessionId, sessionId.ToString())]),
+            SigningCredentials = new SigningCredentials(
+                new ECDsaSecurityKey(detached) { KeyId = ApiFixture.SigningKid, CryptoProviderFactory = new CryptoProviderFactory { CacheSignatureProviders = false } },
+                SecurityAlgorithms.EcdsaSha256),
+        };
+        return new JsonWebTokenHandler().CreateToken(descriptor);
     }
 
     private static StringContent Json(string email, string password) =>
