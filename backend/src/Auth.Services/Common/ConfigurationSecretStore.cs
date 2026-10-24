@@ -6,7 +6,7 @@ namespace Auth.Services.Common;
 /// Development secret store over <see cref="IConfiguration"/>, which the host feeds from User Secrets and environment
 /// variables. Lookup order for a secret named <c>n</c>:
 /// <list type="number">
-/// <item><c>Secrets:n</c>, the secret text itself (env var <c>Secrets__n</c>);</item>
+/// <item><c>Secrets:n</c>, the secret text itself (environment variable <c>Secrets__n</c>);</item>
 /// <item><c>SecretFiles:n</c>, a path to a file (e.g. a PEM) whose content is the secret.</item>
 /// </list>
 /// Nothing is read from source code or the database.
