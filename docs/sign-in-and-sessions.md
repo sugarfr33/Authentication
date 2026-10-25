@@ -134,11 +134,16 @@ cookies, like logout. A revoked session cannot refresh (tested through `/refresh
 
 ## Deferred (notes from the T15 review and audit)
 
-- **Cap on live sessions per user (done in T17).** `RefreshTokenOptions.MaxSessionsPerUser` (default 20, 1 to 1000).
+- **Cap on live sessions per user (done in T17).** `RefreshTokens:MaxSessionsPerUser` (default 20, 1 to 1000; the
+  `RefreshTokens` section is bound and validated at startup).
   Before a login issues a new family, the least recently used live families beyond 19 are revoked (reason `Admin`,
   audited `SessionRevoked` with reason `session_cap`, cache invalidated on this instance). Done before the new session
   exists, so a failure fails the login cleanly. Two simultaneous logins can leave one family over the cap until the
   next login (tested: the 4th login with a cap of 3 ends the oldest; the list shows the 3 newest).
+  - The revoked reason stays `Admin`: `RefreshToken.RevokedReason` has a CHECK constraint, so a dedicated value would be
+    a schema change. The audit row carries `session_cap`.
+  - Someone who knows the password can evict the owner's sessions by logging in 20 times (rate limited). The owner
+    only sees `SessionRevoked` rows. Follow-up: a "new sign-in" email to the owner (not built).
 - **Audit volume (decided in T17).** `TokenRefreshed` is kept (no sampling) but is high-volume: it gets the short audit
   retention (default 90 days), see audit-and-retention.md.
 - **Sessions limiter is per IP** (60 per minute), not per user.

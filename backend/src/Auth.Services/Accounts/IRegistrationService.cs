@@ -157,7 +157,7 @@ internal sealed class RegistrationService(
         // AddAsync assigns the sequential Id (EF client-side generator) that the link row needs.
         await users.AddAsync(user, cancellationToken);
         string token = await AddVerificationTokenAsync(user.Id, registrant, now, cancellationToken);
-        await audits.StageAsync(AuditEvents.Registered(user.Id, "created"), audit, cancellationToken);
+        await audits.StageAsync(AuditEvents.Registered(user.Id), audit, cancellationToken);
 
         try
         {
@@ -200,7 +200,7 @@ internal sealed class RegistrationService(
                 + "If it was not you, you can ignore this email; nothing has changed.");
         }
 
-        await audits.StageAsync(AuditEvents.Registered(user.Id, "duplicate"), audit, cancellationToken);
+        await audits.StageAsync(AuditEvents.RegistrationDuplicate(user.Id), audit, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return message;
     }

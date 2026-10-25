@@ -73,6 +73,7 @@ public sealed partial class AuditTrailApiTests(ApiFixture api) : IAsyncLifetime
         secrets.Add(verifyToken);
         Expect(HttpStatusCode.NoContent, await PostAsync(browser, "verify-email", new() { ["token"] = verifyToken }));
         Expect(HttpStatusCode.BadRequest, await PostAsync(browser, "verify-email", new() { ["token"] = ForgedToken }));
+        Expect(HttpStatusCode.Accepted, await PostAsync(browser, "register", new() { [AuthRequestFields.Email] = email, ["password"] = WrongPassword, ["displayName"] = "Trail again" }));
 
         // Sign-in, refresh, change password (wrong current, weak new, then real).
         Expect(HttpStatusCode.Unauthorized, await PostAsync(browser, "login", new() { [AuthRequestFields.Email] = email, ["password"] = WrongPassword }));
@@ -100,7 +101,7 @@ public sealed partial class AuditTrailApiTests(ApiFixture api) : IAsyncLifetime
 
         foreach (AuditEventType expected in new[]
         {
-            AuditEventType.Registered, AuditEventType.EmailVerified, AuditEventType.LoginFailed, AuditEventType.LoginSucceeded,
+            AuditEventType.Registered, AuditEventType.RegistrationDuplicate, AuditEventType.EmailVerified, AuditEventType.LoginFailed, AuditEventType.LoginSucceeded,
             AuditEventType.TokenRefreshed, AuditEventType.PasswordChangeFailed, AuditEventType.PasswordChanged,
             AuditEventType.PasswordResetRequested, AuditEventType.PasswordReset,
         })
@@ -122,6 +123,23 @@ public sealed partial class AuditTrailApiTests(ApiFixture api) : IAsyncLifetime
 
         IReadOnlyList<string> logs = api.Logs.Texts;
         Assert.All(secrets, secret => Assert.DoesNotContain(logs, line => line.Contains(secret, StringComparison.Ordinal)));
+    }
+
+    /// <summary>T17 audit MEDIUM-2: outside Development a disabled purge is reported at startup.</summary>
+    [Fact]
+    public async Task A_disabled_retention_purge_is_warned_about_outside_Development()
+    {
+        using Browser browser = new(app);
+        await browser.GetAsync(TestEndpoints.Prefix + "/ping");
+
+        for (int i = 0; i < 50 && !api.Logs.Texts.Any(IsWarning); i++)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.Contains(api.Logs.Texts, IsWarning);
+
+        static bool IsWarning(string line) => line.Contains("Retention:Enabled is false", StringComparison.Ordinal);
     }
 
     /// <summary>T09 review: an exception carrying secrets is logged through the real host only as a scrubbed copy.</summary>

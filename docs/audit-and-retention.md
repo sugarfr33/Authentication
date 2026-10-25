@@ -51,7 +51,8 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 
 | Event | Detail keys | Volume |
 |---|---|---|
-| Registered | outcome (created, duplicate) | normal |
+| Registered | outcome (created) | normal |
+| RegistrationDuplicate | none (a sign-up for an existing account) | **high** |
 | EmailVerified | none | normal |
 | EmailVerificationFailed | reason | **high** |
 | RegistrationRejected | fields (names only) | **high** |
@@ -63,7 +64,7 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | TokenReuse | revoked (count) | normal |
 | RefreshRejected | reason | **high** |
 | SessionRevoked | session, reason (session_cap when the server ended it) | normal |
-| PasswordResetRequested | outcome | normal |
+| PasswordResetRequested | outcome | **high** (anyone can cause it, also for unknown emails) |
 | PasswordReset, PasswordChanged | none | normal |
 | PasswordResetFailed, PasswordChangeFailed | reason | normal |
 | RoleAssigned | role, source (bootstrap, backfill) | normal |
@@ -91,14 +92,20 @@ user agent are personal data: export or display must follow the data-protection 
 - **Properties.** `RedactionEnricher` (T09) masks sensitive property names and scrubs credential-shaped values:
   - Bearer and Basic values, and `key=value` pairs for password, token, secret, cookie and session;
   - JWTs;
-  - since T17, also PHC password hashes (`$argon2id$...`) and any opaque run of 40 or more base64url or hex
-    characters, which covers our 43-character tokens. GUIDs and trace ids stay readable.
+  - since T17, also PHC password hashes (`$argon2id$...`) and any opaque run of 43 or more base64url or hex
+    characters, which covers our 43-character tokens. GUIDs, trace ids and ordinary identifiers stay readable.
+  - Pair keys match by role: exactly `code` or `code_verifier`, or a key ending in password, secret, token, apikey,
+    cookie or otp. So `newPassword=` and `refresh_token=` are masked, while `StatusCode=` and `SessionId=` are not.
+  - Every pattern has a 200 ms match timeout; a text that times out is masked whole.
+  - Non-string scalars that are not plain values (a `Uri` with a token in its query, any type whose `ToString` carries
+    text) are rendered, scrubbed, and replaced when something was masked.
 - **Exceptions (T09 review, T17).** Serilog cannot change an event in place, so every sink is wrapped in
   `ExceptionScrubbingSink`. An event's exception reaches the sink as a `ScrubbedException` with:
   - the original type name;
   - the message and stack trace redacted the same way;
   - every inner exception scrubbed recursively, including all of an AggregateException's (depth and count bounded);
-  - **no `Exception.Data`**.
+  - **no `Exception.Data`**;
+  - the original type name also as an `ExceptionType` property, for structured sinks.
 - **Which sinks.** The console sink and every sink registered in DI are wrapped in Program.cs; the test capture sink is
   one of those.
   - Sinks declared in configuration (`Serilog:WriteTo`) would bypass the wrapper, so they **stop the app at startup**.
@@ -113,37 +120,51 @@ user agent are personal data: export or display must follow the data-protection 
 
 `IRetentionPurge` (Services) runs from the hosted service `RetentionPurgeService` every `Retention:Interval`. It is
 **off by default** (`Retention:Enabled` = false): deleting data is an operator decision, and `appsettings.Example.json`
-shows it enabled with the defaults below. A failed run is logged with the exception type only and retried at the next
-interval.
+shows it enabled with the defaults below. **Operators must enable it in production.** Without it the audit table
+grows without bound from unauthenticated events (failed logins, sign-ups, reset requests). Outside Development a
+disabled purge logs a warning at every start (tested). A failed run is logged with the exception type only and retried
+at the next interval.
 
 | Data | Rule | Default |
 |---|---|---|
 | Pending registration (password hash, display name) on a verification link | erased as soon as the link expires unused; used links are erased when used | immediate |
 | EmailVerificationToken, PasswordResetToken | deleted once used or expired for longer than `OneTimeTokens` (also covers links left by failed sends) | 7 days |
-| Refresh tokens | deleted only as **whole families**, once every token of the family is expired or revoked for longer than `RefreshFamilies` | 30 days |
+| Refresh tokens | only tokens of **ended families** (every token of the family expired or revoked for longer than `RefreshFamilies`), in row-bounded batches | 30 days |
 | Audit rows, high-volume types | deleted after `HighVolumeAuditLog` | 90 days |
-| Audit rows, all other types | deleted after `AuditLog` | 365 days |
+| Audit rows, all other types | deleted after `AuditLog` (at least 30 days) | 365 days |
+| Audit rows of event types no longer in the enum (legacy, renamed) | deleted after `AuditLog` | 365 days |
 
-- **Set-based and batched.** Each statement touches at most `BatchSize` rows (1000), or `BatchSize` whole families for
-  refresh tokens. Each category runs at most `MaxBatchesPerRun` statements (50) per run, and the next run continues.
+- **Set-based and bounded by ROWS** (review MEDIUM-1: SQL Server escalates to a table lock at about 5000 row locks,
+  which would block every login).
+  - Each statement touches at most `BatchSize` rows (default 1000), or `RefreshTokenBatchSize` refresh token rows
+    (default 500). Both are capped at 4000.
+  - A long family (one row per rotation, up to about 2900 over 30 days) is removed over several statements. That is
+    safe: an ended family stays ended, nothing can refresh it, and its first-token time only matters while it is live.
+  - Each step first clears the rotation links (`ReplacedByTokenId`, a self foreign key) of up to a batch of rows of
+    ended families, then deletes up to a batch of rows that nothing points to.
+  - Each category runs at most `MaxBatchesPerRun` statements (50) per run, and the next run continues.
 - **Idempotent and safe on several instances**, because every statement re-checks its own condition.
 - **Live data is never touched.** Every statement filters on an end time before the cutoff:
-  - a family with any token not yet ended before the cutoff is kept entirely;
-  - so the 30-day absolute session cap (counted from the family's first token) can never be extended by a partial
-    delete.
+  - a family with any token not yet ended before the cutoff is never touched;
+  - so the 30-day absolute session cap (counted from a live family's first token) can never be extended.
 - **Audit rows are purged per event type**, which uses the existing index `IX_AuditLog_EventType_OccurredUtc`. Rows
-  with an event name that is not in the enum are never purged.
+  with an event name that is not in the enum follow the normal retention (one scanning statement, batch-bounded).
 - **Validation.** Retention settings that would purge too eagerly stop the app at startup: high-volume below 7 days,
-  AuditLog below the high-volume value, one-time tokens or families below 1 day, a batch outside 1 to 10 000.
+  AuditLog below 30 days or below the high-volume value, one-time tokens or families below 1 day, a batch outside
+  1 to 4000.
 - **Tested** against SQL Express, with each test in its own past year so other rows of the shared database are never
   in range:
-  - whole families only, including the self-referencing `ReplacedByTokenId`;
+  - ended families only, including the self-referencing `ReplacedByTokenId`;
   - a family ended after the cutoff is kept, and so is a live family;
-  - batch limits in whole families;
+  - one 25-token family with a batch of 10: a run deletes at most 10 rows, later runs finish it, others untouched;
+  - rows of an unknown event type are kept within retention and purged after it;
   - high-volume rows go before normal rows, and runs are bounded;
   - the pending payload is erased at expiry, and the row is deleted after retention.
 
-**Indexes (not added; schema change, decision pending).** The refresh-family and one-time-token purges scan their
+**Follow-ups (not now):** the indexes below (need a human OK), an unlock-by-email link, and a new-device sign-in
+email.
+
+**Indexes (not added; schema change).** The refresh-family and one-time-token purges scan their
 tables: there is no index on `ExpiresUtc` or `UsedUtc`. That is fine at today's size and bounded per statement. If the
 tables grow, add `IX_RefreshToken_ExpiresUtc`, `IX_EmailVerificationToken_ExpiresUtc` and
 `IX_PasswordResetToken_ExpiresUtc` in an additive migration, after approval.

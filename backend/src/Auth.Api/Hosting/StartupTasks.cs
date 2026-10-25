@@ -93,12 +93,20 @@ internal sealed partial class RetentionPurgeService(
     IServiceScopeFactory scopes,
     RetentionOptions options,
     TimeProvider time,
+    IHostEnvironment environment,
     ILogger<RetentionPurgeService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.Enabled)
         {
+            // T17 audit MEDIUM-2: without the purge, unauthenticated events (failed logins, sign-ups, reset requests)
+            // grow the audit table without bound. Production must enable it.
+            if (!environment.IsDevelopment())
+            {
+                LogRetentionDisabled(logger);
+            }
+
             return;
         }
 
@@ -125,6 +133,9 @@ internal sealed partial class RetentionPurgeService(
 
     [LoggerMessage(EventId = 5410, Level = LogLevel.Information, Message = "Retention purge: {Erased} pending registration(s) erased; deleted {Verification} verification link(s), {Reset} reset link(s), {Refresh} refresh token row(s), {Audit} audit row(s)")]
     private static partial void LogPurged(ILogger logger, int erased, int verification, int reset, int refresh, int audit);
+
+    [LoggerMessage(EventId = 5412, Level = LogLevel.Warning, Message = "Retention:Enabled is false: audit rows and spent tokens are never deleted and the audit table grows without bound; enable it in production")]
+    private static partial void LogRetentionDisabled(ILogger logger);
 
     [LoggerMessage(EventId = 5411, Level = LogLevel.Warning, Message = "Retention purge failed ({ExceptionType}); it runs again at the next interval")]
     private static partial void LogPurgeFailed(ILogger logger, string exceptionType);

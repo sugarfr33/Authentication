@@ -44,24 +44,55 @@ public sealed class RetentionPurgeTests(SqlServerDatabaseFixture database) : Rep
         Assert.Equal(2, (await FamilyAsync(live)).Count);
     }
 
+    /// <summary>Review MEDIUM-1: a statement deletes at most a batch of ROWS, even of one long family.</summary>
     [Fact]
-    public async Task A_batch_deletes_at_most_its_size_in_whole_families()
+    public async Task A_long_family_is_removed_over_several_row_bounded_statements_and_nothing_else_is_touched()
     {
         User user = await UserAsync();
-        List<Guid> families = [.. Enumerable.Range(0, 5).Select(_ => Guid.NewGuid())];
-        foreach (Guid family in families)
+        Guid longFamily = Guid.NewGuid();
+        List<RefreshToken> chain = [.. Enumerable.Range(0, 25).Select(i => Token(user.Id, longFamily, Utc(2001, 1, 1).AddMinutes(i), Utc(2001, 1, 15), revokedUtc: Utc(2001, 1, 1).AddMinutes(i + 1)))];
+        for (int i = 0; i < chain.Count - 1; i++)
         {
-            await SeedAsync(
-                Token(user.Id, family, Utc(2001, 1, 1), Utc(2001, 1, 15), revokedUtc: Utc(2001, 1, 2)),
-                Token(user.Id, family, Utc(2001, 1, 2), Utc(2001, 1, 16)));
+            chain[i].ReplacedByTokenId = chain[i + 1].Id;
         }
 
-        int first = await RepositoryAsync(r => r.DeleteEndedRefreshFamiliesAsync(Utc(2001, 6, 1), 2, Ct));
+        Guid lateFamily = Guid.NewGuid();
+        Guid liveFamily = Guid.NewGuid();
+        await SeedAsync([.. Enumerable.Reverse(chain)]);
+        await SeedAsync(
+            Token(user.Id, lateFamily, Utc(2001, 1, 1), Utc(2001, 12, 31)),
+            Token(user.Id, liveFamily, Utc(2001, 1, 1), DateTime.UtcNow.AddDays(1)));
+        RetentionOptions options = new() { RefreshTokenBatchSize = 10, MaxBatchesPerRun = 1 };
+        DateTime now = Utc(2001, 7, 1);
 
-        Assert.Equal(4, first);
-        List<RefreshToken> left = await WithContextAsync(c => c.RefreshToken.AsNoTracking().Where(t => t.UserId == user.Id).ToListAsync());
-        Assert.Equal(6, left.Count);
-        Assert.All(left.GroupBy(t => t.FamilyId), family => Assert.Equal(2, family.Count()));
+        await PurgeAsync(options, now);
+        int afterOneRun = (await FamilyAsync(longFamily)).Count;
+        for (int run = 0; run < 10 && (await FamilyAsync(longFamily)).Count > 0; run++)
+        {
+            await PurgeAsync(options, now);
+        }
+
+        Assert.InRange(25 - afterOneRun, 1, 10);
+        Assert.Empty(await FamilyAsync(longFamily));
+        Assert.Single(await FamilyAsync(lateFamily));
+        Assert.Single(await FamilyAsync(liveFamily));
+    }
+
+    /// <summary>Review LOW-4: rows of event types that no longer exist follow the normal retention.</summary>
+    [Fact]
+    public async Task Audit_rows_of_unknown_event_types_are_purged_after_the_normal_retention()
+    {
+        User user = await UserAsync();
+        AuditLog legacy = TestData.AuditLog(user.Id);
+        (legacy.EventType, legacy.OccurredUtc) = ("LegacyRemovedEvent", Utc(2004, 1, 1));
+        await SeedAsync(legacy);
+
+        await PurgeAsync(new RetentionOptions(), Utc(2004, 6, 1));
+        bool keptWithinRetention = await WithContextAsync(c => c.AuditLog.AnyAsync(a => a.Id == legacy.Id));
+        await PurgeAsync(new RetentionOptions(), Utc(2005, 1, 2));
+
+        Assert.True(keptWithinRetention);
+        Assert.False(await WithContextAsync(c => c.AuditLog.AnyAsync(a => a.Id == legacy.Id)));
     }
 
     [Fact]
@@ -116,8 +147,12 @@ public sealed class RetentionPurgeTests(SqlServerDatabaseFixture database) : Rep
     public void Retention_settings_that_would_purge_too_eagerly_are_refused()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new RetentionOptions { HighVolumeAuditLog = TimeSpan.FromDays(1) }.Validated());
-        Assert.Throws<ArgumentOutOfRangeException>(() => new RetentionOptions { AuditLog = TimeSpan.FromDays(30) }.Validated());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RetentionOptions { AuditLog = TimeSpan.FromDays(60) }.Validated());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RetentionOptions { AuditLog = TimeSpan.FromDays(29), HighVolumeAuditLog = TimeSpan.FromDays(7) }.Validated());
         Assert.Throws<ArgumentOutOfRangeException>(() => new RetentionOptions { BatchSize = 0 }.Validated());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RetentionOptions { BatchSize = 4001 }.Validated());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RetentionOptions { RefreshTokenBatchSize = 4001 }.Validated());
+        new RetentionOptions { AuditLog = TimeSpan.FromDays(30), HighVolumeAuditLog = TimeSpan.FromDays(7), BatchSize = 4000 }.Validated();
         Assert.False(new RetentionOptions().Validated().Enabled);
     }
 

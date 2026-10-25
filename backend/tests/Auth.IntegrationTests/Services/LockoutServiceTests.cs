@@ -119,20 +119,36 @@ public sealed class LockoutServiceTests : RepositoryTestBase, IAsyncDisposable
         Assert.True(row.LockoutEndUtc > clock.UtcNow);
     }
 
-    /// <summary>T11 audit LOW-4: failures spread out over more than the window never add up to a lock.</summary>
+    /// <summary>T17 audit MEDIUM-1: quiet time decays the counter by one per full window (1 h), never resets it.</summary>
     [Fact]
-    public async Task Failures_older_than_the_window_are_forgotten()
+    public async Task Failures_decay_by_one_per_quiet_window()
     {
         User user = await SeedUserAsync();
         await FailAsync(user.Id, 4);
-        clock.Advance(TimeSpan.FromMinutes(15));
 
-        LockoutResult afterQuiet = await RegisterFailureAsync(user.Id);
-        clock.Advance(TimeSpan.FromMinutes(14));
-        LockoutResult withinWindow = await FailAsync(user.Id, 3);
+        clock.Advance(TimeSpan.FromMinutes(59));
+        LockoutResult withinWindow = await RegisterFailureAsync(user.Id);
+        clock.Advance(TimeSpan.FromHours(2) + TimeSpan.FromMinutes(30));
+        LockoutResult afterTwoWindows = await RegisterFailureAsync(user.Id);
 
-        Assert.Equal((false, 1), (afterQuiet.IsLockedOut, afterQuiet.FailedCount));
-        Assert.Equal((false, 4), (withinWindow.IsLockedOut, withinWindow.FailedCount));
+        Assert.True(withinWindow.IsLockedOut);
+        Assert.Equal((false, 1), (afterTwoWindows.IsLockedOut, afterTwoWindows.FailedCount));
+    }
+
+    /// <summary>A guesser pacing one failure per hour after a burst of four never gets a free fifth guess window.</summary>
+    [Fact]
+    public async Task Pacing_after_a_burst_allows_about_one_guess_per_window()
+    {
+        User user = await SeedUserAsync();
+        await FailAsync(user.Id, 4);
+        List<int> counts = [];
+        for (int hour = 0; hour < 5; hour++)
+        {
+            clock.Advance(TimeSpan.FromHours(1));
+            counts.Add((await RegisterFailureAsync(user.Id)).FailedCount);
+        }
+
+        Assert.Equal([4, 4, 4, 4, 4], counts);
         Assert.True((await RegisterFailureAsync(user.Id)).IsLockedOut);
     }
 

@@ -35,6 +35,7 @@ public class AuditCoverageTests
         [AuditEventType.RefreshRejected] = "Services.RefreshServiceTests.A_credential_change_during_rotation_revokes_the_new_session",
         [AuditEventType.RoleAssigned] = "Services.AuthorizationSeederTests.The_bootstrap_admin_is_assigned_only_when_verified_and_audited",
         [AuditEventType.RoleRemoved] = "Services.RoleAssignmentServiceTests.Removing_a_role_ends_every_session_of_that_user_at_once_and_is_audited",
+        [AuditEventType.RegistrationDuplicate] = Trail,
         [AuditEventType.RolePermissionRemoved] = "Services.RoleAssignmentServiceTests.Removing_a_permission_from_a_role_ends_the_sessions_of_every_holder_only",
     };
 

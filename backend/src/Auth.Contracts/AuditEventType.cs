@@ -50,4 +50,10 @@ public enum AuditEventType
 
     /// <summary>A permission was taken from a role; the sessions of every holder were ended. Holds role and permission.</summary>
     RolePermissionRemoved,
+
+    /// <summary>
+    /// A sign-up for an email that already has an account (the owner was emailed). High volume: anyone can cause it, so
+    /// it is kept apart from Registered (new accounts) and gets the short retention.
+    /// </summary>
+    RegistrationDuplicate,
 }

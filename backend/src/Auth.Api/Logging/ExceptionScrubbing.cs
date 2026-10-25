@@ -81,6 +81,9 @@ internal sealed class ScrubbedException : Exception
 /// </summary>
 internal sealed class ExceptionScrubbingSink(ILogEventSink inner) : ILogEventSink, IDisposable
 {
+    /// <summary>Property holding the original exception type name (structured sinks).</summary>
+    public const string ExceptionTypeProperty = "ExceptionType";
+
     public void Emit(LogEvent logEvent)
     {
         ArgumentNullException.ThrowIfNull(logEvent);
@@ -90,12 +93,17 @@ internal sealed class ExceptionScrubbingSink(ILogEventSink inner) : ILogEventSin
             return;
         }
 
+        // Structured sinks see the exception as ScrubbedException, so the original type is kept as a property too.
+        IEnumerable<LogEventProperty> properties = logEvent.Properties
+            .Where(p => p.Key != ExceptionTypeProperty)
+            .Select(p => new LogEventProperty(p.Key, p.Value))
+            .Append(new LogEventProperty(ExceptionTypeProperty, new ScalarValue(logEvent.Exception.GetType().FullName ?? logEvent.Exception.GetType().Name)));
         inner.Emit(new LogEvent(
             logEvent.Timestamp,
             logEvent.Level,
             ScrubbedException.From(logEvent.Exception),
             logEvent.MessageTemplate,
-            logEvent.Properties.Select(p => new LogEventProperty(p.Key, p.Value)),
+            properties,
             logEvent.TraceId ?? default,
             logEvent.SpanId ?? default));
     }

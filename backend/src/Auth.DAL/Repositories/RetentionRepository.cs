@@ -22,11 +22,21 @@ public interface IRetentionRepository
     Task<int> DeleteEndedPasswordResetTokensAsync(DateTime cutoffUtc, int batch, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Deletes whole refresh families (never part of one) in which every token ended (expired or revoked) before
-    /// <paramref name="cutoffUtc"/>. A family with any token still live, or ended after the cutoff, is untouched, so the
-    /// 30-day absolute session cap (computed from the family's first token) can never be extended. Returns rows deleted.
+    /// Deletes at most <paramref name="batch"/> token ROWS of refresh families in which every token ended (expired or
+    /// revoked) before <paramref name="cutoffUtc"/>; a long family is removed over several calls. A family with any
+    /// token still live, or ended after the cutoff, is never touched, so the 30-day absolute session cap (computed from a
+    /// live family's first token) can never be extended. Splitting an ended family is safe: it stays ended (nothing can
+    /// refresh it). First the rotation links (ReplacedByTokenId, self foreign key) of up to <paramref name="batch"/> rows
+    /// of ended families are cleared, then up to <paramref name="batch"/> rows no other row points to are deleted.
+    /// Returns the rows deleted (a full batch means there may be more).
     /// </summary>
     Task<int> DeleteEndedRefreshFamiliesAsync(DateTime cutoffUtc, int batch, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes audit rows whose event type is not in <paramref name="knownEventTypes"/> (legacy or renamed events) that
+    /// occurred before <paramref name="cutoffUtc"/>. Scans; bounded by <paramref name="batch"/>.
+    /// </summary>
+    Task<int> DeleteUnknownAuditLogAsync(IReadOnlyCollection<string> knownEventTypes, DateTime cutoffUtc, int batch, CancellationToken cancellationToken);
 
     /// <summary>Deletes audit rows of one event type that occurred before <paramref name="cutoffUtc"/> (uses IX_AuditLog_EventType_OccurredUtc).</summary>
     Task<int> DeleteAuditLogAsync(string eventType, DateTime cutoffUtc, int batch, CancellationToken cancellationToken);
@@ -55,7 +65,7 @@ internal sealed class RetentionRepository(AuthDbContext context) : IRetentionRep
             .Take(batch)
             .ExecuteDeleteAsync(cancellationToken);
 
-    public Task<int> DeleteEndedRefreshFamiliesAsync(DateTime cutoffUtc, int batch, CancellationToken cancellationToken)
+    public async Task<int> DeleteEndedRefreshFamiliesAsync(DateTime cutoffUtc, int batch, CancellationToken cancellationToken)
     {
         // A token still counts while it is neither expired nor revoked before the cutoff.
         IQueryable<Guid> endedFamilies = context.RefreshToken
@@ -66,10 +76,25 @@ internal sealed class RetentionRepository(AuthDbContext context) : IRetentionRep
             .OrderBy(family => family)
             .Take(batch);
 
-        return SqlErrors.MapDeadlockAsync(() => context.RefreshToken
-            .Where(t => endedFamilies.Contains(t.FamilyId))
+        // Rows of one statement are bounded by batch (lock escalation needs about 5000 locks).
+        await SqlErrors.MapDeadlockAsync(() => context.RefreshToken
+            .Where(t => t.ReplacedByTokenId != null && endedFamilies.Contains(t.FamilyId))
+            .OrderBy(t => t.Id)
+            .Take(batch)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.ReplacedByTokenId, (Guid?)null), cancellationToken));
+        return await SqlErrors.MapDeadlockAsync(() => context.RefreshToken
+            .Where(t => endedFamilies.Contains(t.FamilyId) && !context.RefreshToken.Any(other => other.ReplacedByTokenId == t.Id))
+            .OrderBy(t => t.Id)
+            .Take(batch)
             .ExecuteDeleteAsync(cancellationToken));
     }
+
+    public Task<int> DeleteUnknownAuditLogAsync(IReadOnlyCollection<string> knownEventTypes, DateTime cutoffUtc, int batch, CancellationToken cancellationToken) =>
+        context.AuditLog
+            .Where(a => !knownEventTypes.Contains(a.EventType) && a.OccurredUtc < cutoffUtc)
+            .OrderBy(a => a.Id)
+            .Take(batch)
+            .ExecuteDeleteAsync(cancellationToken);
 
     public Task<int> DeleteAuditLogAsync(string eventType, DateTime cutoffUtc, int batch, CancellationToken cancellationToken) =>
         context.AuditLog

@@ -18,10 +18,11 @@ public sealed class LockoutOptions
     public TimeSpan MaxLockout { get; init; } = TimeSpan.FromHours(1);
 
     /// <summary>
-    /// Failures count toward a lock only while they keep coming: when the last failure is older than this, the counter
-    /// starts again from zero (default 15 minutes).
+    /// The failure counter decays by one for every full window since the last failure (default and minimum: MaxLockout,
+    /// 1 hour). A slow guesser who stays under the threshold therefore gets about one guess per window after the first
+    /// burst, never more than an attacker who triggers the lock.
     /// </summary>
-    public TimeSpan FailureWindow { get; init; } = TimeSpan.FromMinutes(15);
+    public TimeSpan FailureWindow { get; init; } = TimeSpan.FromHours(1);
 
     /// <summary>
     /// The backoff level is forgotten after this long without a new lock, counted from the end of the last lock
@@ -29,12 +30,12 @@ public sealed class LockoutOptions
     /// </summary>
     public TimeSpan LevelDecayAfter { get; init; } = TimeSpan.FromHours(24);
 
-    internal LockoutOptions Validated()
+    public LockoutOptions Validated()
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(FailuresBeforeLockout, 1, nameof(FailuresBeforeLockout));
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(BaseLockout, TimeSpan.Zero, nameof(BaseLockout));
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxLockout, BaseLockout, nameof(MaxLockout));
-        ArgumentOutOfRangeException.ThrowIfLessThan(FailureWindow, TimeSpan.FromMinutes(1), nameof(FailureWindow));
+        ArgumentOutOfRangeException.ThrowIfLessThan(FailureWindow, MaxLockout, nameof(FailureWindow));
         ArgumentOutOfRangeException.ThrowIfLessThan(LevelDecayAfter, MaxLockout, nameof(LevelDecayAfter));
         return this;
     }
@@ -98,10 +99,12 @@ internal sealed class LockoutService(IUserRepository users, IUnitOfWork unitOfWo
                     return (false, new LockoutResult(true, user.LockoutEndUtc, user.FailedLoginCount, null));
                 }
 
-                // A quiet period forgets old failures, and a long one the backoff level (T11 audit LOW-4).
-                if (user.FailedLoginCount > 0 && now - user.UpdatedUtc >= options.FailureWindow)
+                // Quiet time decays old failures by one per full window, and a long quiet period forgets the backoff
+                // level (T11 audit LOW-4; T17 audit MEDIUM-1: decay, not reset, so pacing cannot dodge the lock).
+                if (user.FailedLoginCount > 0 && now > user.UpdatedUtc)
                 {
-                    user.FailedLoginCount = 0;
+                    long windows = (now - user.UpdatedUtc).Ticks / options.FailureWindow.Ticks;
+                    user.FailedLoginCount = (int)Math.Max(0, user.FailedLoginCount - Math.Min(windows, int.MaxValue));
                 }
 
                 if (user.LockoutLevel > 0 && user.LockoutEndUtc is DateTime lastLockEnd && now - lastLockEnd >= options.LevelDecayAfter)

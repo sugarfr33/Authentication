@@ -58,7 +58,7 @@ public class AuditDetailTests
     {
         Assert.All(Enum.GetValues<AuditEventType>(), type => Assert.True(AuditCatalogue.Events.ContainsKey(type), type + " is missing from the catalogue"));
         Assert.Equal(
-            ["EmailVerificationFailed", "LoginFailed", "RefreshRejected", "RegistrationRejected", "TokenRefreshed"],
+            ["EmailVerificationFailed", "LoginFailed", "PasswordResetRequested", "RefreshRejected", "RegistrationDuplicate", "RegistrationRejected", "TokenRefreshed"],
             AuditCatalogue.HighVolumeEventNames);
     }
 

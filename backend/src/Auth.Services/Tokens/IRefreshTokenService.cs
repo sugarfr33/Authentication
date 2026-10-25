@@ -21,7 +21,7 @@ public sealed class RefreshTokenOptions
     /// </summary>
     public int MaxSessionsPerUser { get; init; } = 20;
 
-    internal RefreshTokenOptions Validated()
+    public RefreshTokenOptions Validated()
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(SlidingLifetime, TimeSpan.Zero, nameof(SlidingLifetime));
         ArgumentOutOfRangeException.ThrowIfLessThan(AbsoluteLifetime, SlidingLifetime, nameof(AbsoluteLifetime));

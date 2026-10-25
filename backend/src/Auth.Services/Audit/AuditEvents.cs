@@ -8,7 +8,11 @@ namespace Auth.Services.Audit;
 /// </summary>
 internal static class AuditEvents
 {
-    public static AuditEvent Registered(Guid userId, string outcome) => new(AuditEventType.Registered, userId, new AuditField("outcome", outcome));
+    /// <summary>A new account was created (pending verification).</summary>
+    public static AuditEvent Registered(Guid userId) => new(AuditEventType.Registered, userId, new AuditField("outcome", "created"));
+
+    /// <summary>A sign-up for an existing account (high volume, short retention).</summary>
+    public static AuditEvent RegistrationDuplicate(Guid userId) => new(AuditEventType.RegistrationDuplicate, userId);
 
     public static AuditEvent EmailVerified(Guid userId) => new(AuditEventType.EmailVerified, userId);
 

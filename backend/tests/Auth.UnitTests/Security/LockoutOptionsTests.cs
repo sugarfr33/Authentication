@@ -6,8 +6,8 @@ namespace Auth.UnitTests.Security;
 public class LockoutOptionsTests
 {
     [Theory]
-    [InlineData(0, 24)]
-    [InlineData(15, 0)]
+    [InlineData(59, 24)]
+    [InlineData(60, 0)]
     public void Windows_that_would_disable_the_protection_are_refused(int windowMinutes, int decayHours)
     {
         LockoutOptions options = new() { FailureWindow = TimeSpan.FromMinutes(windowMinutes), LevelDecayAfter = TimeSpan.FromHours(decayHours) };
@@ -20,6 +20,6 @@ public class LockoutOptionsTests
     {
         LockoutOptions options = new LockoutOptions().Validated();
 
-        Assert.Equal((TimeSpan.FromMinutes(15), TimeSpan.FromHours(24)), (options.FailureWindow, options.LevelDecayAfter));
+        Assert.Equal((TimeSpan.FromHours(1), TimeSpan.FromHours(24)), (options.FailureWindow, options.LevelDecayAfter));
     }
 }

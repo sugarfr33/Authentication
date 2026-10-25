@@ -57,9 +57,9 @@ Persisted on the User row (`FailedLoginCount`, `LockoutEndUtc`, `LockoutLevel`):
 - `FailuresBeforeLockout` (5) consecutive failures lock the account for `BaseLockout * 2^(level-1)` (1, 2, 4, 8 ... min),
   capped at `MaxLockout` (1 h). The counter restarts after each lock; failures while locked are not counted.
 - `ResetAsync` (successful sign-in) clears the counter, the lock and the backoff level.
-- **Failure window (T17).** Failures add up only while they keep coming: when the last failure is older than
-  `FailureWindow` (15 min), the counter starts again from zero. Each counted failure sets `UpdatedUtc`, which is the
-  "last failure" time (no new column).
+- **Failure decay (T17, paced by the T17 audit).** The counter decays by **one per full `FailureWindow`** since the
+  last failure. The default and minimum window is `MaxLockout` (1 h). It never resets to zero, so pacing cannot dodge
+  the lock. Each counted failure sets `UpdatedUtc`, which is the "last failure" time (no new column).
 - **Level decay (T17).** The backoff level is forgotten once `LevelDecayAfter` (24 h, at least `MaxLockout`) has passed
   since the end of the last lock (`LockoutEndUtc` is kept after it expires), so the next lock starts at 1 minute again.
 - Both are tested with a fake clock, including mutation checks (disabling either fails its test).
@@ -68,7 +68,22 @@ Persisted on the User row (`FailedLoginCount`, `LockoutEndUtc`, `LockoutLevel`):
 - Login (T13) answers a locked account exactly like a wrong password, after the same single Verify (see sign-in-and-sessions.md).
 
 Settings: section `Lockout` (`FailuresBeforeLockout`, `BaseLockout`, `MaxLockout`, `FailureWindow`, `LevelDecayAfter`).
-`FailureWindow` below 1 minute or `LevelDecayAfter` below `MaxLockout` stop the app at startup.
+`FailureWindow` or `LevelDecayAfter` below `MaxLockout` stop the app at startup (the options are validated in
+Program.cs, not on first login).
+
+### Guesses per account per day (defaults: 5 failures, lock 1 min doubling to 1 h, window 1 h)
+
+| Attacker strategy | Before T17 | T17 first version (15 min reset) | Now (decay by 1 per hour) |
+|---|---|---|---|
+| Trigger locks back to back | about 120 (5 per lock at the 1 h cap) | about 120 | about 120 |
+| Stay just under the threshold | none possible (failures never decayed) | 4 per 15 min = 384 | 4 at once, then about 1 per hour: 27 the first day, 24 a day after |
+
+- The **per-account rate limiter** (Login, 10 per 15 min, keyed on the submitted email) caps any strategy at 960 a
+  day, independent of the lockout.
+- The **password policy** (length, common-password list) makes the remaining online guessing budget useless against
+  real passwords.
+- The **level decay** (24 h) only helps an attacker who stays away for a day, which resets them to the first step
+  and also gives the owner a quiet day.
 
 ## Anti-enumeration (`IAuthTimingGuard`)
 

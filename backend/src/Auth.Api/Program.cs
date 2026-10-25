@@ -52,7 +52,8 @@ builder.Services.AddSingleton(new ClientApplicationOriginOptions { RequireHttps 
 
 // Optional overrides of the Services defaults: concurrent Argon2 operations and lockout thresholds.
 builder.Services.AddSingleton(builder.Configuration.GetSection("PasswordHashing").Get<PasswordHashingLimits>() ?? new PasswordHashingLimits());
-builder.Services.AddSingleton(builder.Configuration.GetSection("Lockout").Get<LockoutOptions>() ?? new LockoutOptions());
+builder.Services.AddSingleton((builder.Configuration.GetSection("Lockout").Get<LockoutOptions>() ?? new LockoutOptions()).Validated());
+builder.Services.AddSingleton((builder.Configuration.GetSection("RefreshTokens").Get<Auth.Services.Tokens.RefreshTokenOptions>() ?? new Auth.Services.Tokens.RefreshTokenOptions()).Validated());
 builder.Services.AddSingleton((builder.Configuration.GetSection("SessionLiveness").Get<SessionLivenessOptions>() ?? new SessionLivenessOptions()).Validated());
 builder.Services.AddSingleton(builder.Configuration.GetSection(AccountEmailOptions.SectionName).Get<AccountEmailOptions>() ?? new AccountEmailOptions());
 builder.Services.AddSingleton<Auth.Services.Audit.IAuditFailureReporter, AuditFailureLog>();

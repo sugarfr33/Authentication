@@ -32,7 +32,7 @@ public static class AuditCatalogue
         [AuditEventType.TokenRefreshed] = new([], AuditVolume.High),
         [AuditEventType.TokenReuse] = new(["revoked"]),
         [AuditEventType.SessionRevoked] = new(["session", "reason"]),
-        [AuditEventType.PasswordResetRequested] = new(["outcome"]),
+        [AuditEventType.PasswordResetRequested] = new(["outcome"], AuditVolume.High),
         [AuditEventType.PasswordReset] = new([]),
         [AuditEventType.PasswordChanged] = new([]),
         [AuditEventType.MfaEnabled] = new([], Reserved: true),
@@ -50,6 +50,7 @@ public static class AuditCatalogue
         [AuditEventType.RoleAssigned] = new(["role", "source"]),
         [AuditEventType.RoleRemoved] = new(["role"]),
         [AuditEventType.RolePermissionRemoved] = new(["role", "permission"]),
+        [AuditEventType.RegistrationDuplicate] = new([], AuditVolume.High),
     };
 
     /// <summary>
@@ -60,7 +61,7 @@ public static class AuditCatalogue
     public static readonly IReadOnlySet<string> Words = new HashSet<string>(StringComparer.Ordinal)
     {
         // Outcomes
-        "created", "duplicate", "sent",
+        "created", "sent",
 
         // Reasons
         "account_disabled", "already_verified", "credentials_changed", "ended_session_replayed", "expired", "inactive",
