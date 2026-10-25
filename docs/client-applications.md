@@ -116,6 +116,9 @@ An unknown or inactive application gets `InvalidClient`.
   `IClientSessionService.RefreshAsync`, on the same pipeline as the cookie refresh (`ISessionRefresher`). See
   authorization-code-pkce.md.
 - The browser's own cookie session keeps the default audience and global roles, as before.
+- **Resource servers (T22):** an application's own API validates these tokens with `AddCentralAuth()` from
+  `Auth.Client`, through the JWKS only. It checks `aud` = the application's audience and `client_id` = its client id
+  (docs/t22-client-extension.md).
 - `AccessTokenCookieHandler` refuses any token that carries `client_id`, even one with this API's audience (tested).
   An application token is therefore never a browser session of this API.
 

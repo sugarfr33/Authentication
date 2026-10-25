@@ -401,3 +401,7 @@ generated_code = true
 # Test projects: Given_When_Then style method names are intentional.
 [backend/tests/**.cs]
 dotnet_diagnostic.CA1707.severity = none
+
+# T22 client library: library code never captures the caller's context (await ... .ConfigureAwait(false)).
+[backend/src/Auth.Client/**.cs]
+dotnet_diagnostic.CA2007.severity = error

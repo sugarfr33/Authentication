@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    T22: AddCentralAuth() for resource servers. Validates central-auth access tokens from the published JWKS only.
+    References Auth.Contracts (claim, cookie and error names) and nothing else of the server; library code awaits with
+    ConfigureAwait(false) (CA2007 is an error for this folder, see .editorconfig).
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Auth.Contracts\Auth.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The JWKS cache internals are unit-tested directly (fake handler and clock). -->
+    <InternalsVisibleTo Include="Auth.UnitTests" />
+  </ItemGroup>
+
+</Project>

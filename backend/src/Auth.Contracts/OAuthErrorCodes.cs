@@ -19,6 +19,9 @@ public static class OAuthErrorCodes
     /// <summary>Not RFC 6749: the redirect URI is not registered, so the error is shown on our domain (never redirected).</summary>
     public const string InvalidRedirectUri = "invalid_redirect_uri";
 
+    /// <summary>RFC 6750 3.1: a resource server refused the access token (any reason; the answer never says which).</summary>
+    public const string InvalidToken = "invalid_token";
+
     /// <summary>OpenID Connect: no browser session and no login UI configured.</summary>
     public const string LoginRequired = "login_required";
 }

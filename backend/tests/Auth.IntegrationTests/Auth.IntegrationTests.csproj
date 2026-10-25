@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Auth.Api\Auth.Api.csproj" />
     <ProjectReference Include="..\..\src\Auth.DAL\Auth.DAL.csproj" />
+    <ProjectReference Include="..\..\samples\Auth.SampleApi\Auth.SampleApi.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,6 +1,24 @@
-# AddCentralAuth() client extension and sample API (T22): design note
+# AddCentralAuth() client extension and sample API (T22)
 
-Status: **design, before code.** No schema change, no new package: the client uses `Microsoft.IdentityModel.JsonWebTokens`
+Status: **implemented.** What changed or was settled during the build is marked **Built:**.
+
+Implementation map:
+
+| Part | Where |
+|---|---|
+| Registration | `CentralAuthServiceCollectionExtensions.AddCentralAuth` (Auth.Client) |
+| Options and startup checks | `CentralAuthOptions`, `CentralAuthPostConfigure`, `CentralAuthOptionsValidator` |
+| Handler | `CentralAuthHandler` (internal); hook `ICentralAuthSessionValidator` |
+| JWKS cache | `JwksCache` and `JwksCacheRegistry` (internal) |
+| Sample | `samples/Auth.SampleApi/SampleApiProgram.cs` |
+
+Tests:
+
+- integration: `Client/CentralAuthClientTests`;
+- unit: `Client/JwksCacheTests`;
+- architecture: `ProjectReferenceTests` and `LayerDependencyTests`.
+
+Scope: no schema change, no new package: the client uses `Microsoft.IdentityModel.JsonWebTokens`
 8.23.0 (already approved, same family as the server) and the ASP.NET Core shared framework.
 
 ## 1. Goal
@@ -143,6 +161,7 @@ from the JWKS alone.
 | `GET /health` | anonymous |
 | `GET /api/me` | any valid token; returns `sub`, `name`, roles, permissions |
 | `GET /api/reports` | policy: role `app:{ClientId}:reader` (an application role) |
+| `POST /api/notes` | any valid token (**Built:** an unsafe method, to show the cookie-mode XSRF rule) |
 
 - Configuration: section `CentralAuth` (`Issuer`, `Audience`, `ClientId`, optional `JwksUri`).
 - `appsettings.json` is not copied to the output of projects that reference the sample (tests), so it never overwrites
@@ -179,7 +198,22 @@ its TestServer handler):
 - IL: `Auth.Client` has no dependency on Services, DAL, Entities, Api or EF Core;
 - every `await` in `Auth.Client` uses `ConfigureAwait(false)` (CA2007 enforced by the build).
 
-## 10. Out of scope
+## 10. Built notes
+
+- **Options are read once per scheme.** The JWKS cache of a scheme is created with that scheme's options at first use;
+  a configuration reload does not change a running cache (restart the API).
+- **Lifetime against the injected `TimeProvider`.** It goes through `LifetimeValidator`, which also requires `exp`.
+- **The cache's rate limit covers every unplanned fetch.** That includes retries after a failed first fetch, so an API
+  whose central auth is down makes at most one JWKS request per `JwksMinRefreshInterval`, not one per request.
+- **A fetch has its own timeout,** never the request's cancellation, so one aborted request does not cancel the shared
+  fetch for the others.
+- **CA2007 is enforced for the `backend/src/Auth.Client` folder only.** An architecture test checks that the
+  `.editorconfig` rule exists only there; a mutation without `ConfigureAwait(false)` fails the build.
+- **Rotation test:** a shifted-clock central auth adds a key, then signs with it. With a 1-hour refresh interval, the
+  sample accepts the new token only through the unknown-kid refresh (exactly one extra fetch). Five tokens with unknown
+  kids right after cause no further fetch.
+
+## 11. Out of scope
 
 - An introspection or back-channel logout endpoint on central auth (the hook is ready for it).
 - A NuGet package (`IsPackable` stays false; the project is referenced).

@@ -13,6 +13,8 @@ public class LayerDependencyTests
     private static readonly Assembly Dal = typeof(Auth.DAL.AssemblyMarker).Assembly;
     private static readonly Assembly Entities = typeof(Auth.Entities.AssemblyMarker).Assembly;
     private static readonly Assembly Contracts = typeof(Auth.Contracts.AssemblyMarker).Assembly;
+    private static readonly Assembly Client = typeof(Auth.Client.CentralAuthOptions).Assembly;
+    private static readonly Assembly SampleApi = typeof(Auth.SampleApi.SampleApiProgram).Assembly;
 
     public static TheoryData<string, string[]> ForbiddenDependencies => new()
     {
@@ -20,8 +22,22 @@ public class LayerDependencyTests
         { "Auth.Services", [EfCore, "Auth.Api"] },
         { "Auth.DAL", ["Auth.Services", "Auth.Contracts", "Auth.Api"] },
         { "Auth.Entities", ["Auth.DAL", "Auth.Services", "Auth.Contracts", "Auth.Api", EfCore] },
-        { "Auth.Contracts", ["Auth.Entities", "Auth.DAL", "Auth.Services", "Auth.Api", EfCore] },
+        { "Auth.Contracts", ["Auth.Entities", "Auth.DAL", "Auth.Services", "Auth.Api", EfCore, "Auth.Client"] },
+
+        // T22: the client library trusts central auth through the JWKS only: no server code, no database.
+        { "Auth.Client", ["Auth.Entities", "Auth.DAL", "Auth.Services", "Auth.Api", EfCore, "Microsoft.Data.SqlClient"] },
+        { "Auth.SampleApi", ["Auth.Entities", "Auth.DAL", "Auth.Services", "Auth.Api", EfCore, "Microsoft.Data.SqlClient"] },
     };
+
+    /// <summary>T22: no server project depends on the client library (it is for other APIs).</summary>
+    [Theory]
+    [InlineData("Auth.Api")]
+    [InlineData("Auth.Services")]
+    [InlineData("Auth.DAL")]
+    [InlineData("Auth.Entities")]
+    [InlineData("Auth.Contracts")]
+    public void Server_assemblies_do_not_reference_the_client_library(string assemblyName) =>
+        Assert.DoesNotContain(Resolve(assemblyName).GetReferencedAssemblies(), a => a.Name is "Auth.Client" or "Auth.SampleApi");
 
     [Theory]
     [MemberData(nameof(ForbiddenDependencies))]
@@ -51,6 +67,8 @@ public class LayerDependencyTests
         "Auth.DAL" => Dal,
         "Auth.Entities" => Entities,
         "Auth.Contracts" => Contracts,
+        "Auth.Client" => Client,
+        "Auth.SampleApi" => SampleApi,
         _ => throw new ArgumentOutOfRangeException(nameof(name), name, null),
     };
 }
