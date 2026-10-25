@@ -30,5 +30,8 @@ internal sealed class ClientApplicationConfiguration : IEntityTypeConfiguration<
             .ValueGeneratedNever();
 
         builder.HasIndex(c => c.ClientId).IsUnique().HasDatabaseName("UQ_ClientApplication_ClientId");
+
+        // T18: one audience per application, so tokens of two applications are never interchangeable.
+        builder.HasIndex(c => c.Audience).IsUnique().HasDatabaseName("UQ_ClientApplication_Audience");
     }
 }

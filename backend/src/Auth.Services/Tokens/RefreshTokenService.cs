@@ -2,6 +2,7 @@ using System.Data;
 using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
+using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 
 namespace Auth.Services.Tokens;
@@ -35,7 +36,7 @@ internal sealed class RefreshTokenService(
             && await applications.GetByIdAsync(applicationId, cancellationToken) is not { IsActive: true })
         {
             // Defence in depth (T18): callers check first, but no family is ever started for an inactive application.
-            throw new InvalidOperationException("Refresh tokens are not issued for an unknown or inactive client application.");
+            throw new InactiveClientApplicationException();
         }
 
         DateTime now = clock.UtcNow;

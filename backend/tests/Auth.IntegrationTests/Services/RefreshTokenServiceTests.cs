@@ -219,7 +219,7 @@ public sealed class RefreshTokenServiceTests : RepositoryTestBase, IAsyncDisposa
         Assert.Equal(RotationStatus.Invalid, (await RotateAsync(beforeDeactivation.Token, Browser)).Status);
 
         // T18: no family is ever started for an inactive application.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => IssueAsync(active.Id, disabledApp.Id, Browser));
+        await Assert.ThrowsAsync<Auth.Services.ClientApplications.InactiveClientApplicationException>(() => IssueAsync(active.Id, disabledApp.Id, Browser));
 
         RotationResult ok = await RotateAsync((await IssueAsync(active.Id, enabledApp.Id, Browser)).Token, Browser);
         Assert.Equal(RotationStatus.Rotated, ok.Status);

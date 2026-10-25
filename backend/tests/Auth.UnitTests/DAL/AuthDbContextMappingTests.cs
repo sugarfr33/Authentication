@@ -137,11 +137,12 @@ public class AuthDbContextMappingTests
         ["UserRole"] = ["IX_UserRole_RoleId (RoleId)"],
         ["Permission"] = ["UQ_Permission_Code UNIQUE (Code)"],
         ["RolePermission"] = ["IX_RolePermission_PermissionId (PermissionId)"],
-        ["ClientApplication"] = ["UQ_ClientApplication_ClientId UNIQUE (ClientId)"],
+        ["ClientApplication"] = ["UQ_ClientApplication_ClientId UNIQUE (ClientId)", "UQ_ClientApplication_Audience UNIQUE (Audience)"],
         ["RefreshToken"] =
         [
             "UQ_RefreshToken_TokenHash UNIQUE (TokenHash)",
             "IX_RefreshToken_FamilyId (FamilyId)",
+            "IX_RefreshToken_ExpiresUtc (ExpiresUtc)",
             "IX_RefreshToken_UserId_RevokedUtc (UserId, RevokedUtc)",
             "IX_RefreshToken_ClientApplicationId (ClientApplicationId)",
             "IX_RefreshToken_ReplacedByTokenId (ReplacedByTokenId)",
@@ -150,11 +151,13 @@ public class AuthDbContextMappingTests
         [
             "UQ_PasswordResetToken_TokenHash UNIQUE (TokenHash)",
             "IX_PasswordResetToken_UserId (UserId)",
+            "IX_PasswordResetToken_ExpiresUtc (ExpiresUtc)",
         ],
         ["EmailVerificationToken"] =
         [
             "UQ_EmailVerificationToken_TokenHash UNIQUE (TokenHash)",
             "IX_EmailVerificationToken_UserId (UserId)",
+            "IX_EmailVerificationToken_ExpiresUtc (ExpiresUtc)",
         ],
         ["AuditLog"] =
         [

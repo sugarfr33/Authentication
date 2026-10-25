@@ -19,8 +19,10 @@ internal sealed record ValidClientApplication(
 /// normalized. Outside Development https only; in Development plain http only for loopback hosts.</item>
 /// <item>Redirect and post-logout URIs: absolute, same scheme rule, no fragment, user info or wildcard; matched exactly
 /// later (so no open redirect).</item>
-/// <item>Audience: an absolute URI (for example <c>api://orders</c>), never the API's own default audience, so a token
-/// for an application can never be used against this API (app-scoped roles cannot satisfy role:Admin).</item>
+/// <item>Audience: an https or api URI (for example <c>api://orders</c>) without user info, query or fragment, stored in
+/// canonical form (lower-case scheme and host, no default port, no trailing slash) so lookalike spellings cannot be
+/// registered twice; never the API's own default audience (compared canonically), so a token for an application can
+/// never be used against this API (app-scoped roles cannot satisfy role:Admin).</item>
 /// <item>Caps: 10 entries per list, 512 characters per URI, 256 per origin and audience.</item>
 /// </list>
 /// </summary>
@@ -53,7 +55,7 @@ internal sealed partial class ClientApplicationValidator(bool requireHttps, stri
             errors["name"] = ["Name is required, at most 128 characters, without control characters."];
         }
 
-        string audience = (request.Audience ?? string.Empty).Trim();
+        string audience = CanonicalAudience((request.Audience ?? string.Empty).Trim()) ?? string.Empty;
         if (!IsValidAudience(audience))
         {
             errors["audience"] = ["Audience must be an absolute URI of at most 256 characters, without fragment, wildcard or spaces, and must differ from this API's audience."];
@@ -126,12 +128,31 @@ internal sealed partial class ClientApplicationValidator(bool requireHttps, stri
         return uri.AbsoluteUri;
     }
 
-    private bool IsValidAudience(string audience) =>
-        audience.Length is > 0 and <= MaxAudienceLength
-        && !HasForbiddenCharacters(audience)
-        && !audience.Contains('#', StringComparison.Ordinal)
-        && Uri.TryCreate(audience, UriKind.Absolute, out _)
-        && !string.Equals(audience.TrimEnd('/'), defaultAudience.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+    private bool IsValidAudience(string canonical) =>
+        canonical.Length is > 0 and <= MaxAudienceLength
+        && !string.Equals(canonical, CanonicalAudience(defaultAudience) ?? defaultAudience.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The canonical audience: scheme https or api only (never file, http or javascript), no user info, query or
+    /// fragment, lower-case scheme and host, default port dropped, trailing slash trimmed. Null when not acceptable.
+    /// </summary>
+    internal static string? CanonicalAudience(string value)
+    {
+        if (value.Length is 0 or > MaxAudienceLength || HasForbiddenCharacters(value) || value.Contains('#', StringComparison.Ordinal)
+            || !Uri.TryCreate(value, UriKind.Absolute, out Uri? uri))
+        {
+            return null;
+        }
+
+        string scheme = uri.Scheme.ToLowerInvariant();
+        if (scheme is not ("https" or "api") || uri.Host.Length == 0 || uri.UserInfo.Length > 0 || uri.Query.Length > 0)
+        {
+            return null;
+        }
+
+        string authority = uri.IsDefaultPort || uri.Port < 0 ? uri.Host : uri.Host + ":" + uri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return scheme + "://" + authority.ToLowerInvariant() + uri.AbsolutePath.TrimEnd('/');
+    }
 
     /// <summary>https always; plain http only for loopback, and only when https is not required (Development).</summary>
     private bool IsAllowedScheme(string normalizedOrigin) =>

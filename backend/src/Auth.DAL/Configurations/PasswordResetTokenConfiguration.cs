@@ -23,5 +23,6 @@ internal sealed class PasswordResetTokenConfiguration : IEntityTypeConfiguration
 
         builder.HasIndex(t => t.TokenHash).IsUnique().HasDatabaseName("UQ_PasswordResetToken_TokenHash");
         builder.HasIndex(t => t.UserId).HasDatabaseName("IX_PasswordResetToken_UserId");
+        builder.HasIndex(t => t.ExpiresUtc).HasDatabaseName("IX_PasswordResetToken_ExpiresUtc");
     }
 }

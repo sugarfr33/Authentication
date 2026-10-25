@@ -68,8 +68,10 @@ internal static class AuditEvents
     public static AuditEvent AppCreated(Guid applicationId, string source) =>
         new(AuditEventType.AppCreated, null, new AuditField("app", applicationId), new AuditField("source", source));
 
-    public static AuditEvent AppUpdated(Guid applicationId, bool active) =>
-        new(AuditEventType.AppUpdated, null, new AuditField("app", applicationId), new AuditField("active", active));
+    /// <summary>Settings changed or activated; <paramref name="revoked"/> is set when an audience change ended its sessions.</summary>
+    public static AuditEvent AppUpdated(Guid applicationId, bool active, int? revoked = null) => revoked is int count
+        ? new(AuditEventType.AppUpdated, null, new AuditField("app", applicationId), new AuditField("active", active), new AuditField("revoked", count))
+        : new(AuditEventType.AppUpdated, null, new AuditField("app", applicationId), new AuditField("active", active));
 
     public static AuditEvent AppDeactivated(Guid applicationId, int revoked) =>
         new(AuditEventType.AppDeactivated, null, new AuditField("app", applicationId), new AuditField("revoked", revoked));

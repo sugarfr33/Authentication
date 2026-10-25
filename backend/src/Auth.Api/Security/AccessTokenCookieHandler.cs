@@ -48,6 +48,13 @@ internal sealed class AccessTokenCookieHandler(
             return AuthenticateResult.Fail("Invalid access token.");
         }
 
+        // Defence in depth (T18): a token minted for a client application is never a browser session of this API, even
+        // if it were ever issued with this API's audience.
+        if (result.ClaimsIdentity.FindFirst(AuthClaimTypes.ClientId) is not null)
+        {
+            return AuthenticateResult.Fail("Invalid access token.");
+        }
+
         // A valid signature is not enough: the session (sid) must still be live and the user active, so logout,
         // revoking a session, a password change and deactivation take effect within the short cache time. A token
         // without a session, or a failed lookup, fails closed.

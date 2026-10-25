@@ -35,7 +35,8 @@ public sealed class ClientApplicationApiTests(ApiFixture api)
         Assert.Equal([app.Audience], token.Audiences);
         Assert.Equal(app.ClientId, token.GetClaim(AuthClaimTypes.ClientId).Value);
         Assert.Equal(session.RefreshToken.FamilyId.ToString(), token.GetClaim(AuthClaimTypes.SessionId).Value);
-        Assert.Contains(token.Claims, c => c.Type == AuthClaimTypes.Role && c.Value == AuthRoles.Admin);
+        Assert.Contains(token.Claims, c => c.Type == AuthClaimTypes.Role && c.Value == "app:" + app.ClientId + ":" + AuthRoles.Admin);
+        Assert.DoesNotContain(token.Claims, c => c.Type == AuthClaimTypes.Role && c.Value == AuthRoles.Admin);
         Assert.Contains(token.Claims, c => c.Type == AuthClaimTypes.Permission && c.Value == AuthPermissions.UsersWrite);
         Assert.Equal(app.Id, session.RefreshToken.ClientApplicationId);
 
@@ -46,6 +47,28 @@ public sealed class ClientApplicationApiTests(ApiFixture api)
         Assert.Equal(HttpStatusCode.Unauthorized, (await browser.GetAsync(TestEndpoints.Prefix + "/policy/" + AuthPolicies.AdminRole)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await browser.GetAsync(TestEndpoints.Prefix + "/policy/" + AuthPermissions.UsersWrite)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await browser.GetAsync("/api/v1/auth/me")).StatusCode);
+    }
+
+    /// <summary>Defence in depth: a server-signed token with this API's audience but a client_id is still refused.</summary>
+    [Fact]
+    public async Task A_token_with_a_client_id_is_never_a_browser_session_of_this_API()
+    {
+        AccessToken forged;
+        await using (AsyncServiceScope scope = api.Factory.Services.CreateAsyncScope())
+        {
+            ITokenService tokens = scope.ServiceProvider.GetRequiredService<ITokenService>();
+            IRefreshTokenService refresh = scope.ServiceProvider.GetRequiredService<IRefreshTokenService>();
+            IssuedRefreshToken family = await refresh.IssueAsync(ApiFixture.UserId, null, new RefreshContext("203.0.113.9", "tests"), CancellationToken.None);
+            forged = await tokens.CreateAccessTokenAsync(
+                new AccessTokenRequest(ApiFixture.UserId, "api.user@example.test", "Api User", [AuthRoles.Admin], [AuthPermissions.UsersWrite], ApiFixture.Issuer, "some-app", family.FamilyId),
+                CancellationToken.None);
+        }
+
+        using Browser browser = new(api.Factory);
+        await browser.GetAsync(TestEndpoints.Prefix + "/ping");
+        browser.Plant(AuthCookieNames.Access, forged.Jwt);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await browser.GetAsync(TestEndpoints.Prefix + "/policy/" + AuthPolicies.AdminRole)).StatusCode);
     }
 
     [Fact]

@@ -128,6 +128,10 @@ namespace Auth.DAL.Migrations
                     b.HasKey("Id")
                         .HasName("PK_ClientApplication");
 
+                    b.HasIndex("Audience")
+                        .IsUnique()
+                        .HasDatabaseName("UQ_ClientApplication_Audience");
+
                     b.HasIndex("ClientId")
                         .IsUnique()
                         .HasDatabaseName("UQ_ClientApplication_ClientId");
@@ -179,6 +183,9 @@ namespace Auth.DAL.Migrations
 
                     b.HasKey("Id")
                         .HasName("PK_EmailVerificationToken");
+
+                    b.HasIndex("ExpiresUtc")
+                        .HasDatabaseName("IX_EmailVerificationToken_ExpiresUtc");
 
                     b.HasIndex("TokenHash")
                         .IsUnique()
@@ -256,6 +263,9 @@ namespace Auth.DAL.Migrations
 
                     b.HasKey("Id")
                         .HasName("PK_PasswordResetToken");
+
+                    b.HasIndex("ExpiresUtc")
+                        .HasDatabaseName("IX_PasswordResetToken_ExpiresUtc");
 
                     b.HasIndex("TokenHash")
                         .IsUnique()
@@ -353,6 +363,9 @@ namespace Auth.DAL.Migrations
 
                     b.HasIndex("ClientApplicationId")
                         .HasDatabaseName("IX_RefreshToken_ClientApplicationId");
+
+                    b.HasIndex("ExpiresUtc")
+                        .HasDatabaseName("IX_RefreshToken_ExpiresUtc");
 
                     b.HasIndex("FamilyId")
                         .HasDatabaseName("IX_RefreshToken_FamilyId");

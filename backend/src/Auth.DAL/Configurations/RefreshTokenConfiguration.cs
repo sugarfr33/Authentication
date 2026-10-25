@@ -56,6 +56,7 @@ internal sealed class RefreshTokenConfiguration : IEntityTypeConfiguration<Refre
 
         builder.HasIndex(t => t.TokenHash).IsUnique().HasDatabaseName("UQ_RefreshToken_TokenHash");
         builder.HasIndex(t => t.FamilyId).HasDatabaseName("IX_RefreshToken_FamilyId");
+        builder.HasIndex(t => t.ExpiresUtc).HasDatabaseName("IX_RefreshToken_ExpiresUtc");
         builder.HasIndex(t => new { t.UserId, t.RevokedUtc }).HasDatabaseName("IX_RefreshToken_UserId_RevokedUtc");
 
         // FK support indexes (not in the plan list): without them, deleting an application or purging expired tokens

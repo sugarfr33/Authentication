@@ -71,7 +71,7 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | RoleRemoved | role (id) | normal |
 | RolePermissionRemoved | role, permission (ids) | normal |
 | AppCreated | app (id), source (registry, bootstrap) | normal |
-| AppUpdated | app (id), active | normal |
+| AppUpdated | app (id), active, revoked (count, when an audience change ended its sessions) | normal |
 | AppDeactivated | app (id), revoked (count) | normal |
 | Mfa*, AuthorizationCode*, SigningKeyRotated | reserved | |
 
@@ -98,8 +98,11 @@ user agent are personal data: export or display must follow the data-protection 
   - since T17, also PHC password hashes, matched from the `$argon2id$` marker to whitespace, a quote or a semicolon.
     The match runs through the commas of the parameters (`m=65536,t=3,p=1`), so the salt and hash are hidden too.
   - Any opaque run of 43 or more base64url or hex characters, which covers our 43-character tokens.
-  - Any run of 43 or more standard base64 characters (`+`, `/`, `=` padding) that mixes upper case, lower case and
-    digits. Long URL paths such as `/api/v1/auth/...` stay readable.
+  - Any run of 43 or more standard base64 characters (`+`, `/`, `=` padding) that mixes upper and lower case, and
+    either has a digit or contains `+` or `/` (T18 audit L7). Our lower-case URL paths such as `/api/v1/auth/...`
+    stay readable.
+  - The enricher masks a property whose redaction throws, for example a value whose `ToString` fails (fail closed,
+    tested).
   - GUIDs, trace ids and ordinary identifiers stay readable. Tested with a real Argon2 hash in a message, a property
     and an exception.
   - Pair keys match by role: exactly `code` or `code_verifier`, or a key ending in password, secret, token, apikey,
@@ -169,13 +172,12 @@ at the next interval.
   - high-volume rows go before normal rows, and runs are bounded;
   - the pending payload is erased at expiry, and the row is deleted after retention.
 
-**Follow-ups (not now):** the indexes below (need a human OK), an unlock-by-email link, and a new-device sign-in
-email.
+**Follow-ups (not now):** an unlock-by-email link and a new-device sign-in email.
 
-**Indexes (not added; schema change).** The refresh-family and one-time-token purges scan their
-tables: there is no index on `ExpiresUtc` or `UsedUtc`. That is fine at today's size and bounded per statement. If the
-tables grow, add `IX_RefreshToken_ExpiresUtc`, `IX_EmailVerificationToken_ExpiresUtc` and
-`IX_PasswordResetToken_ExpiresUtc` in an additive migration, after approval.
+**Indexes (added in T18, human approved).** `IX_RefreshToken_ExpiresUtc`, `IX_EmailVerificationToken_ExpiresUtc` and
+`IX_PasswordResetToken_ExpiresUtc` (migration `RetentionAndAudienceIndexes`). The purge queries are unchanged: their
+expiry conditions can now seek instead of scanning. The ended-family check still uses `IX_RefreshToken_FamilyId`, and
+`UsedUtc` has no index (used links are a small share of rows).
 
 ## Related
 

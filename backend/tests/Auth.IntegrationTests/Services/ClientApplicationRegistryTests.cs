@@ -62,6 +62,45 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
         Assert.Equal(AuthError.NotFound, missing.Error);
     }
 
+    /// <summary>T18 audit M1: two creates racing for one audience both pass the pre-check; the unique index lets one win.</summary>
+    [Fact]
+    public async Task Concurrent_creates_with_the_same_audience_give_exactly_one_application()
+    {
+        AudienceGate gate = new(2);
+        await using ServiceProvider gated = Build(Database.ConnectionString, gate);
+        ClientApplicationRequest first = Request();
+        ClientApplicationRequest second = first with { ClientId = "rival-" + Guid.NewGuid().ToString("N")[..10], Audience = first.Audience.ToUpperInvariant() + "/" };
+
+        ClientApplicationResult[] results = await Task.WhenAll(CreateInAsync(gated, first), CreateInAsync(gated, second));
+
+        Assert.Single(results, r => r.IsSuccess);
+        ClientApplicationResult loser = Assert.Single(results, r => !r.IsSuccess);
+        Assert.True(loser.Errors.ContainsKey("audience"));
+        Assert.Equal(2, gate.Arrived);
+    }
+
+    /// <summary>T18 audit L5: a new audience ends the application's sessions; other changes only refresh caches.</summary>
+    [Fact]
+    public async Task Changing_the_audience_ends_the_applications_sessions_but_changing_origins_does_not()
+    {
+        ClientApplicationRequest request = Request();
+        ClientApplicationResponse app = (await RegistryAsync(r => r.CreateAsync(request, true, AuditContext.None, Ct))).Application!;
+        User user = TestData.User();
+        user.EmailVerified = true;
+        await SeedAsync(user);
+        Guid family = (await SessionAsync(user.Id, app.ClientId)).Value!.RefreshToken.FamilyId;
+        ISessionLiveness liveness = services.GetRequiredService<ISessionLiveness>();
+
+        await RegistryAsync(r => r.UpdateAsync(app.Id, request with { AllowedOrigins = ["https://other-" + request.ClientId + ".example.com"] }, AuditContext.None, Ct));
+        bool liveAfterOriginChange = await liveness.IsLiveAsync(user.Id, family, Ct);
+        ClientApplicationResult moved = await RegistryAsync(r => r.UpdateAsync(app.Id, request with { Audience = request.Audience + "-v2" }, AuditContext.None, Ct));
+
+        Assert.True(liveAfterOriginChange);
+        Assert.Equal(request.Audience + "-v2", moved.Application!.Audience);
+        Assert.False(await liveness.IsLiveAsync(user.Id, family, Ct));
+        Assert.Contains(await AuditAsync(AuditEventType.AppUpdated, app.Id), a => a.Detail!.EndsWith("\"revoked\":1}", StringComparison.Ordinal));
+    }
+
     /// <summary>CORS reflects exactly the registered active origins, and a change is immediate on this instance.</summary>
     [Fact]
     public async Task The_CORS_list_follows_the_registry_at_once_on_this_instance()
@@ -111,7 +150,7 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
             RotationResult rotation = await scope.ServiceProvider.GetRequiredService<IRefreshTokenService>().RotateAsync(session.Value.RefreshToken.Token, new RefreshContext("203.0.113.1", "tests"), Ct);
             Assert.NotEqual(RotationStatus.Rotated, rotation.Status);
             Assert.Null(rotation.Token);
-            await Assert.ThrowsAsync<InvalidOperationException>(() => scope.ServiceProvider.GetRequiredService<IRefreshTokenService>().IssueAsync(user.Id, app.Id, new RefreshContext("203.0.113.1", "tests"), Ct));
+            await Assert.ThrowsAsync<InactiveClientApplicationException>(() => scope.ServiceProvider.GetRequiredService<IRefreshTokenService>().IssueAsync(user.Id, app.Id, new RefreshContext("203.0.113.1", "tests"), Ct));
         }
 
         AuditLog audit = Assert.Single(await AuditAsync(AuditEventType.AppDeactivated, app.Id));
@@ -144,7 +183,9 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
             };
 
             ClientApplicationBootstrapOutcome invalid = await BootstrapAsync(isolated, new ClientApplicationBootstrapOptions { ClientId = "central-spa", Name = "x", Audience = "https://auth.example.test", AllowedOrigins = ["*"] });
-            ClientApplicationBootstrapOutcome first = await BootstrapAsync(isolated, options);
+            ClientApplicationBootstrapOutcome[] racing = await Task.WhenAll(BootstrapAsync(isolated, options), BootstrapAsync(isolated, options));
+            ClientApplicationBootstrapOutcome first = racing.Contains(ClientApplicationBootstrapOutcome.Created) ? ClientApplicationBootstrapOutcome.Created : racing[0];
+            Assert.Contains(racing, o => o == ClientApplicationBootstrapOutcome.ApplicationsExist);
             ClientApplicationBootstrapOutcome second = await BootstrapAsync(isolated, options);
             ClientApplicationBootstrapOutcome other = await BootstrapAsync(isolated, new ClientApplicationBootstrapOptions { ClientId = "another-spa", Name = "Other", Audience = "api://other" });
 
@@ -167,7 +208,7 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
 
     public async ValueTask DisposeAsync() => await services.DisposeAsync();
 
-    private static ServiceProvider Build(string connectionString)
+    private static ServiceProvider Build(string connectionString, AudienceGate? gate = null)
     {
         IConfiguration configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -182,6 +223,14 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
         collection.AddSingleton<IEmailSender>(new CapturingEmailSender());
         collection.AddAuthServices(configuration);
         collection.AddSingleton<ITokenService, StubTokenService>();
+        if (gate is not null)
+        {
+            ServiceDescriptor real = collection.Last(d => d.ServiceType == typeof(Auth.DAL.Repositories.IClientApplicationRepository));
+            collection.AddScoped<Auth.DAL.Repositories.IClientApplicationRepository>(sp => new GatedApplications(
+                (Auth.DAL.Repositories.IClientApplicationRepository)ActivatorUtilities.CreateInstance(sp, real.ImplementationType!),
+                gate));
+        }
+
         return collection.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
     }
 
@@ -189,6 +238,13 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
     {
         await using AsyncServiceScope scope = provider.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<IClientApplicationRegistry>().BootstrapAsync(options, CancellationToken.None);
+    }
+
+    private static async Task<ClientApplicationResult> CreateInAsync(ServiceProvider provider, ClientApplicationRequest request)
+    {
+        await Task.Yield();
+        await using AsyncServiceScope scope = provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<IClientApplicationRegistry>().CreateAsync(request, true, AuditContext.None, CancellationToken.None);
     }
 
     private static ClientApplicationRequest Request()
@@ -220,6 +276,49 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
     {
         await using AsyncServiceScope scope = Database.CreateScope();
         return await query(scope.ServiceProvider.GetRequiredService<AuthDbContext>());
+    }
+
+    /// <summary>Holds every audience pre-check until all racers have made it, so they all pass it before inserting.</summary>
+    private sealed class AudienceGate(int racers)
+    {
+        private readonly TaskCompletionSource open = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int arrived;
+
+        public int Arrived => Volatile.Read(ref arrived);
+
+        public async Task WaitAsync()
+        {
+            if (Interlocked.Increment(ref arrived) >= racers)
+            {
+                open.TrySetResult();
+            }
+
+            await open.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    private sealed class GatedApplications(Auth.DAL.Repositories.IClientApplicationRepository inner, AudienceGate gate) : Auth.DAL.Repositories.IClientApplicationRepository
+    {
+        public Task<ClientApplication?> GetByIdAsync(Guid id, CancellationToken cancellationToken) => inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<ClientApplication?> GetByClientIdAsync(string clientId, CancellationToken cancellationToken) => inner.GetByClientIdAsync(clientId, cancellationToken);
+
+        public Task<IReadOnlyList<ClientApplication>> GetActiveAsync(CancellationToken cancellationToken) => inner.GetActiveAsync(cancellationToken);
+
+        public Task<IReadOnlyList<ClientApplication>> GetAllAsync(CancellationToken cancellationToken) => inner.GetAllAsync(cancellationToken);
+
+        public Task<bool> AnyAsync(CancellationToken cancellationToken) => inner.AnyAsync(cancellationToken);
+
+        public async Task<bool> IsAudienceInUseAsync(string audience, Guid? exceptId, CancellationToken cancellationToken)
+        {
+            bool inUse = await inner.IsAudienceInUseAsync(audience, exceptId, cancellationToken);
+            await gate.WaitAsync();
+            return inUse;
+        }
+
+        public Task AddAsync(ClientApplication application, CancellationToken cancellationToken) => inner.AddAsync(application, cancellationToken);
+
+        public void Update(ClientApplication application) => inner.Update(application);
     }
 
     /// <summary>The shared test database has no signing key; signing is covered by the API tests.</summary>

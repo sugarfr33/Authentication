@@ -52,7 +52,7 @@ public static class AuditCatalogue
         [AuditEventType.RolePermissionRemoved] = new(["role", "permission"]),
         [AuditEventType.RegistrationDuplicate] = new([], AuditVolume.High),
         [AuditEventType.AppCreated] = new(["app", "source"]),
-        [AuditEventType.AppUpdated] = new(["app", "active"]),
+        [AuditEventType.AppUpdated] = new(["app", "active", "revoked"]),
         [AuditEventType.AppDeactivated] = new(["app", "revoked"]),
     };
 

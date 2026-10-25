@@ -472,3 +472,56 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025040727_RetentionAndAudienceIndexes'
+)
+BEGIN
+    CREATE INDEX [IX_RefreshToken_ExpiresUtc] ON [auth].[RefreshToken] ([ExpiresUtc]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025040727_RetentionAndAudienceIndexes'
+)
+BEGIN
+    CREATE INDEX [IX_PasswordResetToken_ExpiresUtc] ON [auth].[PasswordResetToken] ([ExpiresUtc]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025040727_RetentionAndAudienceIndexes'
+)
+BEGIN
+    CREATE INDEX [IX_EmailVerificationToken_ExpiresUtc] ON [auth].[EmailVerificationToken] ([ExpiresUtc]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025040727_RetentionAndAudienceIndexes'
+)
+BEGIN
+    IF EXISTS (SELECT [Audience] FROM [auth].[ClientApplication] GROUP BY [Audience] HAVING COUNT(*) > 1) THROW 50018, 'ClientApplication rows share an Audience; give each application its own audience before applying RetentionAndAudienceIndexes (see docs/client-applications.md).', 1;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025040727_RetentionAndAudienceIndexes'
+)
+BEGIN
+    CREATE UNIQUE INDEX [UQ_ClientApplication_Audience] ON [auth].[ClientApplication] ([Audience]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025040727_RetentionAndAudienceIndexes'
+)
+BEGIN
+    INSERT INTO [auth].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261025040727_RetentionAndAudienceIndexes', N'10.0.13');
+END;
+
+COMMIT;
+GO
+

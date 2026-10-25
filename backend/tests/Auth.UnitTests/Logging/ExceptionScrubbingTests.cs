@@ -162,6 +162,27 @@ public class ExceptionScrubbingTests
         Assert.False(string.IsNullOrEmpty(result));
     }
 
+    /// <summary>T18 audit L7: a property whose rendering throws is masked instead of escaping the enricher.</summary>
+    [Fact]
+    public void A_value_that_throws_while_rendering_is_masked()
+    {
+        LogEvent logEvent = new(
+            DateTimeOffset.UtcNow,
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Value {Odd} and {Plain}"),
+            [new LogEventProperty("Odd", new ScalarValue(new ThrowingToString())), new LogEventProperty("Plain", new ScalarValue("ok"))]);
+
+        new RedactionEnricher().Enrich(logEvent, null!);
+
+        Assert.Equal("\"" + LogRedaction.Mask + "\"", logEvent.Properties["Odd"].ToString());
+        Assert.Equal("\"ok\"", logEvent.Properties["Plain"].ToString());
+    }
+
+    [Fact]
+    public void Standard_base64_without_digits_is_masked_when_it_has_plus_or_slash() =>
+        Assert.Equal(LogRedaction.Mask, LogRedaction.Redact("kZqxQpLmVbRtYwNcHsJdFaGeUiOqPz+kZqxQpLmVbRtYw/Nc"));
+
     [Fact]
     public void Non_string_scalars_are_rendered_and_scrubbed()
     {
@@ -209,6 +230,11 @@ public class ExceptionScrubbingTests
         exception,
         new MessageTemplateParser().Parse("Something failed"),
         [new LogEventProperty("Path", new ScalarValue("/api/v1/auth/login"))]);
+
+    private sealed class ThrowingToString
+    {
+        public override string ToString() => throw new InvalidOperationException("rendering failed");
+    }
 
     private sealed class CapturingSink : ILogEventSink
     {

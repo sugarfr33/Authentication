@@ -16,7 +16,7 @@ namespace Auth.IntegrationTests.DAL;
 [Collection(SqlServerTestGroup.Name)]
 public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncLifetime
 {
-    private static readonly string[] AllMigrations = ["20261024081023_InitialCreate", "20261024120957_EmailVerificationPendingRegistration"];
+    private static readonly string[] AllMigrations = ["20261024081023_InitialCreate", "20261024120957_EmailVerificationPendingRegistration", "20261025040727_RetentionAndAudienceIndexes"];
 
     private static readonly string[] Tables =
     [
@@ -84,6 +84,28 @@ public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncL
     }
 
     /// <summary>Drops any leftover copy, then optionally creates an empty database (no tables, no history).</summary>
+    /// <summary>T18: the unique audience index refuses to apply over shared audiences instead of guessing.</summary>
+    [Fact]
+    public async Task The_audience_index_migration_stops_on_shared_audiences_and_applies_once_they_are_fixed()
+    {
+        await using AuthDbContext context = await FreshContextAsync(createEmptyDatabase: false);
+        IMigrator migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261024120957_EmailVerificationPendingRegistration");
+        DateTime now = DateTime.UtcNow;
+        await context.Database.ExecuteSqlAsync($"""
+            INSERT INTO [auth].[ClientApplication] ([Id], [ClientId], [Name], [Audience], [AllowedOrigin], [RedirectUri], [PostLogoutRedirectUri], [RequirePkce], [IsActive], [CreatedUtc], [UpdatedUtc])
+            VALUES ({Guid.NewGuid()}, N'first-app', N'First', N'api://shared', N'[]', N'[]', N'[]', 1, 1, {now}, {now}),
+                   ({Guid.NewGuid()}, N'second-app', N'Second', N'api://shared', N'[]', N'[]', N'[]', 1, 1, {now}, {now})
+            """);
+
+        SqlException refused = await Assert.ThrowsAsync<SqlException>(() => migrator.MigrateAsync());
+        await context.Database.ExecuteSqlAsync($"UPDATE [auth].[ClientApplication] SET [Audience] = N'api://second' WHERE [ClientId] = N'second-app'");
+        await migrator.MigrateAsync();
+
+        Assert.Contains("share an Audience", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(await context.Database.GetPendingMigrationsAsync());
+    }
+
     private async Task<AuthDbContext> FreshContextAsync(bool createEmptyDatabase)
     {
         SqlServerDatabaseFixture.EnsureThrowawayDatabase(connectionString);

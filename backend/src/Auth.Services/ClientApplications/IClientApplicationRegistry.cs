@@ -134,11 +134,34 @@ internal sealed class ClientApplicationRegistry(
             return Conflict("audience", "Another application already uses this audience.");
         }
 
-        Apply(application, valid);
-        application.UpdatedUtc = clock.UtcNow;
-        await audits.StageAsync(AuditEvents.AppUpdated(application.Id, application.IsActive), audit, cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        // A new audience ends the application's sessions: tokens minted for the old audience must not stay usable
+        // (T18 audit L5). Origins and redirect URIs only refresh the caches.
+        bool audienceChanged = !string.Equals(application.Audience, valid.Audience, StringComparison.OrdinalIgnoreCase);
+        DateTime now = clock.UtcNow;
+        try
+        {
+            await using IUnitOfWorkTransaction transaction = await unitOfWork.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+            Apply(application, valid);
+            application.UpdatedUtc = now;
+            int? revoked = audienceChanged
+                ? await refreshTokens.RevokeAllForClientApplicationAsync(application.Id, RefreshTokenRevokedReason.Admin, now, cancellationToken)
+                : null;
+            await audits.StageAsync(AuditEvents.AppUpdated(application.Id, application.IsActive, revoked), audit, cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (UniqueConstraintViolationException ex)
+        {
+            unitOfWork.ClearChanges();
+            return ConflictFor(ex);
+        }
+
         origins.Invalidate();
+        if (audienceChanged)
+        {
+            liveness.InvalidateAll();
+        }
+
         return new ClientApplicationResult(ToResponse(application), Empty);
     }
 
@@ -183,6 +206,17 @@ internal sealed class ClientApplicationRegistry(
             await transaction.CommitAsync(cancellationToken);
         }
 
+        // A rotation that passed its active-app check just before the commit may have inserted a successor after the
+        // revoke (T18 audit L1). Such a row is inert (liveness and rotation require an active app) but is revoked too.
+        try
+        {
+            await refreshTokens.RevokeAllForClientApplicationAsync(id, RefreshTokenRevokedReason.Admin, clock.UtcNow, cancellationToken);
+        }
+        catch (DataAccessException)
+        {
+            // Best effort: the application is already inactive and such a row cannot be used.
+        }
+
         origins.Invalidate();
         liveness.InvalidateAll();
         return true;
@@ -204,7 +238,13 @@ internal sealed class ClientApplicationRegistry(
         try
         {
             ClientApplicationResult result = await CreateCoreAsync(options.ToRequest(), true, "bootstrap", AuditContext.None, cancellationToken);
-            return result.IsSuccess ? ClientApplicationBootstrapOutcome.Created : ClientApplicationBootstrapOutcome.Invalid;
+            if (result.IsSuccess)
+            {
+                return ClientApplicationBootstrapOutcome.Created;
+            }
+
+            // A conflict means another instance registered it meanwhile, not that the configuration is wrong.
+            return await applications.AnyAsync(cancellationToken) ? ClientApplicationBootstrapOutcome.ApplicationsExist : ClientApplicationBootstrapOutcome.Invalid;
         }
         catch (UniqueConstraintViolationException)
         {
@@ -239,12 +279,27 @@ internal sealed class ClientApplicationRegistry(
         application.UpdatedUtc = now;
         await applications.AddAsync(application, cancellationToken);
         await audits.StageAsync(AuditEvents.AppCreated(application.Id, source), audit, cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (UniqueConstraintViolationException ex)
+        {
+            // Lost a race with a concurrent create: the unique indexes on client id and audience decide.
+            unitOfWork.ClearChanges();
+            return ConflictFor(ex);
+        }
+
         origins.Invalidate();
         return new ClientApplicationResult(ToResponse(application), Empty);
     }
 
     private static readonly IReadOnlyDictionary<string, string[]> Empty = new Dictionary<string, string[]>();
+
+    private static ClientApplicationResult ConflictFor(UniqueConstraintViolationException ex) =>
+        ex.ConstraintName == "UQ_ClientApplication_Audience"
+            ? Conflict("audience", "Another application already uses this audience.")
+            : Conflict("clientId", "This client id is already registered.");
 
     private static ClientApplicationResult Conflict(string field, string message) =>
         new(null, new Dictionary<string, string[]> { [field] = [message] }, AuthError.ValidationFailed);

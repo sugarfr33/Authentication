@@ -10,8 +10,10 @@ namespace Auth.Services.ClientApplications;
 /// <summary>
 /// Starts a session of an already authenticated user at a registered client application: a refresh family tied to the
 /// application and an access token with <c>aud</c> = the application's audience and <c>client_id</c> = its client id,
-/// carrying global roles plus that application's roles. Used by the OAuth code exchange (T19); there is no HTTP route to
-/// it yet. An inactive or unknown application gets nothing.
+/// carrying global roles plus that application's roles, the latter prefixed <c>app:{clientId}:{name}</c> so they can
+/// never be mistaken for a global role of the same name. Used by the OAuth code exchange (T19); there is no HTTP route to
+/// it yet, and T19 must call it only after a verified code exchange bound to the same user and client. An inactive or
+/// unknown application gets nothing.
 /// </summary>
 public interface IClientSessionService
 {
@@ -49,13 +51,26 @@ internal sealed class ClientSessionService(
             user.EmailVerified,
             user.DisplayName,
             user.MfaEnabled,
-            [.. userRoles.Select(r => r.Name).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+            [.. userRoles.Select(r => r.ClientApplicationId is null ? r.Name : AppRole(application.ClientId, r.Name)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
             [.. permissions.Order(StringComparer.Ordinal)]);
 
-        IssuedRefreshToken refresh = await refreshTokens.IssueAsync(user.Id, application.Id, context, cancellationToken);
+        IssuedRefreshToken refresh;
+        try
+        {
+            refresh = await refreshTokens.IssueAsync(user.Id, application.Id, context, cancellationToken);
+        }
+        catch (InactiveClientApplicationException)
+        {
+            // Deactivated between the check above and the issue (T18 audit L4).
+            return Result.Failure<SignedIn>(AuthError.InvalidClient);
+        }
+
         AccessToken access = await tokens.CreateAccessTokenAsync(
             new AccessTokenRequest(user.Id, user.Email, user.DisplayName, profile.Roles, profile.Permissions, application.Audience, application.ClientId, refresh.FamilyId),
             cancellationToken);
         return Result.Success(new SignedIn(access, refresh, profile));
     }
+
+    /// <summary>The claim value of an application-scoped role.</summary>
+    internal static string AppRole(string clientId, string roleName) => "app:" + clientId + ":" + roleName;
 }

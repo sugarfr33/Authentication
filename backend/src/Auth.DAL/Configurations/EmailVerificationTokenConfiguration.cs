@@ -24,5 +24,6 @@ internal sealed class EmailVerificationTokenConfiguration : IEntityTypeConfigura
 
         builder.HasIndex(t => t.TokenHash).IsUnique().HasDatabaseName("UQ_EmailVerificationToken_TokenHash");
         builder.HasIndex(t => t.UserId).HasDatabaseName("IX_EmailVerificationToken_UserId");
+        builder.HasIndex(t => t.ExpiresUtc).HasDatabaseName("IX_EmailVerificationToken_ExpiresUtc");
     }
 }

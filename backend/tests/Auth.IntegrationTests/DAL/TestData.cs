@@ -27,19 +27,23 @@ internal static class TestData
         };
     }
 
-    public static ClientApplication ClientApplication(bool isActive = true) => new()
+    public static ClientApplication ClientApplication(bool isActive = true)
     {
-        Id = Guid.NewGuid(),
-        ClientId = "app-" + Guid.NewGuid().ToString("N"),
-        Name = "Test App",
-        Audience = "api://test",
-        AllowedOrigin = "[\"https://app.example.test\"]",
-        RedirectUri = "[\"https://app.example.test/callback\"]",
-        PostLogoutRedirectUri = "[]",
-        IsActive = isActive,
-        CreatedUtc = Now,
-        UpdatedUtc = Now,
-    };
+        string clientId = "app-" + Guid.NewGuid().ToString("N");
+        return new()
+        {
+            Id = Guid.NewGuid(),
+            ClientId = clientId,
+            Name = "Test App",
+            Audience = "api://" + clientId,
+            AllowedOrigin = "[\"https://app.example.test\"]",
+            RedirectUri = "[\"https://app.example.test/callback\"]",
+            PostLogoutRedirectUri = "[]",
+            IsActive = isActive,
+            CreatedUtc = Now,
+            UpdatedUtc = Now,
+        };
+    }
 
     public static Role Role(Guid? clientApplicationId = null)
     {

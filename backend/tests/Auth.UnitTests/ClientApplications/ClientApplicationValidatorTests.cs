@@ -77,6 +77,12 @@ public class ClientApplicationValidatorTests
     [InlineData("")]
     [InlineData("api://orders#x")]
     [InlineData("api://*")]
+    [InlineData("https://auth.example.test:443/")]
+    [InlineData("file:///etc/orders")]
+    [InlineData("http://orders.example.com")]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("api://orders?tenant=1")]
+    [InlineData("api://user@orders")]
     public void Bad_audiences_are_refused_including_this_APIs_own(string audience) =>
         Assert.True(Production.Validate(Request(audience: audience)).Errors.ContainsKey("audience"));
 
@@ -88,6 +94,13 @@ public class ClientApplicationValidatorTests
     [InlineData("orders/spa")]
     public void Bad_client_ids_are_refused(string clientId) =>
         Assert.True(Production.Validate(Request(clientId: clientId)).Errors.ContainsKey("clientId"));
+
+    [Theory]
+    [InlineData("API://Orders/", "api://orders")]
+    [InlineData("https://Orders.Example.com:443/v1/", "https://orders.example.com/v1")]
+    [InlineData("https://orders.example.com:8443", "https://orders.example.com:8443")]
+    public void Audiences_are_stored_in_canonical_form(string audience, string canonical) =>
+        Assert.Equal(canonical, Production.Validate(Request(audience: audience)).Valid!.Audience);
 
     [Fact]
     public void Lists_and_values_are_capped()

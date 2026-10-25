@@ -80,8 +80,10 @@ internal static partial class LogRedaction
     [GeneratedRegex(@"(?<![A-Za-z0-9_\-+/=])[A-Za-z0-9_\-+/]{43,}={0,2}(?![A-Za-z0-9_\-+/=])", RegexOptions.None, MatchTimeoutMilliseconds)]
     private static partial Regex LongBase64Value();
 
+    /// <summary>Upper and lower case, plus a digit unless the value already has a + or / (T18 audit L7).</summary>
     private static bool LooksEncoded(string value) =>
-        value.Any(char.IsAsciiLetterUpper) && value.Any(char.IsAsciiLetterLower) && value.Any(char.IsAsciiDigit);
+        value.Any(char.IsAsciiLetterUpper) && value.Any(char.IsAsciiLetterLower)
+        && (value.Any(char.IsAsciiDigit) || value.Contains('+', StringComparison.Ordinal) || value.Contains('/', StringComparison.Ordinal));
 }
 
 /// <summary>Applies <see cref="LogRedaction"/> to every property of every event, recursively.</summary>
@@ -91,7 +93,17 @@ internal sealed class RedactionEnricher : ILogEventEnricher
     {
         foreach (KeyValuePair<string, LogEventPropertyValue> property in logEvent.Properties.ToList())
         {
-            LogEventPropertyValue redacted = LogRedaction.IsSensitiveName(property.Key) ? new ScalarValue(LogRedaction.Mask) : Redact(property.Value);
+            LogEventPropertyValue redacted;
+            try
+            {
+                redacted = LogRedaction.IsSensitiveName(property.Key) ? new ScalarValue(LogRedaction.Mask) : Redact(property.Value);
+            }
+            catch (Exception)
+            {
+                // Fail closed (T18 audit L7): a value whose ToString throws, or any other surprise, is masked.
+                redacted = new ScalarValue(LogRedaction.Mask);
+            }
+
             if (!ReferenceEquals(redacted, property.Value))
             {
                 logEvent.AddOrUpdateProperty(new LogEventProperty(property.Key, redacted));
