@@ -17,6 +17,14 @@ internal sealed class ClientApplicationRepository(AuthDbContext context) : IClie
             .OrderBy(c => c.ClientId)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<ClientApplication>> GetAllAsync(CancellationToken cancellationToken) =>
+        await context.ClientApplication.OrderBy(c => c.ClientId).ToListAsync(cancellationToken);
+
+    public Task<bool> AnyAsync(CancellationToken cancellationToken) => context.ClientApplication.AnyAsync(cancellationToken);
+
+    public Task<bool> IsAudienceInUseAsync(string audience, Guid? exceptId, CancellationToken cancellationToken) =>
+        context.ClientApplication.AnyAsync(c => c.Audience == audience && c.Id != exceptId, cancellationToken);
+
     public async Task AddAsync(ClientApplication application, CancellationToken cancellationToken) =>
         await context.ClientApplication.AddAsync(application, cancellationToken);
 

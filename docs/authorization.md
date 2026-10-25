@@ -107,9 +107,12 @@ never come from headers, the body or a client-readable cookie.
 
 - No administration endpoints exist yet (role assignment, user management). They must name a permission policy, give
   roles with a `RoleAssigned` audit row, and take them away only through `IRoleAssignmentService`.
-- **T19 (OAuth, app-scoped roles):** `role:Admin` checks the `role` claim. An application role named `Admin` must never
-  satisfy it: keep audience validation strict on the API (its tokens accept only the default audience) and never mint
-  application roles into cookie-session tokens (`RolesForUser(null)` returns global roles only today).
+- **App-scoped roles (enforced since T18):** `role:Admin` checks the `role` claim. An application role named `Admin`
+  can never satisfy it, for two reasons.
+  - The API accepts only its default audience, and the registry refuses an application audience equal to it.
+  - Application roles are minted only into tokens for that application's audience.
+  - Cookie-session tokens carry global roles only.
+  - Tested: an app token with an app-scoped Admin role gets 401 on the API. Keep both rules in T19.
 - Token size: the access token travels in a cookie (browsers drop cookies over 4096 bytes). A test pins the largest
   realistic token today (every role and permission, near-limit email, 128 non-ASCII display-name characters) under 3500
   bytes; re-check it when application roles add claims.

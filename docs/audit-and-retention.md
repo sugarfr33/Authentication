@@ -70,6 +70,9 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | RoleAssigned | role, source (bootstrap, backfill) | normal |
 | RoleRemoved | role (id) | normal |
 | RolePermissionRemoved | role, permission (ids) | normal |
+| AppCreated | app (id), source (registry, bootstrap) | normal |
+| AppUpdated | app (id), active | normal |
+| AppDeactivated | app (id), revoked (count) | normal |
 | Mfa*, AuthorizationCode*, SigningKeyRotated | reserved | |
 
 **TokenRefreshed decision:** it is kept, with no sampling. It writes about one row per 15 minutes per active session. It

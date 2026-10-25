@@ -51,6 +51,9 @@ public static class AuditCatalogue
         [AuditEventType.RoleRemoved] = new(["role"]),
         [AuditEventType.RolePermissionRemoved] = new(["role", "permission"]),
         [AuditEventType.RegistrationDuplicate] = new([], AuditVolume.High),
+        [AuditEventType.AppCreated] = new(["app", "source"]),
+        [AuditEventType.AppUpdated] = new(["app", "active"]),
+        [AuditEventType.AppDeactivated] = new(["app", "revoked"]),
     };
 
     /// <summary>
@@ -73,7 +76,7 @@ public static class AuditCatalogue
         "email", "password", "displayName",
 
         // System roles and assignment sources
-        AuthRoles.Admin, AuthRoles.User, "bootstrap", "backfill",
+        AuthRoles.Admin, AuthRoles.User, "bootstrap", "backfill", "registry",
     };
 
     /// <summary>Event names (as stored in AuditLog.EventType) with <see cref="AuditVolume.High"/>.</summary>

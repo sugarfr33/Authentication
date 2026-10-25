@@ -42,6 +42,16 @@ public static class AuthServiceCollectionExtensions
             sp.GetRequiredService<LockoutOptions>().Validated()));
         services.TryAddSingleton(new ClientApplicationOriginOptions());
         services.AddSingleton<IClientApplicationOriginProvider, ClientApplicationOriginProvider>();
+        services.AddScoped<IClientApplicationRegistry>(sp => new ClientApplicationRegistry(
+            sp.GetRequiredService<IClientApplicationRepository>(),
+            sp.GetRequiredService<IRefreshTokenRepository>(),
+            sp.GetRequiredService<IAuditService>(),
+            sp.GetRequiredService<IUnitOfWork>(),
+            sp.GetRequiredService<IClientApplicationOriginProvider>(),
+            sp.GetRequiredService<ISessionLiveness>(),
+            new ClientApplicationValidator(sp.GetRequiredService<ClientApplicationOriginOptions>().RequireHttps, sp.GetRequiredService<TokenOptions>().DefaultAudience),
+            sp.GetRequiredService<IClock>()));
+        services.AddScoped<IClientSessionService, ClientSessionService>();
         services.AddTokenServices(configuration);
         services.AddAccountServices();
         services.TryAddSingleton(new AuthorizationSeedOptions());

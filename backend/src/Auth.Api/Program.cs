@@ -96,6 +96,10 @@ builder.Services.AddAuthorization(AuthorizationPolicies.Configure);
 builder.Services.AddSingleton(builder.Configuration.GetSection(AuthorizationSeedOptions.SectionName).Get<AuthorizationSeedOptions>() ?? new AuthorizationSeedOptions());
 builder.Services.AddHostedService<AuthorizationSeedOnStartup>();
 
+// Client application registry (T18): the first application (the SPA) can be registered from configuration.
+builder.Services.AddSingleton(builder.Configuration.GetSection(ClientApplicationBootstrapOptions.SectionName).Get<ClientApplicationBootstrapOptions>() ?? new ClientApplicationBootstrapOptions());
+builder.Services.AddHostedService<ClientApplicationSeedOnStartup>();
+
 // Retention purge (T17): off unless Retention:Enabled; see docs/audit-and-retention.md.
 builder.Services.AddSingleton((builder.Configuration.GetSection(RetentionOptions.SectionName).Get<RetentionOptions>() ?? new RetentionOptions()).Validated());
 builder.Services.AddHostedService<RetentionPurgeService>();

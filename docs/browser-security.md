@@ -51,6 +51,8 @@ sign-in and sign-out** before its next state-changing call. T13's login and logo
 
 - The allowed origins are active client applications' `AllowedOrigin` entries (from `IClientApplicationOriginProvider`,
   a singleton cache with a 30 s TTL) plus `BrowserProtection:TrustedOrigins`. Inactive applications are excluded.
+  Since T18 every registry change invalidates the cache, so it is immediate on the instance that made it and at most
+  30 s on the others (see client-applications.md).
 - For an allowed origin, the policy lists **exactly that origin** with `Access-Control-Allow-Credentials: true`,
   methods GET/POST/PUT/PATCH/DELETE, headers `Content-Type` and `X-XSRF-TOKEN`, and preflight max-age 10 min.
 - An unknown origin gets **no CORS headers**. A wildcard is impossible: entries like `*`, `https://*.x` or `null` are

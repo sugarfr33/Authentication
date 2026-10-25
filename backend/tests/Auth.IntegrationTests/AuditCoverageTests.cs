@@ -36,6 +36,9 @@ public class AuditCoverageTests
         [AuditEventType.RoleAssigned] = "Services.AuthorizationSeederTests.The_bootstrap_admin_is_assigned_only_when_verified_and_audited",
         [AuditEventType.RoleRemoved] = "Services.RoleAssignmentServiceTests.Removing_a_role_ends_every_session_of_that_user_at_once_and_is_audited",
         [AuditEventType.RegistrationDuplicate] = Trail,
+        [AuditEventType.AppCreated] = "Services.ClientApplicationRegistryTests.Created_applications_are_audited_listed_and_their_ids_and_audiences_are_unique",
+        [AuditEventType.AppUpdated] = "Services.ClientApplicationRegistryTests.The_CORS_list_follows_the_registry_at_once_on_this_instance",
+        [AuditEventType.AppDeactivated] = "Services.ClientApplicationRegistryTests.Deactivation_ends_the_applications_sessions_and_it_cannot_get_new_tokens",
         [AuditEventType.RolePermissionRemoved] = "Services.RoleAssignmentServiceTests.Removing_a_permission_from_a_role_ends_the_sessions_of_every_holder_only",
     };
 

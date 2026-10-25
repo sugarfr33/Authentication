@@ -14,6 +14,12 @@ public interface IClientApplicationOriginProvider
 
     /// <summary>Exact (normalized) match against <see cref="GetAllowedOriginsAsync"/>. Wildcards are never allowed.</summary>
     Task<bool> IsAllowedAsync(string origin, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Drops the cached list: the next call reads the registry. The registry calls it after every change, so a change is
+    /// immediate on this instance; other instances see it within <see cref="ClientApplicationOriginOptions.CacheDuration"/>.
+    /// </summary>
+    void Invalidate();
 }
 
 /// <summary>How long the origin allow-list is cached before the registry is read again.</summary>
@@ -37,6 +43,9 @@ internal sealed class ClientApplicationOriginProvider(
     private readonly SemaphoreSlim refreshLock = new(1, 1);
     private Snapshot? snapshot;
 
+    /// <summary>Bumped by <see cref="Invalidate"/>: a load that overlaps an invalidation is used once but not cached.</summary>
+    private long generation;
+
     public async Task<IReadOnlySet<string>> GetAllowedOriginsAsync(CancellationToken cancellationToken)
     {
         Snapshot? current = snapshot;
@@ -54,6 +63,7 @@ internal sealed class ClientApplicationOriginProvider(
                 return current.Origins;
             }
 
+            long loadedIn = Interlocked.Read(ref generation);
             await using AsyncServiceScope scope = scopeFactory.CreateAsyncScope();
             IReadOnlyList<ClientApplication> active = await scope.ServiceProvider.GetRequiredService<IClientApplicationRepository>()
                 .GetActiveAsync(cancellationToken);
@@ -70,7 +80,11 @@ internal sealed class ClientApplicationOriginProvider(
                 }
             }
 
-            snapshot = new Snapshot(clock.UtcNow, origins);
+            if (Interlocked.Read(ref generation) == loadedIn)
+            {
+                snapshot = new Snapshot(clock.UtcNow, origins);
+            }
+
             return origins;
         }
         finally
@@ -80,6 +94,12 @@ internal sealed class ClientApplicationOriginProvider(
     }
 
     public void Dispose() => refreshLock.Dispose();
+
+    public void Invalidate()
+    {
+        Interlocked.Increment(ref generation);
+        snapshot = null;
+    }
 
     public async Task<bool> IsAllowedAsync(string origin, CancellationToken cancellationToken) =>
         OriginNormalizer.TryNormalize(origin, out string normalized)

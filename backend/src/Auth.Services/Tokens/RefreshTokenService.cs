@@ -31,6 +31,12 @@ internal sealed class RefreshTokenService(
     public async Task<IssuedRefreshToken> IssueAsync(Guid userId, Guid? clientApplicationId, RefreshContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+        if (clientApplicationId is Guid applicationId
+            && await applications.GetByIdAsync(applicationId, cancellationToken) is not { IsActive: true })
+        {
+            // Defence in depth (T18): callers check first, but no family is ever started for an inactive application.
+            throw new InvalidOperationException("Refresh tokens are not issued for an unknown or inactive client application.");
+        }
 
         DateTime now = clock.UtcNow;
         Guid familyId = Guid.NewGuid();

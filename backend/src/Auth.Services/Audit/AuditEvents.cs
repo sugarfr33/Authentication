@@ -64,6 +64,16 @@ internal static class AuditEvents
 
     public static AuditEvent RoleRemoved(Guid userId, Guid roleId) => new(AuditEventType.RoleRemoved, userId, new AuditField("role", roleId));
 
+    /// <summary>A client application was registered (<paramref name="source"/>: registry or bootstrap).</summary>
+    public static AuditEvent AppCreated(Guid applicationId, string source) =>
+        new(AuditEventType.AppCreated, null, new AuditField("app", applicationId), new AuditField("source", source));
+
+    public static AuditEvent AppUpdated(Guid applicationId, bool active) =>
+        new(AuditEventType.AppUpdated, null, new AuditField("app", applicationId), new AuditField("active", active));
+
+    public static AuditEvent AppDeactivated(Guid applicationId, int revoked) =>
+        new(AuditEventType.AppDeactivated, null, new AuditField("app", applicationId), new AuditField("revoked", revoked));
+
     public static AuditEvent RolePermissionRemoved(Guid roleId, Guid permissionId) =>
         new(AuditEventType.RolePermissionRemoved, null, new AuditField("role", roleId), new AuditField("permission", permissionId));
 }

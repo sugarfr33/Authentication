@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using Auth.Services.Authorization;
+using Auth.Services.ClientApplications;
 using Auth.Services.Retention;
 using Auth.Services.Security;
 
@@ -83,6 +84,54 @@ internal sealed partial class AuthorizationSeedOnStartup(
 
     [LoggerMessage(EventId = 5401, Level = LogLevel.Warning, Message = "Authorization seed failed ({ExceptionType}); existing roles and permissions are unchanged")]
     private static partial void LogSeedFailed(ILogger logger, string exceptionType);
+}
+
+/// <summary>
+/// Registers the configured bootstrap client application (ClientApplications:Bootstrap, usually the SPA) when no
+/// application exists yet (T18). Idempotent and safe on several instances; a failure is logged and never stops the host.
+/// </summary>
+internal sealed partial class ClientApplicationSeedOnStartup(
+    IServiceScopeFactory scopes,
+    ClientApplicationBootstrapOptions options,
+    ILogger<ClientApplicationSeedOnStartup> logger) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (!options.IsConfigured)
+        {
+            return;
+        }
+
+        try
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            ClientApplicationBootstrapOutcome outcome = await scope.ServiceProvider.GetRequiredService<IClientApplicationRegistry>().BootstrapAsync(options, stoppingToken);
+            if (outcome == ClientApplicationBootstrapOutcome.Invalid)
+            {
+                LogBootstrapInvalid(logger);
+            }
+            else
+            {
+                LogBootstrap(logger, outcome);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            LogBootstrapFailed(logger, ex.GetType().Name);
+        }
+    }
+
+    [LoggerMessage(EventId = 5420, Level = LogLevel.Information, Message = "Client application bootstrap: {Outcome}")]
+    private static partial void LogBootstrap(ILogger logger, ClientApplicationBootstrapOutcome outcome);
+
+    [LoggerMessage(EventId = 5421, Level = LogLevel.Warning, Message = "ClientApplications:Bootstrap is invalid (see docs/client-applications.md); no application was registered")]
+    private static partial void LogBootstrapInvalid(ILogger logger);
+
+    [LoggerMessage(EventId = 5422, Level = LogLevel.Warning, Message = "Client application bootstrap failed ({ExceptionType}); it runs again at the next start")]
+    private static partial void LogBootstrapFailed(ILogger logger, string exceptionType);
 }
 
 /// <summary>

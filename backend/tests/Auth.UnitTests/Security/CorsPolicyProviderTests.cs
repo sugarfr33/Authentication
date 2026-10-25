@@ -54,6 +54,10 @@ public class CorsPolicyProviderTests
         public Task<IReadOnlySet<string>> GetAllowedOriginsAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlySet<string>>(set);
 
         public Task<bool> IsAllowedAsync(string origin, CancellationToken cancellationToken) => Task.FromResult(set.Contains(origin));
+
+        public void Invalidate()
+        {
+        }
     }
 
     private sealed class ProductionEnvironment : IHostEnvironment

@@ -205,12 +205,21 @@ public sealed class RefreshTokenServiceTests : RepositoryTestBase, IAsyncDisposa
     {
         User inactive = await SeedUserAsync(isActive: false);
         User active = await SeedUserAsync();
-        ClientApplication disabledApp = TestData.ClientApplication(isActive: false);
+        ClientApplication disabledApp = TestData.ClientApplication();
         ClientApplication enabledApp = TestData.ClientApplication();
         await SeedAsync(disabledApp, enabledApp);
+        IssuedRefreshToken beforeDeactivation = await IssueAsync(active.Id, disabledApp.Id, Browser);
+        await using (AsyncServiceScope scope = Database.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<AuthDbContext>().ClientApplication
+                .Where(c => c.Id == disabledApp.Id).ExecuteUpdateAsync(u => u.SetProperty(c => c.IsActive, false));
+        }
 
         Assert.Equal(RotationStatus.Invalid, (await RotateAsync((await IssueAsync(inactive.Id, null, Browser)).Token, Browser)).Status);
-        Assert.Equal(RotationStatus.Invalid, (await RotateAsync((await IssueAsync(active.Id, disabledApp.Id, Browser)).Token, Browser)).Status);
+        Assert.Equal(RotationStatus.Invalid, (await RotateAsync(beforeDeactivation.Token, Browser)).Status);
+
+        // T18: no family is ever started for an inactive application.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => IssueAsync(active.Id, disabledApp.Id, Browser));
 
         RotationResult ok = await RotateAsync((await IssueAsync(active.Id, enabledApp.Id, Browser)).Token, Browser);
         Assert.Equal(RotationStatus.Rotated, ok.Status);

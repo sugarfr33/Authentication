@@ -56,4 +56,13 @@ public enum AuditEventType
     /// it is kept apart from Registered (new accounts) and gets the short retention.
     /// </summary>
     RegistrationDuplicate,
+
+    /// <summary>A client application was registered. Holds its id and the source (bootstrap when seeded).</summary>
+    AppCreated,
+
+    /// <summary>A client application's settings changed, or it was activated again. Holds its id and active flag.</summary>
+    AppUpdated,
+
+    /// <summary>A client application was deactivated; its sessions were ended. Holds its id and the revoked count.</summary>
+    AppDeactivated,
 }

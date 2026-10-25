@@ -108,6 +108,9 @@ public interface IRefreshTokenRepository
     /// <summary>Revokes every not-yet-revoked token of the user in one UPDATE. Returns the number revoked.</summary>
     Task<int> RevokeAllForUserAsync(Guid userId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
 
+    /// <summary>Revokes every not-yet-revoked token issued to the client application, in one UPDATE. Returns the number revoked.</summary>
+    Task<int> RevokeAllForClientApplicationAsync(Guid clientApplicationId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
+
     /// <summary>Revokes every not-yet-revoked token of every user holding the role, in one UPDATE. Returns the number revoked.</summary>
     Task<int> RevokeAllForRoleHoldersAsync(Guid roleId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
 
@@ -128,7 +131,8 @@ public interface IRefreshTokenRepository
 
     /// <summary>
     /// True when the family still has a token of <paramref name="userId"/> that is neither revoked nor expired at
-    /// <paramref name="utcNow"/>, and the user is active. One query (the access-token live-session check).
+    /// <paramref name="utcNow"/>, the user is active and, for an application's family, the application is active. One
+    /// query (the access-token live-session check).
     /// </summary>
     Task<bool> IsSessionLiveAsync(Guid familyId, Guid userId, DateTime utcNow, CancellationToken cancellationToken);
 
@@ -162,6 +166,15 @@ public interface IClientApplicationRepository
     Task<ClientApplication?> GetByClientIdAsync(string clientId, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<ClientApplication>> GetActiveAsync(CancellationToken cancellationToken);
+
+    /// <summary>Every application, active or not, ordered by client id.</summary>
+    Task<IReadOnlyList<ClientApplication>> GetAllAsync(CancellationToken cancellationToken);
+
+    /// <summary>True when at least one application is registered.</summary>
+    Task<bool> AnyAsync(CancellationToken cancellationToken);
+
+    /// <summary>True when another application (not <paramref name="exceptId"/>) already uses the audience (case-insensitive).</summary>
+    Task<bool> IsAudienceInUseAsync(string audience, Guid? exceptId, CancellationToken cancellationToken);
 
     Task AddAsync(ClientApplication application, CancellationToken cancellationToken);
 
