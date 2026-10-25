@@ -20,12 +20,12 @@ public class DalSurfaceTests
     }
 
     [Fact]
-    public void DAL_contains_the_internal_DbContext_and_twelve_configurations()
+    public void DAL_contains_the_internal_DbContext_and_thirteen_configurations()
     {
         Type[] types = Dal.GetTypes();
 
         Assert.Contains(types, t => t.Name == "AuthDbContext" && !t.IsPublic && t.BaseType?.FullName == EfNamespace + ".DbContext");
-        Assert.Equal(12, types.Count(t => !t.IsPublic && t.GetInterfaces().Any(i => i.Name == "IEntityTypeConfiguration`1")));
+        Assert.Equal(13, types.Count(t => !t.IsPublic && t.GetInterfaces().Any(i => i.Name == "IEntityTypeConfiguration`1")));
     }
 
     [Fact]

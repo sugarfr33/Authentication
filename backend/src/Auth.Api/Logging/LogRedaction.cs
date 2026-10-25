@@ -49,10 +49,10 @@ internal static partial class LogRedaction
 
     /// <summary>
     /// key=value or key: value, as found in query strings, cookies and connection strings, where the key is exactly
-    /// code or code_verifier, or ends with password, passwd, pwd, secret, token, apikey, cookie or otp (so newPassword,
+    /// code, code_verifier or state (OAuth query strings), or ends with password, passwd, pwd, secret, token, apikey, cookie or otp (so newPassword,
     /// refresh_token, Cookie). Keys that only contain such a word (StatusCode, SessionId, TokenType) stay readable.
     /// </summary>
-    [GeneratedRegex(@"(?i)(?<![A-Za-z0-9_\-])(code|code_verifier|[A-Za-z_\-]*(?:password|passwd|pwd|secret|token|apikey|api_key|api-key|cookie|otp))\s*[=:]\s*""?[^&;,\s""]+", RegexOptions.None, MatchTimeoutMilliseconds)]
+    [GeneratedRegex(@"(?i)(?<![A-Za-z0-9_\-])(code|code_verifier|state|[A-Za-z_\-]*(?:password|passwd|pwd|secret|token|apikey|api_key|api-key|cookie|otp))\s*[=:]\s*""?[^&;,\s""]+", RegexOptions.None, MatchTimeoutMilliseconds)]
     private static partial Regex SensitivePair();
 
     [GeneratedRegex(@"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*", RegexOptions.None, MatchTimeoutMilliseconds)]

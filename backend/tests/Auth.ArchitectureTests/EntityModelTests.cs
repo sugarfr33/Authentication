@@ -7,7 +7,7 @@ public class EntityModelTests
 {
     private static readonly string[] TableNames =
     [
-        "User", "Role", "UserRole", "Permission", "RolePermission", "ClientApplication", "RefreshToken",
+        "User", "Role", "UserRole", "Permission", "RolePermission", "ClientApplication", "RefreshToken", "AuthorizationCode",
         "PasswordResetToken", "EmailVerificationToken", "AuditLog", "SigningKey", "MfaRecoveryCode",
     ];
 
@@ -18,7 +18,7 @@ public class EntityModelTests
     ];
 
     [Fact]
-    public void Entity_classes_are_exactly_the_twelve_table_names()
+    public void Entity_classes_are_exactly_the_thirteen_table_names()
     {
         IEnumerable<string> actual = EntityTypes().Select(t => t.Name);
 

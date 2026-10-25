@@ -166,7 +166,7 @@ internal sealed partial class RetentionPurgeService(
             {
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 RetentionPurgeResult result = await scope.ServiceProvider.GetRequiredService<IRetentionPurge>().PurgeAsync(stoppingToken);
-                LogPurged(logger, result.PendingRegistrationsErased, result.EmailVerificationTokensDeleted, result.PasswordResetTokensDeleted, result.RefreshTokensDeleted, result.AuditRowsDeleted);
+                LogPurged(logger, result.PendingRegistrationsErased, result.EmailVerificationTokensDeleted, result.PasswordResetTokensDeleted, result.AuthorizationCodesDeleted, result.RefreshTokensDeleted, result.AuditRowsDeleted);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -180,8 +180,8 @@ internal sealed partial class RetentionPurgeService(
         while (await timer.WaitForNextTickAsync(stoppingToken));
     }
 
-    [LoggerMessage(EventId = 5410, Level = LogLevel.Information, Message = "Retention purge: {Erased} pending registration(s) erased; deleted {Verification} verification link(s), {Reset} reset link(s), {Refresh} refresh token row(s), {Audit} audit row(s)")]
-    private static partial void LogPurged(ILogger logger, int erased, int verification, int reset, int refresh, int audit);
+    [LoggerMessage(EventId = 5410, Level = LogLevel.Information, Message = "Retention purge: {Erased} pending registration(s) erased; deleted {Verification} verification link(s), {Reset} reset link(s), {Codes} authorization code(s), {Refresh} refresh token row(s), {Audit} audit row(s)")]
+    private static partial void LogPurged(ILogger logger, int erased, int verification, int reset, int codes, int refresh, int audit);
 
     [LoggerMessage(EventId = 5412, Level = LogLevel.Warning, Message = "Retention:Enabled is false: audit rows and spent tokens are never deleted and the audit table grows without bound; enable it in production")]
     private static partial void LogRetentionDisabled(ILogger logger);

@@ -76,6 +76,18 @@ internal static class AuditEvents
     public static AuditEvent AppDeactivated(Guid applicationId, int revoked) =>
         new(AuditEventType.AppDeactivated, null, new AuditField("app", applicationId), new AuditField("revoked", revoked));
 
+    /// <summary>A code was issued to a signed-in user for the application (never the code itself).</summary>
+    public static AuditEvent AuthorizationCodeIssued(Guid userId, Guid applicationId) =>
+        new(AuditEventType.AuthorizationCodeIssued, userId, new AuditField("app", applicationId));
+
+    /// <summary>A code was exchanged; <paramref name="session"/> is the refresh family it started.</summary>
+    public static AuditEvent AuthorizationCodeRedeemed(Guid userId, Guid applicationId, Guid session) =>
+        new(AuditEventType.AuthorizationCodeRedeemed, userId, new AuditField("app", applicationId), new AuditField("session", session));
+
+    public static AuditEvent AuthorizationCodeRejected(Guid? userId, Guid? applicationId, string reason) => applicationId is Guid app
+        ? new(AuditEventType.AuthorizationCodeRejected, userId, new AuditField("app", app), new AuditField("reason", reason))
+        : new(AuditEventType.AuthorizationCodeRejected, userId, new AuditField("reason", reason));
+
     public static AuditEvent RolePermissionRemoved(Guid roleId, Guid permissionId) =>
         new(AuditEventType.RolePermissionRemoved, null, new AuditField("role", roleId), new AuditField("permission", permissionId));
 }

@@ -525,3 +525,80 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025043218_AuthorizationCodes'
+)
+BEGIN
+    SET XACT_ABORT ON;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025043218_AuthorizationCodes'
+)
+BEGIN
+    CREATE TABLE [auth].[AuthorizationCode] (
+        [Id] uniqueidentifier NOT NULL,
+        [CodeHash] binary(32) NOT NULL,
+        [UserId] uniqueidentifier NOT NULL,
+        [ClientApplicationId] uniqueidentifier NOT NULL,
+        [RedirectUri] nvarchar(512) NOT NULL,
+        [CodeChallenge] varchar(128) NOT NULL,
+        [CreatedUtc] datetime2(7) NOT NULL,
+        [ExpiresUtc] datetime2(7) NOT NULL,
+        [UsedUtc] datetime2(7) NULL,
+        [FamilyId] uniqueidentifier NULL,
+        CONSTRAINT [PK_AuthorizationCode] PRIMARY KEY ([Id]),
+        CONSTRAINT [CK_AuthorizationCode_CodeChallenge_Length] CHECK (LEN([CodeChallenge]) BETWEEN 43 AND 128),
+        CONSTRAINT [CK_AuthorizationCode_Expiry] CHECK ([ExpiresUtc] > [CreatedUtc]),
+        CONSTRAINT [FK_AuthorizationCode_ClientApplication_ClientApplicationId] FOREIGN KEY ([ClientApplicationId]) REFERENCES [auth].[ClientApplication] ([Id]) ON DELETE NO ACTION,
+        CONSTRAINT [FK_AuthorizationCode_User_UserId] FOREIGN KEY ([UserId]) REFERENCES [auth].[User] ([Id]) ON DELETE CASCADE
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025043218_AuthorizationCodes'
+)
+BEGIN
+    CREATE INDEX [IX_AuthorizationCode_ClientApplicationId] ON [auth].[AuthorizationCode] ([ClientApplicationId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025043218_AuthorizationCodes'
+)
+BEGIN
+    CREATE INDEX [IX_AuthorizationCode_ExpiresUtc] ON [auth].[AuthorizationCode] ([ExpiresUtc]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025043218_AuthorizationCodes'
+)
+BEGIN
+    CREATE INDEX [IX_AuthorizationCode_UserId] ON [auth].[AuthorizationCode] ([UserId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025043218_AuthorizationCodes'
+)
+BEGIN
+    CREATE UNIQUE INDEX [UQ_AuthorizationCode_CodeHash] ON [auth].[AuthorizationCode] ([CodeHash]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261025043218_AuthorizationCodes'
+)
+BEGIN
+    INSERT INTO [auth].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261025043218_AuthorizationCodes', N'10.0.13');
+END;
+
+COMMIT;
+GO
+

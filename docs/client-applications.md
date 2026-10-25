@@ -108,8 +108,10 @@ An unknown or inactive application gets `InvalidClient`.
   `InactiveClientApplicationException` (defence in depth).
 - If the application is deactivated between the check and the issue, that exception becomes `InvalidClient` too,
   never a 500.
-- **T19 criterion:** `StartAsync` mints a session for whatever user id it is given. Call it only after a verified
-  authorization-code exchange bound to the same user and the same client.
+- **T19 criterion (met):** `StartAsync` mints a session for whatever user id it is given. Its only caller is
+  `OAuthService.ExchangeAsync`, after a verified authorization-code exchange bound to the same user and the same
+  client. The refresh grant for application families is `IClientSessionService.RefreshAsync`. See
+  authorization-code-pkce.md.
 - The browser's own cookie session keeps the default audience and global roles, as before.
 - `AccessTokenCookieHandler` refuses any token that carries `client_id`, even one with this API's audience (tested).
   An application token is therefore never a browser session of this API.

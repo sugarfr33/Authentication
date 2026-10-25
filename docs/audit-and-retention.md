@@ -73,7 +73,10 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | AppCreated | app (id), source (registry, bootstrap) | normal |
 | AppUpdated | app (id), active, revoked (count, when an audience change ended its sessions) | normal |
 | AppDeactivated | app (id), revoked (count) | normal |
-| Mfa*, AuthorizationCode*, SigningKeyRotated | reserved | |
+| AuthorizationCodeIssued | app (id) | normal |
+| AuthorizationCodeRedeemed | app (id), session (id) | normal |
+| AuthorizationCodeRejected | app (id, when known), reason | **high** |
+| Mfa*, SigningKeyRotated | reserved | |
 
 **TokenRefreshed decision:** it is kept, with no sampling. It writes about one row per 15 minutes per active session. It
 is high-volume, so it gets the short retention below. Sampling would hide the refresh history of a stolen session, and

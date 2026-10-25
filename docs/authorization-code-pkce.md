@@ -1,7 +1,19 @@
-# Authorization Code + PKCE (T19): design note
+# Authorization Code + PKCE (T19)
 
-Status: **design, before code.** It needs one decision from the project lead: where authorization codes are stored.
-The recommended option is an additive table, which is a schema change and needs approval (see section 3).
+Status: **implemented.** Option A was approved by the project lead: the new table `auth.AuthorizationCode`, created
+by migration `20261025043218_AuthorizationCodes`, which starts with `SET XACT_ABORT ON`.
+
+Implementation map:
+
+| Part | Where |
+|---|---|
+| Endpoints | `OAuthEndpoints` (Auth.Api) |
+| Authorize, exchange and refresh | `IOAuthService` (Auth.Services/OAuth) |
+| App sessions | `IClientSessionService` (`StartAsync` and `RefreshAsync`) |
+| Code storage | `IAuthorizationCodeRepository` (DAL) |
+| Purge | `IRetentionRepository.DeleteEndedAuthorizationCodesAsync` |
+
+What changed from the design during the build is noted inline (**Built:**). The tests are in `OAuthApiTests`.
 
 ## 1. Scope
 
@@ -84,6 +96,17 @@ The reason goes to the audit log only. Nothing in the error body says which chec
   side effects, covered by PKCE (section 6).
 - **Rate limits:** new kinds `OAuthAuthorize` (per IP) and `OAuthToken` (per IP and per `client_id`, the "account"
   key for this path).
+  - **Built:** `OAuthAuthorize` allows 60 per minute per IP.
+  - `OAuthToken` allows 30 per minute per IP and 600 per minute per client. The per-client limit is high on purpose,
+    so that one IP cannot starve every user of an application.
+  - A form body with a duplicated or missing `client_id` goes into one shared bucket.
+- **Built: answers.**
+  - Errors are always `{"error": "<code>"}`, never a description of which check failed.
+  - Before the redirect URI is trusted: `invalid_client` or `invalid_redirect_uri` (400), or `invalid_request` for
+    duplicate parameters or a query over 4 KB.
+  - Without a session and without `OAuth:LoginUrl`: `login_required` (401).
+- **Built:** a deactivated application's origins leave the CORS and origin lists at once. Its `/token` calls are then
+  refused by the general origin check (403) before the exchange (tested: never tokens).
 
 ## 3. Where codes are stored (decision needed)
 
@@ -160,6 +183,14 @@ On `/token` with `authorization_code`:
 8. Only then call `IClientSessionService.StartAsync(userId, clientId, ...)`: the T18 criterion, this is its only
    caller.
 
+**Built:**
+
+- The code is marked used before any other check. An expired code is refused right after that.
+- A replay runs the conditional UPDATE again, finds the code already used, and revokes the family recorded in
+  `FamilyId`.
+- Narrow race: a replay that lands between the first exchange's `StartAsync` and its `SetFamilyAsync` finds no family
+  yet to revoke. It is still refused, and the window is a few milliseconds.
+
 A failed check does **not** give the code back: it stays used. A failed exchange burns the code, so an attacker cannot
 retry verifiers. The failure is audited with its reason and answered with `invalid_grant`.
 
@@ -198,6 +229,16 @@ token with `client_id` (tested in T18). `role:Admin` stays audience-strict.
   `state` and the `code_verifier` in its own tab, in memory or `sessionStorage`, and refuse a callback whose `state`
   it did not create. The injected code also fails PKCE with the victim's verifier. This is documented for T23 as a
   client requirement.
+- **What an attacker link can do.** A signed-in victim who opens a link to `/authorize` only ever causes a code to be
+  sent to a **registered** redirect URI of a **registered** application. That code is bound to the PKCE challenge in
+  the link.
+  - If the attacker made the link, the application's own verifier does not match, and the code is useless to
+    everyone.
+  - If the application started the flow, the attacker never sees the code (it goes to the application in the
+    victim's browser) and lacks the verifier anyway.
+  - `state` is required and echoed unchanged, so the application can detect a callback it did not start.
+  - Beyond what auto-approval of first-party applications implies (a signed-in user is not asked again), `/authorize`
+    gives an attacker nothing.
 - **Clickjacking:** `/authorize` never renders an approve button, and the API sends `X-Frame-Options: DENY` /
   `frame-ancestors 'none'` (T10).
 
@@ -226,6 +267,17 @@ cookie.
   - Sessions per user are capped (20), and deactivating the application kills every family (T18).
 - **Lifetimes:** access 15 min; refresh sliding 14 days and absolute 30 days, as for browser sessions. A shorter
   absolute cap for application families would be one option in `RefreshTokenOptions`. It is not proposed now.
+- **XSS trade-off (accepted, documented):**
+  - Script injected into the application can read and use the in-memory tokens while the tab is open. No storage
+    choice in the browser prevents that; only the application's own CSP and output encoding do.
+  - So keep the access token short: 15 minutes is the default, and shorter is better for applications with a large
+    attack surface. Today `TokenOptions.AccessTokenLifetime` is set in code only; binding it from configuration is
+    a small follow-up.
+  - Never write either token to `localStorage`, `sessionStorage`, IndexedDB or a cookie of the application's
+    domain.
+- **Built: the reuse grace window.** A refresh token presented again within 10 seconds with the same user agent is
+  treated as the losing side of a concurrent refresh (no revocation), as for browser sessions. After that it is reuse:
+  the family is revoked (tested).
 
 ## 8. Audit and logs
 
@@ -256,8 +308,13 @@ Logs:
    secret in logs or the audit log; Origin of another application on `/token` refused; the refresh grant bound to its
    client.
 
-## 10. Decision requested
+## 10. Decisions taken
 
-- **Storage:** option A (the new `AuthorizationCode` table, additive migration, recommended) or option B (no schema
-  change).
+- **Storage:** option A (human approved). The table has check constraints `CK_AuthorizationCode_Expiry` and
+  `CK_AuthorizationCode_CodeChallenge_Length` (43 to 128).
 - **Lifetimes:** application refresh families keep the browser-session lifetimes (14 days sliding, 30 days absolute).
+- **Reserved role names:** global role names must never start with `app:` (`RoleNames.IsReservedForApplications`).
+  Any future role-creation code must refuse them, and app tokens drop such global roles defensively.
+- **Logs:** the `state` query parameter is masked by the log redaction, like `code` and `code_verifier`.
+- **Configuration:** `OAuth:LoginUrl` must be an absolute https URL without user info or fragment (http only for
+  localhost in Development); otherwise the app stops at startup.

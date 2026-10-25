@@ -76,6 +76,10 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<RefreshRejectionLog>();
 builder.Services.AddSingleton<LivenessFailureLog>();
 builder.Services.AddSingleton<IEndpointModule, PasswordEndpoints>();
+
+// OAuth Authorization Code + PKCE (T19): login UI for users without a session; see docs/authorization-code-pkce.md.
+builder.Services.AddSingleton((builder.Configuration.GetSection(OAuthOptions.SectionName).Get<OAuthOptions>() ?? new OAuthOptions()).Validated(requireHttps: !builder.Environment.IsDevelopment()));
+builder.Services.AddSingleton<IEndpointModule, OAuthEndpoints>();
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
     context.ProblemDetails.Extensions["traceId"] = Activity.Current?.Id ?? context.HttpContext.TraceIdentifier);
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();

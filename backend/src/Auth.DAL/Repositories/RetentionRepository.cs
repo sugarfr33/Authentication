@@ -32,6 +32,9 @@ public interface IRetentionRepository
     /// </summary>
     Task<int> DeleteEndedRefreshFamiliesAsync(DateTime cutoffUtc, int batch, CancellationToken cancellationToken);
 
+    /// <summary>Deletes authorization codes used or expired before <paramref name="cutoffUtc"/> (rows, batch-bounded).</summary>
+    Task<int> DeleteEndedAuthorizationCodesAsync(DateTime cutoffUtc, int batch, CancellationToken cancellationToken);
+
     /// <summary>
     /// Deletes audit rows whose event type is not in <paramref name="knownEventTypes"/> (legacy or renamed events) that
     /// occurred before <paramref name="cutoffUtc"/>. Scans; bounded by <paramref name="batch"/>.
@@ -88,6 +91,13 @@ internal sealed class RetentionRepository(AuthDbContext context) : IRetentionRep
             .Take(batch)
             .ExecuteDeleteAsync(cancellationToken));
     }
+
+    public Task<int> DeleteEndedAuthorizationCodesAsync(DateTime cutoffUtc, int batch, CancellationToken cancellationToken) =>
+        context.AuthorizationCode
+            .Where(c => c.ExpiresUtc < cutoffUtc || (c.UsedUtc != null && c.UsedUtc < cutoffUtc))
+            .OrderBy(c => c.Id)
+            .Take(batch)
+            .ExecuteDeleteAsync(cancellationToken);
 
     public Task<int> DeleteUnknownAuditLogAsync(IReadOnlyCollection<string> knownEventTypes, DateTime cutoffUtc, int batch, CancellationToken cancellationToken) =>
         context.AuditLog

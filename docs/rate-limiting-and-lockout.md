@@ -34,6 +34,8 @@ logout-all and /me are not rate limited (they need the antiforgery token, and lo
 | VerifyEmail | `/api/v1/auth/verify-email` | 30 / 15 min | - |
 | ChangePassword | `/api/v1/auth/change-password` | 10 / 15 min | - (signed in; wrong current passwords count toward lockout) |
 | Sessions | `/api/v1/auth/sessions` and `/api/v1/auth/sessions/{id}` (prefix) | 60 / 1 min | - (signed in) |
+| OAuthAuthorize | `/api/v1/oauth/authorize` | 60 / 1 min | - |
+| OAuthToken | `/api/v1/oauth/token` | 30 / 1 min | 600 / 1 min per `client_id` (form body) |
 
 All values can be changed under `RateLimiting:Policies:<Kind>:PerIp|PerAccount:PermitLimit|Window`. Other paths are not
 limited. OPTIONS (preflight) is never counted. A rejection is **429** ProblemDetails with `Retry-After` (seconds until

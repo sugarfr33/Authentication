@@ -26,6 +26,7 @@ internal sealed class BrowserProtectionMiddleware(
     IHostEnvironment environment)
 {
     private static readonly PathString ApiPrefix = new("/api");
+    private static readonly PathString OAuthTokenPath = new(Endpoints.OAuthEndpoints.TokenPath);
 
     private readonly HashSet<string> trustedOrigins = NormalizeTrusted(options.Value.TrustedOrigins, requireHttps: !environment.IsDevelopment());
 
@@ -52,6 +53,14 @@ internal sealed class BrowserProtectionMiddleware(
         if (!await IsOriginAllowedAsync(context))
         {
             await WriteProblemAsync(context, StatusCodes.Status403Forbidden, "Request origin is not allowed.");
+            return;
+        }
+
+        // /oauth/token uses no cookie: the code plus the PKCE verifier is the credential, and the endpoint itself requires
+        // the client's own registered Origin. Antiforgery (bound to a cookie session) does not apply there.
+        if (context.Request.Path.Equals(OAuthTokenPath, StringComparison.OrdinalIgnoreCase))
+        {
+            await next(context);
             return;
         }
 

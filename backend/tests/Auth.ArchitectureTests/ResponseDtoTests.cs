@@ -9,6 +9,12 @@ public class ResponseDtoTests
 
     private static readonly string[] ForbiddenNameParts = ["Token", "Hash", "Secret", "Password"];
 
+    /// <summary>
+    /// The only exception: RFC 6749 returns the tokens in the body of the token endpoint (T19, approved design; the SPA keeps
+    /// them in memory only). Nothing else may carry a token.
+    /// </summary>
+    private static readonly string[] AllowedTokenCarriers = ["OAuthTokenResponse.AccessToken", "OAuthTokenResponse.RefreshToken"];
+
     private static readonly Assembly Contracts = typeof(Auth.Contracts.AssemblyMarker).Assembly;
 
     [Fact]
@@ -25,9 +31,10 @@ public class ResponseDtoTests
     [Fact]
     public void Response_types_have_no_token_hash_secret_or_password_properties()
     {
-        IEnumerable<string> offenders = ResponseTypes().SelectMany(t => FindForbiddenProperties(t, []));
+        IEnumerable<string> offenders = ResponseTypes().SelectMany(t => FindForbiddenProperties(t, [])).Except(AllowedTokenCarriers);
 
         Assert.Empty(offenders);
+        Assert.Equal(AllowedTokenCarriers, ResponseTypes().SelectMany(t => FindForbiddenProperties(t, [])).Intersect(AllowedTokenCarriers));
     }
 
     [Fact]

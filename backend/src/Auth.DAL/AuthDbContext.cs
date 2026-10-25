@@ -44,6 +44,8 @@ internal sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : D
 
     public DbSet<MfaRecoveryCode> MfaRecoveryCode => Set<MfaRecoveryCode>();
 
+    public DbSet<AuthorizationCode> AuthorizationCode => Set<AuthorizationCode>();
+
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
         // All timestamps are UTC datetime2(7).

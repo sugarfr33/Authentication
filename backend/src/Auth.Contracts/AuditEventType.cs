@@ -65,4 +65,7 @@ public enum AuditEventType
 
     /// <summary>A client application was deactivated; its sessions were ended. Holds its id and the revoked count.</summary>
     AppDeactivated,
+
+    /// <summary>An authorization code exchange or app refresh was refused. Holds the app id when known and a reason only.</summary>
+    AuthorizationCodeRejected,
 }

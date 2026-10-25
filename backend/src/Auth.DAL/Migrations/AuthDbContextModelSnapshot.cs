@@ -77,6 +77,72 @@ namespace Auth.DAL.Migrations
                     b.ToTable("AuditLog", "auth");
                 });
 
+            modelBuilder.Entity("Auth.Entities.AuthorizationCode", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ClientApplicationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CodeChallenge")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(128)");
+
+                    b.Property<byte[]>("CodeHash")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("binary(32)")
+                        .IsFixedLength();
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasPrecision(7)
+                        .HasColumnType("datetime2(7)");
+
+                    b.Property<DateTime>("ExpiresUtc")
+                        .HasPrecision(7)
+                        .HasColumnType("datetime2(7)");
+
+                    b.Property<Guid?>("FamilyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("RedirectUri")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<DateTime?>("UsedUtc")
+                        .HasPrecision(7)
+                        .HasColumnType("datetime2(7)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id")
+                        .HasName("PK_AuthorizationCode");
+
+                    b.HasIndex("ClientApplicationId");
+
+                    b.HasIndex("CodeHash")
+                        .IsUnique()
+                        .HasDatabaseName("UQ_AuthorizationCode_CodeHash");
+
+                    b.HasIndex("ExpiresUtc")
+                        .HasDatabaseName("IX_AuthorizationCode_ExpiresUtc");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("AuthorizationCode", "auth", t =>
+                        {
+                            t.HasCheckConstraint("CK_AuthorizationCode_CodeChallenge_Length", "LEN([CodeChallenge]) BETWEEN 43 AND 128");
+
+                            t.HasCheckConstraint("CK_AuthorizationCode_Expiry", "[ExpiresUtc] > [CreatedUtc]");
+                        });
+                });
+
             modelBuilder.Entity("Auth.Entities.ClientApplication", b =>
                 {
                     b.Property<Guid>("Id")
@@ -620,6 +686,27 @@ namespace Auth.DAL.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.SetNull)
                         .HasConstraintName("FK_AuditLog_User_UserId");
+                });
+
+            modelBuilder.Entity("Auth.Entities.AuthorizationCode", b =>
+                {
+                    b.HasOne("Auth.Entities.ClientApplication", "ClientApplication")
+                        .WithMany()
+                        .HasForeignKey("ClientApplicationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("FK_AuthorizationCode_ClientApplication_ClientApplicationId");
+
+                    b.HasOne("Auth.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_AuthorizationCode_User_UserId");
+
+                    b.Navigation("ClientApplication");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("Auth.Entities.EmailVerificationToken", b =>

@@ -78,6 +78,23 @@ public sealed class RetentionPurgeTests(SqlServerDatabaseFixture database) : Rep
         Assert.Single(await FamilyAsync(liveFamily));
     }
 
+    /// <summary>T19: ended authorization codes are purged like links; a live code is untouched.</summary>
+    [Fact]
+    public async Task Ended_authorization_codes_are_purged_after_retention_and_live_ones_kept()
+    {
+        User user = await UserAsync();
+        ClientApplication application = TestData.ClientApplication();
+        await SeedAsync(application);
+        AuthorizationCode ended = Code(user.Id, application.Id, Utc(2006, 1, 1));
+        AuthorizationCode live = Code(user.Id, application.Id, DateTime.UtcNow);
+        await SeedAsync(ended, live);
+
+        await PurgeAsync(new RetentionOptions(), Utc(2006, 1, 10));
+
+        Assert.False(await WithContextAsync(c => c.AuthorizationCode.AnyAsync(a => a.Id == ended.Id)));
+        Assert.True(await WithContextAsync(c => c.AuthorizationCode.AnyAsync(a => a.Id == live.Id)));
+    }
+
     /// <summary>Review LOW-4: rows of event types that no longer exist follow the normal retention.</summary>
     [Fact]
     public async Task Audit_rows_of_unknown_event_types_are_purged_after_the_normal_retention()
@@ -165,6 +182,18 @@ public sealed class RetentionPurgeTests(SqlServerDatabaseFixture database) : Rep
         token.RevokedReason = revokedUtc is null ? null : RefreshTokenRevokedReason.Rotated;
         return token;
     }
+
+    private static AuthorizationCode Code(Guid userId, Guid applicationId, DateTime createdUtc) => new()
+    {
+        Id = Guid.NewGuid(),
+        CodeHash = TestData.Hash(),
+        UserId = userId,
+        ClientApplicationId = applicationId,
+        RedirectUri = "https://app.example.test/callback",
+        CodeChallenge = new string('c', 43),
+        CreatedUtc = createdUtc,
+        ExpiresUtc = createdUtc.AddSeconds(60),
+    };
 
     private static AuditLog Audit(Guid userId, AuditEventType type, DateTime occurredUtc)
     {

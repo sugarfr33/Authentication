@@ -14,7 +14,7 @@ public partial class MigrationScriptTests
 {
     private static readonly string[] Tables =
     [
-        "AuditLog", "ClientApplication", "EmailVerificationToken", "MfaRecoveryCode", "PasswordResetToken", "Permission",
+        "AuditLog", "AuthorizationCode", "ClientApplication", "EmailVerificationToken", "MfaRecoveryCode", "PasswordResetToken", "Permission",
         "RefreshToken", "Role", "RolePermission", "SigningKey", "User", "UserRole",
     ];
 
@@ -39,7 +39,7 @@ public partial class MigrationScriptTests
     }
 
     [Fact]
-    public void Script_creates_only_the_twelve_auth_tables_and_the_auth_migrations_history_table()
+    public void Script_creates_only_the_thirteen_auth_tables_and_the_auth_migrations_history_table()
     {
         IEnumerable<string> created = CreateTablePattern().Matches(File.ReadAllText(ScriptPath))
             .Select(m => m.Groups["schema"].Value + "." + m.Groups["table"].Value)

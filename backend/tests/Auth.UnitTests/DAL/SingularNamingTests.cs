@@ -20,7 +20,7 @@ public class SingularNamingTests
     {
         IConventionModel model = BuildAuthModel();
 
-        Assert.Equal(12, model.GetEntityTypes().Count());
+        Assert.Equal(13, model.GetEntityTypes().Count());
         Assert.Empty(FindViolations(model));
     }
 

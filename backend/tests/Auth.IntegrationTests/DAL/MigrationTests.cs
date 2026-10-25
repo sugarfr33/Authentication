@@ -16,11 +16,11 @@ namespace Auth.IntegrationTests.DAL;
 [Collection(SqlServerTestGroup.Name)]
 public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncLifetime
 {
-    private static readonly string[] AllMigrations = ["20261024081023_InitialCreate", "20261024120957_EmailVerificationPendingRegistration", "20261025040727_RetentionAndAudienceIndexes"];
+    private static readonly string[] AllMigrations = ["20261024081023_InitialCreate", "20261024120957_EmailVerificationPendingRegistration", "20261025040727_RetentionAndAudienceIndexes", "20261025043218_AuthorizationCodes"];
 
     private static readonly string[] Tables =
     [
-        "AuditLog", "ClientApplication", "EmailVerificationToken", "MfaRecoveryCode", "PasswordResetToken", "Permission",
+        "AuditLog", "AuthorizationCode", "ClientApplication", "EmailVerificationToken", "MfaRecoveryCode", "PasswordResetToken", "Permission",
         "RefreshToken", "Role", "RolePermission", "SigningKey", "User", "UserRole",
     ];
 

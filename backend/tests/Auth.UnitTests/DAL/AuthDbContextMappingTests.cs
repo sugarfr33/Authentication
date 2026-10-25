@@ -18,6 +18,12 @@ public class AuthDbContextMappingTests
 
     private static readonly Dictionary<string, string[]> ExpectedColumns = new()
     {
+        ["AuthorizationCode"] =
+        [
+            "Id uniqueidentifier", "CodeHash binary(32)", "UserId uniqueidentifier", "ClientApplicationId uniqueidentifier",
+            "RedirectUri nvarchar(512)", "CodeChallenge varchar(128)", "CreatedUtc datetime2(7)", "ExpiresUtc datetime2(7)",
+            "UsedUtc datetime2(7) NULL", "FamilyId uniqueidentifier NULL",
+        ],
         ["User"] =
         [
             "Id uniqueidentifier", "Email nvarchar(256)", "NormalizedEmail nvarchar(256)", "EmailVerified bit",
@@ -91,6 +97,7 @@ public class AuthDbContextMappingTests
         ["AuditLog"] = "PK_AuditLog (Id)",
         ["SigningKey"] = "PK_SigningKey (Id)",
         ["MfaRecoveryCode"] = "PK_MfaRecoveryCode (Id)",
+        ["AuthorizationCode"] = "PK_AuthorizationCode (Id)",
     };
 
     private static readonly Dictionary<string, string[]> ExpectedForeignKeys = new()
@@ -124,6 +131,11 @@ public class AuthDbContextMappingTests
         ],
         ["SigningKey"] = [],
         ["MfaRecoveryCode"] = ["FK_MfaRecoveryCode_User_UserId (UserId) -> User (Id) Cascade"],
+        ["AuthorizationCode"] =
+        [
+            "FK_AuthorizationCode_User_UserId (UserId) -> User (Id) Cascade",
+            "FK_AuthorizationCode_ClientApplication_ClientApplicationId (ClientApplicationId) -> ClientApplication (Id) Restrict",
+        ],
     };
 
     private static readonly Dictionary<string, string[]> ExpectedIndexes = new()
@@ -167,6 +179,13 @@ public class AuthDbContextMappingTests
         ],
         ["SigningKey"] = ["UQ_SigningKey_Kid UNIQUE (Kid)", "IX_SigningKey_Status (Status)"],
         ["MfaRecoveryCode"] = ["IX_MfaRecoveryCode_UserId (UserId)"],
+        ["AuthorizationCode"] =
+        [
+            "UQ_AuthorizationCode_CodeHash UNIQUE (CodeHash)",
+            "IX_AuthorizationCode_ExpiresUtc (ExpiresUtc)",
+            "IX_AuthorizationCode_ClientApplicationId (ClientApplicationId)",
+            "IX_AuthorizationCode_UserId (UserId)",
+        ],
     };
 
     private static readonly Dictionary<string, string[]> ExpectedCheckConstraints = new()
@@ -197,6 +216,11 @@ public class AuthDbContextMappingTests
             "CK_SigningKey_Algorithm: [Algorithm] IN (N'RS256', N'ES256')",
         ],
         ["MfaRecoveryCode"] = [],
+        ["AuthorizationCode"] =
+        [
+            "CK_AuthorizationCode_Expiry: [ExpiresUtc] > [CreatedUtc]",
+            "CK_AuthorizationCode_CodeChallenge_Length: LEN([CodeChallenge]) BETWEEN 43 AND 128",
+        ],
     };
 
     private static readonly string[] ExpectedDefaults =
@@ -208,7 +232,7 @@ public class AuthDbContextMappingTests
     public static TheoryData<string> TableNames => new(ExpectedColumns.Keys);
 
     [Fact]
-    public void Model_maps_exactly_the_twelve_tables_in_the_auth_schema()
+    public void Model_maps_exactly_the_thirteen_tables_in_the_auth_schema()
     {
         IEnumerable<string> tables = Model.GetRelationalModel().Tables.Select(t => t.Schema + "." + t.Name);
 
@@ -367,7 +391,7 @@ public class AuthDbContextMappingTests
         int count = typeof(AuthDbContext).GetProperties().Count(p => p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == typeof(DbSet<>));
 
         Assert.Empty(mismatches);
-        Assert.Equal(12, count);
+        Assert.Equal(13, count);
     }
 
     [Fact]

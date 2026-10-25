@@ -91,8 +91,9 @@ public class ExceptionScrubbingTests
     [InlineData("SessionId=3f2504e0-4f89-11d3-9a0c-0305e82c3301", "SessionId=3f2504e0-4f89-11d3-9a0c-0305e82c3301")]
     [InlineData("TokenType=Bearer", "TokenType=Bearer")]
     [InlineData("newPassword=hunter2", "newPassword=[REDACTED]")]
-    [InlineData("refresh_token=abc&state=1", "refresh_token=[REDACTED]&state=1")]
-    [InlineData("?code=xyz&state=1", "?code=[REDACTED]&state=1")]
+    [InlineData("refresh_token=abc&tenant=1", "refresh_token=[REDACTED]&tenant=1")]
+    [InlineData("?code=xyz&tenant=1", "?code=[REDACTED]&tenant=1")]
+    [InlineData("?state=opaque-client-state&tenant=1", "?state=[REDACTED]&tenant=1")]
     [InlineData("Cookie: __Host-access=abc", "Cookie=[REDACTED]")]
     public void Pairs_are_masked_by_their_exact_key_role_only(string input, string expected) =>
         Assert.Equal(expected, LogRedaction.Redact(input));
@@ -192,7 +193,7 @@ public class ExceptionScrubbingTests
             null,
             new MessageTemplateParser().Parse("Calling {Target} with {Count}"),
             [
-                new LogEventProperty("Target", new ScalarValue(new Uri("https://idp.example.test/cb?token=SecretValue1&state=1"))),
+                new LogEventProperty("Target", new ScalarValue(new Uri("https://idp.example.test/cb?token=SecretValue1&tenant=1"))),
                 new LogEventProperty("Count", new ScalarValue(3)),
             ]);
 
@@ -200,7 +201,7 @@ public class ExceptionScrubbingTests
 
         string target = logEvent.Properties["Target"].ToString();
         Assert.DoesNotContain("SecretValue1", target, StringComparison.Ordinal);
-        Assert.Contains("state=1", target, StringComparison.Ordinal);
+        Assert.Contains("tenant=1", target, StringComparison.Ordinal);
         Assert.Equal("3", logEvent.Properties["Count"].ToString());
     }
 

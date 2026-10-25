@@ -11,6 +11,8 @@ public enum AuthRateLimitKind
     VerifyEmail,
     ChangePassword,
     Sessions,
+    OAuthAuthorize,
+    OAuthToken,
 }
 
 /// <summary>A fixed-window limit: <see cref="PermitLimit"/> requests per <see cref="Window"/>.</summary>
@@ -47,6 +49,8 @@ public sealed class AuthRateLimitOptions
         ["/api/v1/auth/reset-password"] = AuthRateLimitKind.ResetPassword,
         ["/api/v1/auth/verify-email"] = AuthRateLimitKind.VerifyEmail,
         ["/api/v1/auth/change-password"] = AuthRateLimitKind.ChangePassword,
+        ["/api/v1/oauth/authorize"] = AuthRateLimitKind.OAuthAuthorize,
+        ["/api/v1/oauth/token"] = AuthRateLimitKind.OAuthToken,
     };
 
     /// <summary>
@@ -68,6 +72,10 @@ public sealed class AuthRateLimitOptions
         [AuthRateLimitKind.VerifyEmail] = Policy(30, TimeSpan.FromMinutes(15), null, TimeSpan.Zero),
         [AuthRateLimitKind.ChangePassword] = Policy(10, TimeSpan.FromMinutes(15), null, TimeSpan.Zero),
         [AuthRateLimitKind.Sessions] = Policy(60, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
+
+        // T19: per IP, and /token also per client_id (the "account" key), high enough that one IP cannot starve a client.
+        [AuthRateLimitKind.OAuthAuthorize] = Policy(60, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
+        [AuthRateLimitKind.OAuthToken] = Policy(30, TimeSpan.FromMinutes(1), 600, TimeSpan.FromMinutes(1)),
     };
 
     /// <summary>

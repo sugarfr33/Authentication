@@ -112,6 +112,8 @@ public sealed class AuthorizationApiTests(ApiFixture api) : IAsyncLifetime
             "/api/v1/auth/register",
             "/api/v1/auth/reset-password",
             "/api/v1/auth/verify-email",
+            "/api/v1/oauth/authorize",
+            "/api/v1/oauth/token",
             "/health",
             "/health/ready",
         ];

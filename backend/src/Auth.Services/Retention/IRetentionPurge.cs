@@ -68,9 +68,10 @@ public sealed record RetentionPurgeResult(
     int EmailVerificationTokensDeleted,
     int PasswordResetTokensDeleted,
     int RefreshTokensDeleted,
-    int AuditRowsDeleted)
+    int AuditRowsDeleted,
+    int AuthorizationCodesDeleted = 0)
 {
-    public int Total => PendingRegistrationsErased + EmailVerificationTokensDeleted + PasswordResetTokensDeleted + RefreshTokensDeleted + AuditRowsDeleted;
+    public int Total => PendingRegistrationsErased + EmailVerificationTokensDeleted + PasswordResetTokensDeleted + RefreshTokensDeleted + AuditRowsDeleted + AuthorizationCodesDeleted;
 }
 
 /// <summary>
@@ -93,6 +94,7 @@ internal sealed class RetentionPurge(IRetentionRepository repository, IClock clo
         int erased = await RepeatAsync(batch => repository.ErasePendingRegistrationsAsync(now, batch, cancellationToken));
         int verification = await RepeatAsync(batch => repository.DeleteEndedEmailVerificationTokensAsync(now - options.OneTimeTokens, batch, cancellationToken));
         int reset = await RepeatAsync(batch => repository.DeleteEndedPasswordResetTokensAsync(now - options.OneTimeTokens, batch, cancellationToken));
+        int codes = await RepeatAsync(batch => repository.DeleteEndedAuthorizationCodesAsync(now - options.OneTimeTokens, batch, cancellationToken));
         int refresh = await RepeatAsync(batch => repository.DeleteEndedRefreshFamiliesAsync(now - options.RefreshFamilies, batch, cancellationToken), options.RefreshTokenBatchSize);
 
         int audit = 0;
@@ -105,7 +107,7 @@ internal sealed class RetentionPurge(IRetentionRepository repository, IClock clo
         // Rows of event types that no longer exist (legacy or renamed) follow the normal retention.
         audit += await RepeatAsync(batch => repository.DeleteUnknownAuditLogAsync(KnownEventTypes, now - options.AuditLog, batch, cancellationToken));
 
-        return new RetentionPurgeResult(erased, verification, reset, refresh, audit);
+        return new RetentionPurgeResult(erased, verification, reset, refresh, audit, codes);
     }
 
     /// <summary>Runs one batched statement until it touches less than a full batch, at most MaxBatchesPerRun times.</summary>

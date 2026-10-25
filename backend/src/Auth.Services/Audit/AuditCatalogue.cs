@@ -39,8 +39,8 @@ public static class AuditCatalogue
         [AuditEventType.MfaVerified] = new([], Reserved: true),
         [AuditEventType.MfaFailed] = new([], Reserved: true),
         [AuditEventType.MfaRecoveryCodeUsed] = new([], Reserved: true),
-        [AuditEventType.AuthorizationCodeIssued] = new([], Reserved: true),
-        [AuditEventType.AuthorizationCodeRedeemed] = new([], Reserved: true),
+        [AuditEventType.AuthorizationCodeIssued] = new(["app"]),
+        [AuditEventType.AuthorizationCodeRedeemed] = new(["app", "session"]),
         [AuditEventType.SigningKeyRotated] = new([], Reserved: true),
         [AuditEventType.EmailVerificationFailed] = new(["reason"], AuditVolume.High),
         [AuditEventType.RegistrationRejected] = new(["fields"], AuditVolume.High),
@@ -54,6 +54,7 @@ public static class AuditCatalogue
         [AuditEventType.AppCreated] = new(["app", "source"]),
         [AuditEventType.AppUpdated] = new(["app", "active", "revoked"]),
         [AuditEventType.AppDeactivated] = new(["app", "revoked"]),
+        [AuditEventType.AuthorizationCodeRejected] = new(["app", "reason"], AuditVolume.High),
     };
 
     /// <summary>
@@ -77,6 +78,10 @@ public static class AuditCatalogue
 
         // System roles and assignment sources
         AuthRoles.Admin, AuthRoles.User, "bootstrap", "backfill", "registry",
+
+        // OAuth code exchange (T19)
+        "unknown_or_expired", "replayed", "client_mismatch", "redirect_mismatch", "pkce_mismatch", "inactive_client",
+        "inactive_user", "invalid_request",
     };
 
     /// <summary>Event names (as stored in AuditLog.EventType) with <see cref="AuditVolume.High"/>.</summary>

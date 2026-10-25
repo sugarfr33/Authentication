@@ -35,6 +35,7 @@ public static class DataAccessServiceCollectionExtensions
         services.AddScoped<ISigningKeyRepository, SigningKeyRepository>();
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
         services.AddScoped<IRetentionRepository, RetentionRepository>();
+        services.AddScoped<IAuthorizationCodeRepository, AuthorizationCodeRepository>();
         services.AddScoped<IOneTimeTokenRepository<PasswordResetToken>>(sp =>
             new OneTimeTokenRepository<PasswordResetToken>(sp.GetRequiredService<AuthDbContext>(), nameof(PasswordResetToken.TokenHash)));
         services.AddScoped<IOneTimeTokenRepository<EmailVerificationToken>>(sp =>

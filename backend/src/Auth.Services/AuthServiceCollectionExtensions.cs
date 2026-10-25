@@ -6,6 +6,7 @@ using Auth.Services.Audit;
 using Auth.Services.Authorization;
 using Auth.Services.ClientApplications;
 using Auth.Services.Common;
+using Auth.Services.OAuth;
 using Auth.Services.Passwords;
 using Auth.Services.Retention;
 using Auth.Services.Security;
@@ -52,6 +53,7 @@ public static class AuthServiceCollectionExtensions
             new ClientApplicationValidator(sp.GetRequiredService<ClientApplicationOriginOptions>().RequireHttps, sp.GetRequiredService<TokenOptions>().DefaultAudience),
             sp.GetRequiredService<IClock>()));
         services.AddScoped<IClientSessionService, ClientSessionService>();
+        services.AddScoped<IOAuthService, OAuthService>();
         services.AddTokenServices(configuration);
         services.AddAccountServices();
         services.TryAddSingleton(new AuthorizationSeedOptions());
