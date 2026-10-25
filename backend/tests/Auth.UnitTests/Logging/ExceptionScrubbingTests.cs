@@ -97,6 +97,49 @@ public class ExceptionScrubbingTests
     public void Pairs_are_masked_by_their_exact_key_role_only(string input, string expected) =>
         Assert.Equal(expected, LogRedaction.Redact(input));
 
+    /// <summary>T17 Tester F1: a real PHC hash (with commas) and standard base64 never stay visible.</summary>
+    [Fact]
+    public void A_real_password_hash_is_masked_in_messages_properties_and_exceptions()
+    {
+        string hash = new Auth.Services.Passwords.Argon2PasswordHasher(new Auth.Services.Passwords.PasswordHashingOptions { MemorySizeKiB = 1024, Iterations = 1, Parallelism = 1 })
+            .Hash("violet-canyon-7319");
+        string[] parts = hash.Split('$');
+        string salt = parts[^2];
+        string digest = parts[^1];
+
+        string message = LogRedaction.Redact("stored hash " + hash + " next field");
+        LogEvent withProperty = new(
+            DateTimeOffset.UtcNow,
+            LogEventLevel.Information,
+            null,
+            new MessageTemplateParser().Parse("Row {Row}"),
+            [new LogEventProperty("Row", new ScalarValue("PasswordHash=" + hash + "; Id=7"))]);
+        new RedactionEnricher().Enrich(withProperty, null!);
+        string exception = Emit(new InvalidOperationException("Could not verify " + hash + " for the user")).Exception!.ToString();
+
+        Assert.Contains(",", hash, StringComparison.Ordinal);
+        foreach (string rendered in new[] { message, withProperty.Properties["Row"].ToString(), exception })
+        {
+            Assert.DoesNotContain(salt, rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain(digest, rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain("m=1024", rendered, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(" next field", message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("kZ3x+Qp7/Lm2Vb9Rt4Yw1Nc8Hs6Jd0Fa5Ge3Ui2Oq7Pz+")]
+    [InlineData("kZ3x+Qp7/Lm2Vb9Rt4Yw1Nc8Hs6Jd0Fa5Ge3Ui2Oq7Pz+Aa==")]
+    [InlineData("/kZ3xQp7Lm2Vb9Rt4Yw1Nc8Hs6Jd0Fa5Ge3Ui2Oq7PzAb")]
+    public void Standard_base64_values_from_43_characters_are_masked(string value) =>
+        Assert.Equal("key " + LogRedaction.Mask + " end", LogRedaction.Redact("key " + value + " end"));
+
+    [Theory]
+    [InlineData("/api/v1/auth/forgot-password/and/a/long/route/name")]
+    [InlineData("/api/v1/__test/policy/sessions-manage-and-more-words")]
+    public void Long_url_paths_stay_readable(string path) => Assert.Equal(path, LogRedaction.Redact(path));
+
     [Fact]
     public void Opaque_runs_are_masked_from_43_characters()
     {

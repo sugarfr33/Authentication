@@ -92,8 +92,13 @@ user agent are personal data: export or display must follow the data-protection 
 - **Properties.** `RedactionEnricher` (T09) masks sensitive property names and scrubs credential-shaped values:
   - Bearer and Basic values, and `key=value` pairs for password, token, secret, cookie and session;
   - JWTs;
-  - since T17, also PHC password hashes (`$argon2id$...`) and any opaque run of 43 or more base64url or hex
-    characters, which covers our 43-character tokens. GUIDs, trace ids and ordinary identifiers stay readable.
+  - since T17, also PHC password hashes, matched from the `$argon2id$` marker to whitespace, a quote or a semicolon.
+    The match runs through the commas of the parameters (`m=65536,t=3,p=1`), so the salt and hash are hidden too.
+  - Any opaque run of 43 or more base64url or hex characters, which covers our 43-character tokens.
+  - Any run of 43 or more standard base64 characters (`+`, `/`, `=` padding) that mixes upper case, lower case and
+    digits. Long URL paths such as `/api/v1/auth/...` stay readable.
+  - GUIDs, trace ids and ordinary identifiers stay readable. Tested with a real Argon2 hash in a message, a property
+    and an exception.
   - Pair keys match by role: exactly `code` or `code_verifier`, or a key ending in password, secret, token, apikey,
     cookie or otp. So `newPassword=` and `refresh_token=` are masked, while `StatusCode=` and `SessionId=` are not.
   - Every pattern has a 200 ms match timeout; a text that times out is masked whole.

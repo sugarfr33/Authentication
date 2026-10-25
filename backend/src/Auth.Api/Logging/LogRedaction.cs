@@ -34,6 +34,7 @@ internal static partial class LogRedaction
             result = SensitivePair().Replace(result, "$1=" + Mask);
             result = Jwt().Replace(result, Mask);
             result = PasswordHash().Replace(result, Mask);
+            result = LongBase64Value().Replace(result, match => LooksEncoded(match.Value) ? Mask : match.Value);
             result = LongOpaqueValue().Replace(result, Mask);
             return result;
         }
@@ -57,8 +58,11 @@ internal static partial class LogRedaction
     [GeneratedRegex(@"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*", RegexOptions.None, MatchTimeoutMilliseconds)]
     private static partial Regex Jwt();
 
-    /// <summary>A PHC password hash (Argon2 and friends).</summary>
-    [GeneratedRegex(@"\$(argon2id|argon2i|argon2d|pbkdf2[A-Za-z0-9-]*|scrypt|bcrypt|2[aby])\$[^\s""',;]+", RegexOptions.None, MatchTimeoutMilliseconds)]
+    /// <summary>
+    /// A PHC password hash (Argon2 and friends), from the algorithm marker to whitespace, a quote or a semicolon: the
+    /// parameters contain commas (m=65536,t=3,p=1), so a comma never ends the match (T17 Tester F1).
+    /// </summary>
+    [GeneratedRegex(@"\$(argon2id|argon2i|argon2d|pbkdf2[A-Za-z0-9-]*|scrypt|bcrypt|2[aby])\$[^\s""';]+", RegexOptions.None, MatchTimeoutMilliseconds)]
     private static partial Regex PasswordHash();
 
     /// <summary>
@@ -67,6 +71,17 @@ internal static partial class LogRedaction
     /// </summary>
     [GeneratedRegex(@"(?<![A-Za-z0-9_\-])[A-Za-z0-9_\-]{43,}(?![A-Za-z0-9_\-])", RegexOptions.None, MatchTimeoutMilliseconds)]
     private static partial Regex LongOpaqueValue();
+
+    /// <summary>
+    /// A run of 43+ standard base64 characters (with + or /, optional = padding). It is masked only when it looks
+    /// encoded (upper case, lower case and digits all present), so URL paths such as /api/v1/auth/forgot-password stay
+    /// readable (T17 Tester F1).
+    /// </summary>
+    [GeneratedRegex(@"(?<![A-Za-z0-9_\-+/=])[A-Za-z0-9_\-+/]{43,}={0,2}(?![A-Za-z0-9_\-+/=])", RegexOptions.None, MatchTimeoutMilliseconds)]
+    private static partial Regex LongBase64Value();
+
+    private static bool LooksEncoded(string value) =>
+        value.Any(char.IsAsciiLetterUpper) && value.Any(char.IsAsciiLetterLower) && value.Any(char.IsAsciiDigit);
 }
 
 /// <summary>Applies <see cref="LogRedaction"/> to every property of every event, recursively.</summary>
