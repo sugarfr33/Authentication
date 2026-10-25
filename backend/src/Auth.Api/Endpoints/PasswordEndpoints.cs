@@ -23,11 +23,13 @@ internal sealed partial class PasswordEndpoints : IEndpointModule
         RouteGroupBuilder auth = api.MapGroup("/auth");
 
         auth.MapPost("/forgot-password", ForgotAsync)
+            .AllowAnonymous()
             .Accepts<ForgotPasswordRequest>("application/json")
             .Produces<ForgotPasswordResponse>(StatusCodes.Status202Accepted)
             .ProducesValidationProblem();
 
         auth.MapPost("/reset-password", ResetAsync)
+            .AllowAnonymous()
             .Accepts<ResetPasswordRequest>("application/json")
             .Produces(StatusCodes.Status204NoContent)
             .ProducesValidationProblem()

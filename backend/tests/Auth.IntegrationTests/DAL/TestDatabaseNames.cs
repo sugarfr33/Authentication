@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 
 namespace Auth.IntegrationTests.DAL;
@@ -7,7 +8,7 @@ namespace Auth.IntegrationTests.DAL;
 /// Throwaway database names that are unique per test run (process), so parallel runs on one SQL Server never share
 /// or drop each other's databases. Every name still ends with <c>_Test</c>, which the fixture guard requires.
 /// </summary>
-public static class TestDatabaseNames
+public static partial class TestDatabaseNames
 {
     /// <summary>Marker between the base name and the run id; also how leftovers of crashed runs are recognised.</summary>
     public const string RunMarker = "_run";
@@ -30,8 +31,14 @@ public static class TestDatabaseNames
         new SqlConnectionStringBuilder(connectionString) { InitialCatalog = Unique(baseName) }.ConnectionString;
 
     /// <summary>
-    /// Drops databases left behind by crashed runs: only names with a run marker that end with _Test, start with
-    /// CentralAuth, and are older than <paramref name="olderThan"/> (so a parallel run in progress is never touched).
+    /// True only for names this class creates: <c>CentralAuth</c>, an optional <c>_Word</c>, the run marker, exactly 8
+    /// lowercase hex digits and <c>_Test</c>. Anything else is never dropped.
+    /// </summary>
+    public static bool IsRunDatabase(string name) => RunDatabaseName().IsMatch(name);
+
+    /// <summary>
+    /// Drops databases left behind by crashed runs: only names <see cref="IsRunDatabase"/> accepts that are older than
+    /// <paramref name="olderThan"/> (so a parallel run in progress is never touched).
     /// </summary>
     public static async Task DropStaleAsync(string connectionString, TimeSpan olderThan)
     {
@@ -43,7 +50,8 @@ public static class TestDatabaseNames
         await using (SqlCommand find = connection.CreateCommand())
         {
             find.CommandText =
-                "SELECT name FROM sys.databases WHERE name LIKE 'CentralAuth%[_]run%[_]Test' AND create_date < DATEADD(SECOND, -@age, GETDATE())";
+                "SELECT name FROM sys.databases WHERE name LIKE 'CentralAuth%[_]run[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][_]Test' "
+                + "AND create_date < DATEADD(SECOND, -@age, GETDATE())";
             find.Parameters.AddWithValue("@age", (int)olderThan.TotalSeconds);
             await using SqlDataReader reader = await find.ExecuteReaderAsync();
             while (await reader.ReadAsync())
@@ -55,7 +63,7 @@ public static class TestDatabaseNames
         foreach (string name in stale)
         {
             SqlServerDatabaseFixture.EnsureThrowawayDatabase(new SqlConnectionStringBuilder(connectionString) { InitialCatalog = name }.ConnectionString);
-            if (!name.Contains(RunMarker, StringComparison.Ordinal))
+            if (!IsRunDatabase(name))
             {
                 continue;
             }
@@ -65,6 +73,9 @@ public static class TestDatabaseNames
             await drop.ExecuteNonQueryAsync();
         }
     }
+
+    [GeneratedRegex("^CentralAuth(_[A-Za-z]+)?_run[0-9a-f]{8}_Test$", RegexOptions.CultureInvariant)]
+    private static partial Regex RunDatabaseName();
 
     private static string QuoteName(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
 }

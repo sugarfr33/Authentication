@@ -60,6 +60,7 @@ builder.Services.AddSingleton<IEndpointModule, AccountEndpoints>();
 builder.Services.AddSingleton<IEndpointModule, SessionEndpoints>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<RefreshRejectionLog>();
+builder.Services.AddSingleton<LivenessFailureLog>();
 builder.Services.AddSingleton<IEndpointModule, PasswordEndpoints>();
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
     context.ProblemDetails.Extensions["traceId"] = Activity.Current?.Id ?? context.HttpContext.TraceIdentifier);
@@ -132,13 +133,17 @@ app.UseMiddleware<BrowserProtectionMiddleware>();
 app.UseAuthorization();
 
 // Liveness: the process answers. Readiness: dependencies (the database) answer. Bodies are just the status word.
-app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions { Predicate = _ => false });
-app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") });
+app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions { Predicate = _ => false })
+    .AllowAnonymous();
+app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") })
+    .AllowAnonymous();
 
 app.MapWellKnownEndpoints();
 
-// Versioned API surface: every registered endpoint module is mapped under /api/v1.
+// Versioned API surface: every registered endpoint module is mapped under /api/v1. Default deny: signed-in users only,
+// unless an endpoint says AllowAnonymous() (or names a stricter policy).
 RouteGroupBuilder api = app.MapGroup("/api/v1");
+api.RequireAuthorization();
 foreach (IEndpointModule module in app.Services.GetServices<IEndpointModule>())
 {
     module.Map(api);

@@ -42,6 +42,7 @@ public static class AuthServiceCollectionExtensions
         services.AddAccountServices();
         services.TryAddSingleton(new AuthorizationSeedOptions());
         services.AddScoped<IAuthorizationSeeder, AuthorizationSeeder>();
+        services.AddScoped<IRoleAssignmentService, RoleAssignmentService>();
 
         return services;
     }

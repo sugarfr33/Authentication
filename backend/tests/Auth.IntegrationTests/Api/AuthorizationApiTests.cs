@@ -8,8 +8,11 @@ using Auth.Contracts.Requests;
 using Auth.DAL;
 using Auth.Entities;
 using Auth.Services.Passwords;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -95,6 +98,46 @@ public sealed class AuthorizationApiTests(ApiFixture api) : IAsyncLifetime
         }
     }
 
+    /// <summary>Audit MEDIUM-1: default deny. Every product endpoint states its access rule; the public ones are exactly these.</summary>
+    [Fact]
+    public void Every_endpoint_requires_authorization_unless_it_is_explicitly_anonymous()
+    {
+        string[] expectedAnonymous =
+        [
+            "/.well-known/jwks.json",
+            "/api/v1/auth/forgot-password",
+            "/api/v1/auth/login",
+            "/api/v1/auth/logout",
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/register",
+            "/api/v1/auth/reset-password",
+            "/api/v1/auth/verify-email",
+            "/health",
+            "/health/ready",
+        ];
+        List<RouteEndpoint> product = [.. app.Services.GetRequiredService<EndpointDataSource>().Endpoints
+            .OfType<RouteEndpoint>()
+            .Where(e => !(e.RoutePattern.RawText ?? string.Empty).StartsWith(TestEndpoints.Prefix, StringComparison.Ordinal))];
+
+        Assert.NotEmpty(product);
+        Assert.All(product, e => Assert.True(
+            e.Metadata.GetMetadata<IAllowAnonymous>() is not null || e.Metadata.GetOrderedMetadata<IAuthorizeData>().Count > 0,
+            e.RoutePattern.RawText + " has neither RequireAuthorization nor AllowAnonymous"));
+        Assert.Equal(
+            expectedAnonymous,
+            product.Where(e => e.Metadata.GetMetadata<IAllowAnonymous>() is not null).Select(e => e.RoutePattern.RawText!).Distinct().Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_api_endpoint_that_states_no_rule_is_closed_by_default()
+    {
+        using Browser anonymous = new(app);
+        using Browser signedIn = await SignedInAsync(await SeedUserAsync([]));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync(TestEndpoints.Prefix + "/unmarked")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await signedIn.GetAsync(TestEndpoints.Prefix + "/unmarked")).StatusCode);
+    }
+
     [Fact]
     public async Task The_access_token_carries_user_session_roles_permissions_and_the_default_audience()
     {
@@ -110,6 +153,26 @@ public sealed class AuthorizationApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal([AuthRoles.Admin, AuthRoles.User], token.Claims.Where(c => c.Type == AuthClaimTypes.Role).Select(c => c.Value).Order(StringComparer.Ordinal));
         Assert.Equal(AuthPermissions.All.Order(StringComparer.Ordinal), token.Claims.Where(c => c.Type == AuthClaimTypes.Permission).Select(c => c.Value).Order(StringComparer.Ordinal));
         Assert.Null(token.Claims.FirstOrDefault(c => c.Type == AuthClaimTypes.ClientId));
+    }
+
+    /// <summary>
+    /// Reviewer note b: the access token travels in a cookie (browsers drop cookies over 4096 bytes). The largest
+    /// realistic token today (every role and permission, longest email, display name of escaped non-ASCII characters)
+    /// must stay well below that, so the budget is visible before per-application roles add claims.
+    /// </summary>
+    [Fact]
+    public async Task The_largest_realistic_access_token_stays_under_3500_bytes()
+    {
+        string email = new string('a', 64) + "@" + new string('b', 62) + "." + new string('c', 62) + "." + new string('d', 50) + ".test";
+        string name = new((char)0xE9, 128);
+        await SeedUserAsync([AuthRoles.Admin, AuthRoles.User, AuditorRole], email, name);
+        using Browser browser = await SignedInAsync(email);
+
+        string token = browser.CookieValue(AuthCookieNames.Access);
+
+        Assert.True(email.Length >= 245, "the test email should be near the 256 limit");
+        Assert.Equal(name, new JsonWebToken(token).GetClaim(AuthClaimTypes.Name).Value);
+        Assert.True(token.Length < 3500, "access token is " + token.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + " bytes");
     }
 
     [Fact]
@@ -188,9 +251,9 @@ public sealed class AuthorizationApiTests(ApiFixture api) : IAsyncLifetime
         return await context.SaveChangesAsync();
     });
 
-    private async Task<string> SeedUserAsync(string[] roleNames)
+    private async Task<string> SeedUserAsync(string[] roleNames, string? email = null, string displayName = "Authz Tester")
     {
-        string email = "authz-" + Guid.NewGuid().ToString("N")[..12] + "@example.test";
+        email ??= "authz-" + Guid.NewGuid().ToString("N")[..12] + "@example.test";
         await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
         string hash = await scope.ServiceProvider.GetRequiredService<IPasswordHasher>().HashAsync(Password, CancellationToken.None);
         AuthDbContext context = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
@@ -201,7 +264,7 @@ public sealed class AuthorizationApiTests(ApiFixture api) : IAsyncLifetime
             NormalizedEmail = EmailNormalizer.Normalize(email)!,
             EmailVerified = true,
             PasswordHash = hash,
-            DisplayName = "Authz Tester",
+            DisplayName = displayName,
             IsActive = true,
             SecurityStamp = Guid.NewGuid(),
             CreatedUtc = now,

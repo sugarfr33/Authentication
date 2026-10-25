@@ -72,22 +72,67 @@ public sealed class AuthorizationSeederTests : RepositoryTestBase, IAsyncDisposa
     }
 
     [Fact]
-    public async Task The_bootstrap_admin_is_assigned_once_and_only_when_verified()
+    public async Task The_bootstrap_admin_is_assigned_only_when_verified_and_audited()
     {
-        User account = TestData.User();
-        account.Email = bootstrapEmail;
-        account.NormalizedEmail = EmailNormalizer.Normalize(bootstrapEmail)!;
-        account.EmailVerified = false;
-        account.IsActive = true;
-        await SeedAsync(account);
+        Role admin = await NoAdministratorsAsync();
+        User account = await BootstrapAccountAsync(verified: false);
 
-        Assert.False((await SeedAsync()).BootstrapAdminAssigned);
+        Assert.Equal(BootstrapAdminOutcome.AccountNotEligible, (await SeedAsync()).Bootstrap);
         await WithContextAsync(c => c.User.Where(u => u.Id == account.Id).ExecuteUpdateAsync(s => s.SetProperty(u => u.EmailVerified, true)));
-        Assert.True((await SeedAsync()).BootstrapAdminAssigned);
-        Assert.False((await SeedAsync()).BootstrapAdminAssigned);
+        Assert.Equal(BootstrapAdminOutcome.Assigned, (await SeedAsync()).Bootstrap);
+        Assert.Equal(BootstrapAdminOutcome.AdministratorExists, (await SeedAsync()).Bootstrap);
 
-        Role admin = await GlobalRoleAsync(AuthRoles.Admin);
         Assert.Single(await WithContextAsync(c => c.UserRole.AsNoTracking().Where(ur => ur.UserId == account.Id && ur.RoleId == admin.Id).ToListAsync()));
+        AuditLog audit = Assert.Single(await WithContextAsync(c => c.AuditLog.AsNoTracking()
+            .Where(a => a.UserId == account.Id && a.EventType == nameof(AuditEventType.RoleAssigned) && a.Detail!.Contains("bootstrap")).ToListAsync()));
+        Assert.Equal("""{"role":"Admin","source":"bootstrap"}""", audit.Detail);
+    }
+
+    /// <summary>Reviewer MEDIUM-1 / audit MEDIUM-2: a configured email never restores a role an administrator took away.</summary>
+    [Fact]
+    public async Task A_demoted_bootstrap_admin_is_not_restored_while_another_admin_exists()
+    {
+        Role admin = await NoAdministratorsAsync();
+        User account = await BootstrapAccountAsync(verified: true);
+        Assert.True((await SeedAsync()).BootstrapAdminAssigned);
+        User other = TestData.User();
+        other.EmailVerified = true;
+        await SeedAsync(other, new UserRole { UserId = other.Id, RoleId = admin.Id, AssignedUtc = TestData.Now });
+
+        await WithContextAsync(c => c.UserRole.Where(ur => ur.UserId == account.Id && ur.RoleId == admin.Id).ExecuteDeleteAsync());
+        AuthorizationSeedResult reseed = await SeedAsync();
+
+        Assert.Equal(BootstrapAdminOutcome.AdministratorExists, reseed.Bootstrap);
+        Assert.Empty(await WithContextAsync(c => c.UserRole.AsNoTracking().Where(ur => ur.UserId == account.Id && ur.RoleId == admin.Id).ToListAsync()));
+
+        // Recovery (documented): only when no active, verified administrator is left does the setting apply again.
+        await WithContextAsync(c => c.User.Where(u => u.Id == other.Id).ExecuteUpdateAsync(s => s.SetProperty(u => u.IsActive, false)));
+        Assert.Equal(BootstrapAdminOutcome.Assigned, (await SeedAsync()).Bootstrap);
+    }
+
+    /// <summary>Reviewer LOW a / audit LOW-1: accounts verified while the User role was missing receive it later.</summary>
+    [Fact]
+    public async Task Seeding_gives_the_User_role_to_verified_active_accounts_that_lack_it()
+    {
+        await SeedAsync();
+        User verified = TestData.User();
+        verified.EmailVerified = true;
+        User unverified = TestData.User();
+        User inactive = TestData.User();
+        inactive.EmailVerified = true;
+        inactive.IsActive = false;
+        await SeedAsync(verified, unverified, inactive);
+
+        for (int run = 0; run < 100 && (await SeedAsync()).UsersBackfilled > 0; run++)
+        {
+        }
+
+        Role user = await GlobalRoleAsync(AuthRoles.User);
+        List<Guid> holders = await WithContextAsync(c => c.UserRole.AsNoTracking()
+            .Where(ur => ur.RoleId == user.Id && (ur.UserId == verified.Id || ur.UserId == unverified.Id || ur.UserId == inactive.Id))
+            .Select(ur => ur.UserId).ToListAsync());
+        Assert.Equal([verified.Id], holders);
+        Assert.Equal(0, (await SeedAsync()).UsersBackfilled);
     }
 
     [Fact]
@@ -108,6 +153,25 @@ public sealed class AuthorizationSeederTests : RepositoryTestBase, IAsyncDisposa
     }
 
     public async ValueTask DisposeAsync() => await services.DisposeAsync();
+
+    /// <summary>The bootstrap rule looks at the whole table, so these tests start with no Admin holders (shared test database).</summary>
+    private async Task<Role> NoAdministratorsAsync()
+    {
+        await SeedAsync();
+        Role admin = await GlobalRoleAsync(AuthRoles.Admin);
+        await WithContextAsync(c => c.UserRole.Where(ur => ur.RoleId == admin.Id).ExecuteDeleteAsync());
+        return admin;
+    }
+
+    private async Task<User> BootstrapAccountAsync(bool verified)
+    {
+        User account = TestData.User();
+        account.Email = bootstrapEmail;
+        account.NormalizedEmail = EmailNormalizer.Normalize(bootstrapEmail)!;
+        account.EmailVerified = verified;
+        await SeedAsync(account);
+        return account;
+    }
 
     private Task<AuthorizationSeedResult> SeedAsync() => InAppScopeAsync<IAuthorizationSeeder, AuthorizationSeedResult>(s => s.SeedAsync(Ct));
 

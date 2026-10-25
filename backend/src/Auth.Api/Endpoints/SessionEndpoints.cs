@@ -29,12 +29,14 @@ internal sealed partial class SessionEndpoints : IEndpointModule
         RouteGroupBuilder auth = api.MapGroup("/auth");
 
         auth.MapPost("/login", LoginAsync)
+            .AllowAnonymous()
             .Accepts<LoginRequest>("application/json")
             .Produces<UserProfileResponse>()
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
         // Anonymous on purpose: signing out must work with an expired access token, and always clears the cookies.
         auth.MapPost("/logout", LogoutAsync)
+            .AllowAnonymous()
             .Produces(StatusCodes.Status204NoContent);
 
         auth.MapPost("/logout-all", LogoutAllAsync)
@@ -44,6 +46,7 @@ internal sealed partial class SessionEndpoints : IEndpointModule
 
         // Anonymous: the refresh cookie is the credential. Origin check and antiforgery apply like every POST.
         auth.MapPost("/refresh", RefreshAsync)
+            .AllowAnonymous()
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status409Conflict);

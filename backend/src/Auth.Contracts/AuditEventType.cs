@@ -41,4 +41,13 @@ public enum AuditEventType
     /// change, revoked session), or the session changed while refreshing. Holds a reason only.
     /// </summary>
     RefreshRejected,
+
+    /// <summary>A role was given to a user (also the bootstrap administrator). Holds the role name and the source.</summary>
+    RoleAssigned,
+
+    /// <summary>A role was taken from a user; the user's sessions were ended. Holds the role name.</summary>
+    RoleRemoved,
+
+    /// <summary>A permission was taken from a role; the sessions of every holder were ended. Holds role and permission.</summary>
+    RolePermissionRemoved,
 }

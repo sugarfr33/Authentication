@@ -19,7 +19,7 @@ internal static class WellKnownEndpoints
             JwksDocument jwks = await keys.GetJwksAsync(cancellationToken);
             http.Response.Headers[HeaderNames.CacheControl] = JwksCacheControl;
             return Results.Json(jwks, contentType: "application/jwk-set+json");
-        });
+        }).AllowAnonymous();
 
         return endpoints;
     }

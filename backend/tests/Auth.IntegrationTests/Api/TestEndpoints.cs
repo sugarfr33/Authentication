@@ -24,7 +24,7 @@ internal sealed class TestEndpoints : IEndpointModule
     {
         RouteGroupBuilder test = api.MapGroup("/__test");
 
-        test.MapGet("/ping", () => Results.Ok(new { pong = true }));
+        test.MapGet("/ping", () => Results.Ok(new { pong = true })).AllowAnonymous();
 
         // Stands in for the T13 login: issues both cookies for the seeded user. The body carries no token.
         test.MapPost("/session", async (ITokenService tokens, IRefreshTokenService refresh, ICookieWriter cookies, HttpContext http, CancellationToken cancellationToken) =>
@@ -38,7 +38,7 @@ internal sealed class TestEndpoints : IEndpointModule
             cookies.WriteAccessToken(http.Response, access);
             cookies.WriteRefreshToken(http.Response, refreshToken);
             return Results.Ok(new { ok = true });
-        });
+        }).AllowAnonymous();
 
         test.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
         {
@@ -47,7 +47,7 @@ internal sealed class TestEndpoints : IEndpointModule
             name = user.Identity?.Name,
         })).RequireAuthorization();
 
-        test.MapMethods("/echo", [HttpMethods.Post, HttpMethods.Put, HttpMethods.Patch, HttpMethods.Delete], () => Results.Ok(new { echoed = true }));
+        test.MapMethods("/echo", [HttpMethods.Post, HttpMethods.Put, HttpMethods.Patch, HttpMethods.Delete], () => Results.Ok(new { echoed = true })).AllowAnonymous();
 
         test.MapPost("/protected", () => Results.Ok(new { done = true })).RequireAuthorization();
 
@@ -63,14 +63,17 @@ internal sealed class TestEndpoints : IEndpointModule
             using StreamReader reader = new(request.Body);
             string body = await reader.ReadToEndAsync();
             return Results.Ok(new { length = body.Length });
-        });
+        }).AllowAnonymous();
 
-        test.MapPost("/busy", IResult () => throw new PasswordHashingBusyException());
+        test.MapPost("/busy", IResult () => throw new PasswordHashingBusyException()).AllowAnonymous();
 
         test.MapPost("/logout", (ICookieWriter cookies, HttpContext http) =>
         {
             cookies.ClearAuthCookies(http.Response);
             return Results.NoContent();
-        });
+        }).AllowAnonymous();
+
+        // Default deny (audit MEDIUM-1): no authorization call of its own, so only the /api/v1 group convention guards it.
+        test.MapGet("/unmarked", () => Results.Ok(new { reached = true }));
     }
 }

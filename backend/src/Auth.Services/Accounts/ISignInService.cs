@@ -83,6 +83,7 @@ internal sealed class SignInService(
     IRefreshTokenService refreshTokens,
     ITokenService tokens,
     TokenOptions tokenOptions,
+    ISessionLiveness liveness,
     IClock clock) : ISignInService
 {
     public async Task<Result<SignedIn>> LoginAsync(LoginRequest request, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
@@ -131,6 +132,7 @@ internal sealed class SignInService(
         if (accessUserId is Guid owner && accessSessionId is Guid sid)
         {
             revoked += await refreshTokens.RevokeFamilyForUserAsync(sid, owner, RefreshTokenRevokedReason.Logout, cancellationToken);
+            liveness.Invalidate(sid);
         }
 
         // The refresh cookie still ends the session after the access cookie has expired and been dropped.
@@ -138,6 +140,7 @@ internal sealed class SignInService(
         if (fromRefresh is not null && (fromRefresh.FamilyId != accessSessionId || fromRefresh.UserId != accessUserId))
         {
             revoked += await refreshTokens.RevokeFamilyForUserAsync(fromRefresh.FamilyId, fromRefresh.UserId, RefreshTokenRevokedReason.Logout, cancellationToken);
+            liveness.Invalidate(fromRefresh.FamilyId);
         }
 
         Guid? userId = accessUserId ?? fromRefresh?.UserId;
@@ -153,6 +156,7 @@ internal sealed class SignInService(
     {
         ArgumentNullException.ThrowIfNull(audit);
         int revoked = await refreshTokens.RevokeAllAsync(userId, RefreshTokenRevokedReason.LogoutAll, cancellationToken);
+        liveness.InvalidateUser(userId);
         await AuditAsync(AuditEventType.LogoutAll, userId, "{\"revoked\":" + revoked.ToString(CultureInfo.InvariantCulture) + "}", audit, cancellationToken);
         return revoked;
     }
@@ -298,6 +302,7 @@ internal sealed class SignInService(
         }
 
         int revoked = await refreshTokens.RevokeFamilyForUserAsync(familyId, userId, RefreshTokenRevokedReason.Logout, cancellationToken);
+        liveness.Invalidate(familyId);
         if (revoked > 0)
         {
             await AuditAsync(AuditEventType.SessionRevoked, userId, "{\"session\":\"" + familyId.ToString("D") + "\"}", audit, cancellationToken);

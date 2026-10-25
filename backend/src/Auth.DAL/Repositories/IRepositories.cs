@@ -52,6 +52,18 @@ public interface IRoleRepository
     Task<bool> UserHasRoleAsync(Guid userId, Guid roleId, CancellationToken cancellationToken);
 
     Task AddUserRoleAsync(UserRole assignment, CancellationToken cancellationToken);
+
+    /// <summary>True when at least one active user with a verified email holds the role.</summary>
+    Task<bool> AnyActiveVerifiedHolderAsync(Guid roleId, CancellationToken cancellationToken);
+
+    /// <summary>Ids of active, verified users who do not hold the role, at most <paramref name="max"/>.</summary>
+    Task<IReadOnlyList<Guid>> GetActiveVerifiedUsersWithoutRoleAsync(Guid roleId, int max, CancellationToken cancellationToken);
+
+    /// <summary>Deletes the user's assignment of the role in one DELETE. Returns the number of rows deleted (0 or 1).</summary>
+    Task<int> RemoveUserRoleAsync(Guid userId, Guid roleId, CancellationToken cancellationToken);
+
+    /// <summary>Deletes the role's grant of the permission in one DELETE. Returns the number of rows deleted (0 or 1).</summary>
+    Task<int> RemoveRolePermissionAsync(Guid roleId, Guid permissionId, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -95,6 +107,9 @@ public interface IRefreshTokenRepository
 
     /// <summary>Revokes every not-yet-revoked token of the user in one UPDATE. Returns the number revoked.</summary>
     Task<int> RevokeAllForUserAsync(Guid userId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
+
+    /// <summary>Revokes every not-yet-revoked token of every user holding the role, in one UPDATE. Returns the number revoked.</summary>
+    Task<int> RevokeAllForRoleHoldersAsync(Guid roleId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
 
     /// <summary>The user's tokens that are neither revoked nor expired at <paramref name="utcNow"/>, newest first.</summary>
     Task<IReadOnlyList<RefreshToken>> GetActiveByUserAsync(Guid userId, DateTime utcNow, CancellationToken cancellationToken);

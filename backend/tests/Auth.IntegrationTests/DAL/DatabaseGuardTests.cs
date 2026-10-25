@@ -37,6 +37,22 @@ public class DatabaseGuardTests
         SqlServerDatabaseFixture.EnsureThrowawayDatabase(@"Server=.\SQLEXPRESS;Database=" + name + ";");
     }
 
+    /// <summary>Audit LOW-6: the stale-database cleanup only ever matches names this run scheme creates.</summary>
+    [Theory]
+    [InlineData("CentralAuth_run1a2b3c4d_Test", true)]
+    [InlineData("CentralAuth_Api_run0123abcd_Test", true)]
+    [InlineData("CentralAuth", false)]
+    [InlineData("CentralAuth_Test", false)]
+    [InlineData("CentralAuth_run1a2b3c4_Test", false)]
+    [InlineData("CentralAuth_run1a2b3c4dd_Test", false)]
+    [InlineData("CentralAuth_run1A2B3C4D_Test", false)]
+    [InlineData("CentralAuth_Prod_runbackup1_Test", false)]
+    [InlineData("CentralAuth_a_b_run1a2b3c4d_Test", false)]
+    [InlineData("CentralAuth_run1a2b3c4d_Test_old", false)]
+    [InlineData("OtherApp_run1a2b3c4d_Test", false)]
+    public void Only_run_database_names_are_stale_candidates(string name, bool expected) =>
+        Assert.Equal(expected, TestDatabaseNames.IsRunDatabase(name));
+
     [Fact]
     public void The_shared_fixture_and_the_api_fixture_use_this_runs_names()
     {

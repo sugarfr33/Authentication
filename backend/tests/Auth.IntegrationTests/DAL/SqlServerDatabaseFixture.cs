@@ -34,7 +34,7 @@ public sealed class SqlServerDatabaseFixture : IAsyncLifetime
     public async Task InitializeAsync()
     {
         EnsureThrowawayDatabase(ConnectionString);
-        await TestDatabaseNames.DropStaleAsync(ConnectionString, TimeSpan.FromHours(2));
+        await TestDatabaseNames.DropStaleAsync(ConnectionString, TimeSpan.FromHours(6));
         ServiceCollection collection = new();
         collection.AddDataAccess(ConnectionString, options => options.AddInterceptors(Commands));
         services = collection.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });

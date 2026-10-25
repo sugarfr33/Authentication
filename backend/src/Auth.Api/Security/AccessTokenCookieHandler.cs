@@ -15,13 +15,14 @@ namespace Auth.Api.Security;
 /// the token service's parameters, fetched per request from the cached key provider. Failures give a bare 401
 /// ProblemDetails that does not say why.
 /// </summary>
-internal sealed partial class AccessTokenCookieHandler(
+internal sealed class AccessTokenCookieHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
     ILoggerFactory logger,
     UrlEncoder encoder,
     ITokenService tokens,
     ICookieWriter cookies,
     ISessionLiveness sessions,
+    LivenessFailureLog livenessFailures,
     IProblemDetailsService problemDetails) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "AccessTokenCookie";
@@ -65,15 +66,12 @@ internal sealed partial class AccessTokenCookieHandler(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            LogLivenessCheckFailed(Logger, ex.GetType().Name);
+            livenessFailures.Count(ex.GetType().Name);
             return AuthenticateResult.Fail("Session check unavailable.");
         }
 
         return AuthenticateResult.Success(new AuthenticationTicket(PrincipalFrom(result.ClaimsIdentity), Scheme.Name));
     }
-
-    [LoggerMessage(EventId = 5330, Level = LogLevel.Warning, Message = "Live-session check failed ({ExceptionType}); the request is treated as unauthenticated")]
-    private static partial void LogLivenessCheckFailed(ILogger logger, string exceptionType);
 
     /// <summary>The principal for a validated access token: the same one every later request will authenticate as.</summary>
     internal static ClaimsPrincipal PrincipalFrom(ClaimsIdentity validated) =>

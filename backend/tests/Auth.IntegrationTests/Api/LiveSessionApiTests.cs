@@ -82,13 +82,21 @@ public sealed class LiveSessionApiTests(ApiFixture api) : IAsyncLifetime
         await browser.GetAsync(TestEndpoints.Prefix + "/ping");
         await browser.SendAsync(HttpMethod.Post, Login, configure: r => r.Content = Json(new Dictionary<string, string> { [AuthRequestFields.Email] = email, ["password"] = Password }));
 
+        int warningsBefore = api.Logs.Texts.Count(IsLivenessWarning);
         HttpResponseMessage response = await browser.GetAsync(Sessions);
         string body = await response.Content.ReadAsStringAsync();
+        HttpStatusCode second = (await browser.GetAsync(Sessions)).StatusCode;
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, second);
         Assert.DoesNotContain("database down", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Exception", body, StringComparison.Ordinal);
-        Assert.Contains(api.Logs.Texts, t => t.Contains("Live-session check failed", StringComparison.Ordinal) && t.Contains("InvalidOperationException", StringComparison.Ordinal));
+
+        // Reviewer note: one warning per minute at most, not one per request (a database outage would flood the log).
+        Assert.Equal(warningsBefore + 1, api.Logs.Texts.Count(IsLivenessWarning));
+
+        static bool IsLivenessWarning(string text) =>
+            text.Contains("Live-session check failed", StringComparison.Ordinal) && text.Contains("InvalidOperationException", StringComparison.Ordinal);
     }
 
     private static WebApplicationFactory<Program> WithSettings(WebApplicationFactory<Program> factory)
@@ -156,5 +164,17 @@ public sealed class LiveSessionApiTests(ApiFixture api) : IAsyncLifetime
     {
         public Task<bool> IsLiveAsync(Guid userId, Guid sessionId, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("database down");
+
+        public void Invalidate(Guid sessionId)
+        {
+        }
+
+        public void InvalidateUser(Guid userId)
+        {
+        }
+
+        public void InvalidateAll()
+        {
+        }
     }
 }

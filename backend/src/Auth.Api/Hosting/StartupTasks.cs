@@ -52,7 +52,15 @@ internal sealed partial class AuthorizationSeedOnStartup(
         {
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             AuthorizationSeedResult result = await scope.ServiceProvider.GetRequiredService<IAuthorizationSeeder>().SeedAsync(stoppingToken);
-            LogSeeded(logger, result.PermissionsAdded, result.RolesAdded, result.GrantsAdded, result.BootstrapAdminAssigned);
+            LogSeeded(logger, result.PermissionsAdded, result.RolesAdded, result.GrantsAdded, result.UsersBackfilled, result.BootstrapAdminAssigned);
+            if (result.Bootstrap == BootstrapAdminOutcome.AdministratorExists)
+            {
+                LogBootstrapIgnored(logger);
+            }
+            else if (result.Bootstrap == BootstrapAdminOutcome.AccountNotEligible)
+            {
+                LogBootstrapNotEligible(logger);
+            }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -63,8 +71,14 @@ internal sealed partial class AuthorizationSeedOnStartup(
         }
     }
 
-    [LoggerMessage(EventId = 5400, Level = LogLevel.Information, Message = "Authorization seed: {Permissions} permission(s), {Roles} role(s), {Grants} grant(s) added; bootstrap admin assigned: {Bootstrap}")]
-    private static partial void LogSeeded(ILogger logger, int permissions, int roles, int grants, bool bootstrap);
+    [LoggerMessage(EventId = 5400, Level = LogLevel.Information, Message = "Authorization seed: {Permissions} permission(s), {Roles} role(s), {Grants} grant(s) added, User role given to {Backfilled} account(s); bootstrap admin assigned: {Bootstrap}")]
+    private static partial void LogSeeded(ILogger logger, int permissions, int roles, int grants, int backfilled, bool bootstrap);
+
+    [LoggerMessage(EventId = 5402, Level = LogLevel.Warning, Message = "Authorization:BootstrapAdminEmail is set but an administrator already exists, so it was ignored; remove the setting")]
+    private static partial void LogBootstrapIgnored(ILogger logger);
+
+    [LoggerMessage(EventId = 5403, Level = LogLevel.Warning, Message = "Authorization:BootstrapAdminEmail matches no active account with a verified email; no administrator was assigned")]
+    private static partial void LogBootstrapNotEligible(ILogger logger);
 
     [LoggerMessage(EventId = 5401, Level = LogLevel.Warning, Message = "Authorization seed failed ({ExceptionType}); existing roles and permissions are unchanged")]
     private static partial void LogSeedFailed(ILogger logger, string exceptionType);

@@ -7,14 +7,22 @@
 - A role is **global** (`ClientApplicationId` null) or **scoped to one client application**. The API's own sessions
   (cookie login) use global roles only. Application roles reach a token only when one is minted for that application
   (OAuth, later task); the repository already filters "global plus this application".
-- There is no active/inactive flag on roles or permissions. To "deactivate" one, remove its grants or assignments;
-  the change takes effect at the next token mint (below). Adding such a flag would be a schema change to agree first.
+- There is no active/inactive flag on roles or permissions. To "deactivate" one, remove its grants or assignments
+  through `IRoleAssignmentService` (below). Adding such a flag would be a schema change to agree first.
 
 ## Seeded data
 
 `IAuthorizationSeeder` runs at startup (hosted service `AuthorizationSeedOnStartup`, `Authorization:SeedOnStartup`,
-default true) and is **idempotent**: it only adds what is missing and never removes or changes rows, so grants an
-administrator adds later are kept (tested). A concurrent seed from a second instance is retried.
+default true) and is **idempotent**: it only adds what is missing and never removes rows, so grants an administrator
+adds later are kept (tested). A concurrent seed from a second instance is retried. A failed seed is logged and never
+stops the host (without the Admin role nobody holds privileges, so it fails toward fewer rights).
+
+- **Admin always has every permission of `AuthPermissions.All`** (audit LOW-2): a missing Admin grant is added back at
+  the next start. Taking a system permission away from Admin is therefore not supported; create a narrower role
+  instead.
+- **User role backfill** (audit LOW-1): verified, active accounts without the User role (verified while the seed had
+  failed or not run) receive it, at most 500 per run (the next run continues), each audited as `RoleAssigned` with
+  source `backfill`.
 
 | Permission | Meaning |
 |---|---|
@@ -30,18 +38,50 @@ administrator adds later are kept (tested). A concurrent seed from a second inst
 | `Admin` | all of the above |
 | `User` | none; every account gets it when its email is verified |
 
-**First administrator:** set `Authorization:BootstrapAdminEmail` to the email of an existing verified, active account;
-the next seeder run gives it the Admin role (once). Remove the setting afterwards.
+**First administrator:** set `Authorization:BootstrapAdminEmail` to the email of an existing verified, active account
+and restart; the seeder gives it the Admin role and writes a `RoleAssigned` audit row (source `bootstrap`).
+**Remove the setting after first use.**
+
+- The setting only applies while **no active, verified user holds Admin** (the true first-administrator case). Once an
+  administrator exists it is ignored, and every start logs a warning asking to remove it; so a configuration value can
+  never restore Admin to an account an administrator demoted (tested: demote with another admin present, reseed, no
+  re-grant).
+- If the email matches no active, verified account, nothing is assigned and a warning is logged.
+- **Recovery when no administrator is left** (all deactivated or demoted): set the email of a verified account and
+  restart; the rule above makes it apply again (tested). Remove the setting once more afterwards.
 
 ## Tokens
 
 The access token minted at login and at every refresh carries `sub` (user id), `sid` (session = refresh family),
 `email`, `name`, one `role` claim per role, one `perm` claim per permission (distinct, from the roles), `aud` (the
 default audience for cookie sessions) and `iss`. The claims are read from the database **when the token is minted**,
-so a role or grant change takes effect at the next mint: at the latest after one access-token lifetime (15 minutes),
-when the SPA refreshes (tested: removing a role keeps the old token's permission until `/refresh`, then 403).
+so an added role or grant appears at the next mint (the SPA's next `/refresh`, within one access-token lifetime of 15
+minutes). Removals do not wait for that (next section).
+
+## Taking rights away (audit MEDIUM-3)
+
+`IRoleAssignmentService` is the only way to remove rights, and every future admin endpoint must call it:
+
+- `RemoveUserRoleAsync(userId, roleId)`: deletes the assignment and revokes **all refresh families of that user**
+  (reason `Admin`), audited as `RoleRemoved`.
+- `RemoveRolePermissionAsync(roleId, permissionId)`: deletes the grant and revokes the families of **every user holding
+  the role**, audited as `RolePermissionRemoved`.
+
+Each runs in one transaction. The live-session check then rejects the old access tokens: immediately on the instance
+that made the change (its cache entries are invalidated), within `SessionLiveness:CacheDuration` (default 5 s, at most
+30 s) on the others. The affected users sign in again and get a token with their new rights. Tested at service level
+(holders' sessions end, a bystander's survive, nothing changes when the row was not there). A direct database delete
+bypasses this and leaves old tokens valid until their next mint (tested: the permission stays until `/refresh`).
 
 ## Policies
+
+**Default deny (audit MEDIUM-1):** every endpoint under `/api/v1` requires a signed-in user through a convention on
+the route group (`api.RequireAuthorization()` in Program.cs); public endpoints say `.AllowAnonymous()` explicitly
+(login, logout, refresh, register, verify-email, forgot-password, reset-password, `/health`, `/health/ready`, JWKS). An
+integration test fails if any mapped endpoint has neither authorization metadata nor `AllowAnonymous`, and pins the
+exact list of anonymous routes. No `FallbackPolicy`: it also applies to requests that match no endpoint and to routing's
+405/415 answers, which would turn a 404 or 415 into 401. `RequireAuthorization()` without a name only means "signed
+in": **administration endpoints must name a permission policy**.
 
 `AuthorizationPolicies.Configure` registers:
 
@@ -63,7 +103,13 @@ by the server's current key with the exact algorithm, right issuer, audience and
 check, see sign-in-and-sessions.md). A token signed by anyone else, even with the same `kid`, is 401 (tested). Claims
 never come from headers, the body or a client-readable cookie.
 
-## Not in T16
+## Forward notes
 
-No administration endpoints exist yet (role assignment, user management); `RoleAssigned`-style audit events arrive
-with them.
+- No administration endpoints exist yet (role assignment, user management). They must name a permission policy, give
+  roles with a `RoleAssigned` audit row, and take them away only through `IRoleAssignmentService`.
+- **T19 (OAuth, app-scoped roles):** `role:Admin` checks the `role` claim. An application role named `Admin` must never
+  satisfy it: keep audience validation strict on the API (its tokens accept only the default audience) and never mint
+  application roles into cookie-session tokens (`RolesForUser(null)` returns global roles only today).
+- Token size: the access token travels in a cookie (browsers drop cookies over 4096 bytes). A test pins the largest
+  realistic token today (every role and permission, near-limit email, 128 non-ASCII display-name characters) under 3500
+  bytes; re-check it when application roles add claims.

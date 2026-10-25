@@ -22,11 +22,13 @@ internal sealed class AccountEndpoints : IEndpointModule
         RouteGroupBuilder auth = api.MapGroup("/auth");
 
         auth.MapPost("/register", RegisterAsync)
+            .AllowAnonymous()
             .Accepts<RegisterRequest>("application/json")
             .Produces<RegisterResponse>(StatusCodes.Status202Accepted)
             .ProducesValidationProblem();
 
         auth.MapPost("/verify-email", VerifyEmailAsync)
+            .AllowAnonymous()
             .Accepts<VerifyEmailRequest>("application/json")
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status400BadRequest);

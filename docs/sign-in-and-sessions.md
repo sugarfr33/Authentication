@@ -147,13 +147,25 @@ A signed, unexpired access cookie is not enough: after the signature check, `Acc
 `ISessionLiveness` whether the token's `sid` family still has a token that is neither revoked nor expired and whether the
 user (`sub`) is still active. That is one indexed query (`IsSessionLiveAsync`), cached per family for
 `SessionLiveness:CacheDuration` (default **5 s**, 0 to 30; 0 disables the cache) and bounded by
-`SessionLiveness:MaxEntries` (10 000; the cache is emptied when full). A cached entry is only reused for the same user.
+`SessionLiveness:MaxEntries` (10 000). A cached entry is only reused for the same user.
+
+- **Per instance.** Each API instance has its own cache. `/logout`, `/logout-all`, `DELETE /sessions/{id}` and role
+  removals (`IRoleAssignmentService`) invalidate the entries on the instance that handled them, so there the change is
+  immediate; other instances see it when their entry expires (at most `CacheDuration`, never more than 30 s).
+- **Bounded, no stampede (audit LOW-4).** The entry count is an Interlocked counter (no `ConcurrentDictionary.Count` per
+  miss). When full, expired entries are evicted first and the cache is emptied only if that is not enough. Concurrent
+  misses for the same session share one lookup; a caller whose request is aborted stops waiting without failing the
+  others. A lookup that overlaps an invalidation does not cache its answer.
+- **Failures are not cached (audit LOW-5, accepted).** During a database outage every authenticated request retries
+  the lookup and gets 401. A short negative cache was considered and not added: failing closed matters more than
+  sparing a sick database, and the connection pool already bounds the load.
 
 - Not live (revoked, expired, unknown family, inactive user) or **no `sid` claim**: the request is unauthenticated (401
   on protected routes). Every way a password changes (change, reset) also revokes every family, so a SecurityStamp
   check would add nothing: the `sid` check covers it.
-- **Fails closed:** if the lookup throws, the request is unauthenticated, a warning with the exception type only is
-  logged, and the 401 body is the usual bare one (tested).
+- **Fails closed:** if the lookup throws, the request is unauthenticated and the 401 body is the usual bare one
+  (tested). The failure is logged as one warning per minute at most (`LivenessFailureLog`: count since the last report
+  and the latest exception type only), so an outage does not log one line per request (tested).
 - `/logout`, `/refresh` and the login flow are anonymous and handle ended sessions themselves. Because antiforgery
   tokens are user-bound, a browser whose session was ended elsewhere is anonymous again and must fetch an anonymous XSRF
   pair (any GET under /api) before its next POST, the same SPA flow as after access-cookie expiry.
