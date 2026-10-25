@@ -248,3 +248,18 @@ internal sealed partial class ProxyMisconfigurationDetector(RequestDelegate next
         Message = "Requests arrive from a loopback/private peer with X-Forwarded-For, but ForwardedHeaders:KnownProxies is empty: all clients share one rate-limit bucket. Configure KnownProxies, or set ForwardedHeaders:Direct=true if there is no proxy.")]
     private static partial void LogLikelyUnconfiguredProxy(ILogger logger);
 }
+
+/// <summary>
+/// When MFA is on (T21), the keys are loaded and checked before the host starts serving: a missing or malformed
+/// MfaEncryptionKey-{id} or MfaRecoveryPepper secret stops the start instead of failing the first sign-in.
+/// </summary>
+internal sealed class MfaKeyCheckOnStartup(IServiceScopeFactory scopes) : IHostedService
+{
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<Auth.Services.Mfa.IMfaService>().ValidateKeysAsync(cancellationToken);
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}

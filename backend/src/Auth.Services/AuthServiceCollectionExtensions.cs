@@ -4,6 +4,7 @@ using Auth.Entities;
 using Auth.Services.Accounts;
 using Auth.Services.Audit;
 using Auth.Services.Authorization;
+using Auth.Services.Mfa;
 using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.OAuth;
@@ -99,6 +100,11 @@ public static class AuthServiceCollectionExtensions
         services.AddScoped<IAccessProfileBuilder, AccessProfileBuilder>();
         services.AddScoped<ISessionCap, SessionCap>();
         services.AddScoped<ISessionRefresher, SessionRefresher>();
+        services.AddScoped<IBrowserSessionStarter, BrowserSessionStarter>();
+        services.TryAddSingleton(new MfaOptions());
+        services.AddSingleton<IMfaCrypto, MfaCrypto>();
+        services.AddSingleton<IMfaChallenges, MfaChallenges>();
+        services.AddScoped<IMfaService, MfaService>();
         services.AddScoped<ISignInService, SignInService>();
         services.AddScoped<IPasswordService>(sp => ActivatorUtilities.CreateInstance<PasswordService>(
             sp, sp.GetRequiredService<AccountEmailOptions>().Validated()));

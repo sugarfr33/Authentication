@@ -87,6 +87,18 @@ internal static class AuditEvents
     public static AuditEvent AuthorizationCodeRedeemed(Guid userId, Guid applicationId, Guid session) =>
         new(AuditEventType.AuthorizationCodeRedeemed, userId, new AuditField("app", applicationId), new AuditField("session", session));
 
+    /// <summary>MFA state changed: action enrollment_started, enrolled, regenerated, disabled or reset. Never a code or secret.</summary>
+    public static AuditEvent MfaEnabled(Guid userId, string action) => new(AuditEventType.MfaEnabled, userId, new AuditField("action", action));
+
+    /// <summary>A sign-in passed the TOTP second factor.</summary>
+    public static AuditEvent MfaVerified(Guid userId) => new(AuditEventType.MfaVerified, userId);
+
+    /// <summary>A wrong or unusable second factor (or password at an MFA step); the reason word only.</summary>
+    public static AuditEvent MfaFailed(Guid? userId, string reason) => new(AuditEventType.MfaFailed, userId, new AuditField("reason", reason));
+
+    /// <summary>A sign-in used one recovery code.</summary>
+    public static AuditEvent MfaRecoveryCodeUsed(Guid userId) => new(AuditEventType.MfaRecoveryCodeUsed, userId);
+
     /// <summary>Single logout: application sessions ended; <paramref name="applicationId"/> when an application asked.</summary>
     public static AuditEvent SingleLogout(Guid userId, Guid? applicationId, Auth.Services.Security.SessionEndCause cause, int revoked) => applicationId is Guid app
         ? new(AuditEventType.SingleLogout, userId, new AuditField("cause", CauseWord(cause)), new AuditField("revoked", revoked), new AuditField("app", app))
@@ -106,6 +118,9 @@ internal static class AuditEvents
         Auth.Services.Security.SessionEndCause.CodeReplay => "code_replay",
         Auth.Services.Security.SessionEndCause.EmailVerified => "email_verified",
         Auth.Services.Security.SessionEndCause.AccountDisabled => "account_disabled",
+        Auth.Services.Security.SessionEndCause.MfaEnrolled => "mfa_enrolled",
+        Auth.Services.Security.SessionEndCause.MfaDisabled => "mfa_disabled",
+        Auth.Services.Security.SessionEndCause.MfaReset => "mfa_reset",
         _ => throw new ArgumentOutOfRangeException(nameof(cause), cause, "Unmapped session end cause."),
     };
 

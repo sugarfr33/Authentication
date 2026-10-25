@@ -16,9 +16,16 @@ public enum AuditEventType
     PasswordResetRequested,
     PasswordReset,
     PasswordChanged,
+    /// <summary>MFA enrollment started, confirmed, recovery codes regenerated, disabled or reset (an action word only).</summary>
     MfaEnabled,
+
+    /// <summary>A sign-in passed the TOTP second factor.</summary>
     MfaVerified,
+
+    /// <summary>A wrong or unusable second factor; a reason word only.</summary>
     MfaFailed,
+
+    /// <summary>A sign-in used a recovery code.</summary>
     MfaRecoveryCodeUsed,
     AuthorizationCodeIssued,
     AuthorizationCodeRedeemed,

@@ -80,6 +80,10 @@ the session may still be live on the server.
 refresh-token theft, a password change) also ends every application session of the user. See
 single-logout-and-shared-domain.md.
 
+**MFA (T21):** with `Mfa:Enabled`, a correct password for an account with MFA answers `202 {"mfa_required": true}`
+and sets the `__Secure-mfa` challenge cookie instead of starting a session. The session starts at
+`POST /auth/mfa/verify` (docs/mfa-totp.md). With the flag off, such accounts fail closed, getting the generic 401.
+
 ## Logout-all
 
 Needs a valid access cookie. Revokes every refresh family of the user (reason `LogoutAll`, one UPDATE), writes a

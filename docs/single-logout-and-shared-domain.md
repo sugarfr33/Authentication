@@ -40,6 +40,7 @@ reaction added later, such as back-channel notification, is one more listener.
 | application deactivated, or its audience changed | Application (`UserId` null) | `ApplicationDeactivated` | after |
 | authorization code replayed | Application | `CodeReplay` | after |
 | `POST /oauth/logout` (RP-initiated) | Application | `ApplicationLogout` | the listener revokes |
+| MFA confirmed, disabled, or reset by an admin (T21) | All | `MfaEnrolled`, `MfaDisabled`, `MfaReset` | after |
 
 **Deliberately silent** (pinned by the architecture test's exception list):
 

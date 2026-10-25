@@ -14,6 +14,8 @@ public enum AuthRateLimitKind
     OAuthAuthorize,
     OAuthToken,
     OAuthLogout,
+    MfaVerify,
+    MfaManage,
 }
 
 /// <summary>A fixed-window limit: <see cref="PermitLimit"/> requests per <see cref="Window"/>.</summary>
@@ -53,6 +55,11 @@ public sealed class AuthRateLimitOptions
         ["/api/v1/oauth/authorize"] = AuthRateLimitKind.OAuthAuthorize,
         ["/api/v1/oauth/token"] = AuthRateLimitKind.OAuthToken,
         ["/api/v1/oauth/logout"] = AuthRateLimitKind.OAuthLogout,
+        ["/api/v1/auth/mfa/verify"] = AuthRateLimitKind.MfaVerify,
+        ["/api/v1/auth/mfa/enroll"] = AuthRateLimitKind.MfaManage,
+        ["/api/v1/auth/mfa/confirm"] = AuthRateLimitKind.MfaManage,
+        ["/api/v1/auth/mfa/recovery-codes"] = AuthRateLimitKind.MfaManage,
+        ["/api/v1/auth/mfa/disable"] = AuthRateLimitKind.MfaManage,
     };
 
     /// <summary>
@@ -80,6 +87,10 @@ public sealed class AuthRateLimitOptions
         [AuthRateLimitKind.OAuthAuthorize] = Policy(60, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
         [AuthRateLimitKind.OAuthToken] = Policy(30, TimeSpan.FromMinutes(1), 30, TimeSpan.FromMinutes(1)),
         [AuthRateLimitKind.OAuthLogout] = Policy(30, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
+
+        // T21: per IP; wrong factors also count toward the account lockout.
+        [AuthRateLimitKind.MfaVerify] = Policy(10, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
+        [AuthRateLimitKind.MfaManage] = Policy(10, TimeSpan.FromMinutes(15), null, TimeSpan.Zero),
     };
 
     /// <summary>

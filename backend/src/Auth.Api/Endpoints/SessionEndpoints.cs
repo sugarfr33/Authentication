@@ -5,6 +5,7 @@ using Auth.Contracts;
 using Auth.Contracts.Requests;
 using Auth.Contracts.Responses;
 using Auth.Services.Accounts;
+using Auth.Services.Mfa;
 using Auth.Services.Security;
 using Auth.Services.Tokens;
 using Microsoft.AspNetCore.Antiforgery;
@@ -34,6 +35,7 @@ internal sealed partial class SessionEndpoints : IEndpointModule
             .AllowAnonymous()
             .Accepts<LoginRequest>("application/json")
             .Produces<UserProfileResponse>()
+            .Produces<MfaRequiredResponse>(StatusCodes.Status202Accepted)
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
         // Anonymous on purpose: signing out must work with an expired access token, and always clears the cookies.
@@ -76,28 +78,36 @@ internal sealed partial class SessionEndpoints : IEndpointModule
         ITokenService tokens,
         ICookieWriter cookies,
         IAntiforgery antiforgery,
+        MfaOptions mfaOptions,
         HttpContext http,
         CancellationToken cancellationToken)
     {
-        Result<SignedIn> result = await signIn.LoginAsync(request, RefreshCookie(http), HttpAudit.From(http), cancellationToken);
-        if (!result.IsSuccess)
+        LoginResult result = await signIn.LoginAsync(request, RefreshCookie(http), HttpAudit.From(http), cancellationToken);
+        if (result.MfaChallenge is string challenge)
+        {
+            // Password proven; the second factor is still due (T21). The challenge travels only in its HttpOnly cookie.
+            cookies.WriteMfaChallenge(http.Response, challenge, mfaOptions.ChallengeLifetime);
+            http.Response.Headers.CacheControl = "no-store";
+            return TypedResults.Json(new MfaRequiredResponse(true), statusCode: StatusCodes.Status202Accepted);
+        }
+
+        if (result.Session is not SignedIn session)
         {
             return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: InvalidCredentialsTitle);
         }
 
-        SignedIn session = result.Value!;
+        await StartBrowserSessionAsync(session, tokens, cookies, antiforgery, http, cancellationToken);
+        return TypedResults.Ok(session.Profile);
+    }
+
+    /// <summary>Writes the session cookies and reissues the XSRF token for the new user (login and the MFA verify step).</summary>
+    internal static async Task StartBrowserSessionAsync(SignedIn session, ITokenService tokens, ICookieWriter cookies, IAntiforgery antiforgery, HttpContext http, CancellationToken cancellationToken)
+    {
         cookies.WriteAccessToken(http.Response, session.AccessToken);
         cookies.WriteRefreshToken(http.Response, session.RefreshToken);
 
         // The XSRF token must now be bound to the signed-in user: authenticate as the new token would, then reissue.
-        TokenValidationResult minted = await tokens.ValidateAsync(session.AccessToken.Jwt, null, cancellationToken);
-        if (minted is { IsValid: true, ClaimsIdentity: not null })
-        {
-            http.User = AccessTokenCookieHandler.PrincipalFrom(minted.ClaimsIdentity);
-            BrowserProtectionMiddleware.IssueTokens(http, antiforgery);
-        }
-
-        return TypedResults.Ok(session.Profile);
+        await ReissueXsrfForAsync(session.AccessToken, tokens, antiforgery, http, cancellationToken);
     }
 
     private static async Task<IResult> LogoutAsync(
@@ -298,7 +308,7 @@ internal sealed partial class SessionEndpoints : IEndpointModule
     [LoggerMessage(EventId = 5301, Level = LogLevel.Warning, Message = "Single logout failed before the browser session was ended ({ExceptionType}); the request can be retried")]
     private static partial void LogSignOutNotStarted(ILogger logger, string exceptionType);
 
-    private static string? RefreshCookie(HttpContext http) =>
+    internal static string? RefreshCookie(HttpContext http) =>
         http.Request.Cookies.TryGetValue(AuthCookieNames.Refresh, out string? value) && value is { Length: > 0 } ? value : null;
 
     [LoggerMessage(EventId = 5300, Level = LogLevel.Warning, Message = "Sign-out could not be completed on the server ({ExceptionType}); the browser cookies were cleared")]

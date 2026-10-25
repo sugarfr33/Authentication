@@ -77,7 +77,11 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | AuthorizationCodeRedeemed | app (id), session (id) | normal |
 | AuthorizationCodeRejected | app (id, when known), reason | **high** |
 | SingleLogout | cause (logout, logout_all, session_revoked, token_reuse, password_change, application_logout), revoked (count), app (id, RP-initiated only) | normal |
-| Mfa*, SigningKeyRotated | reserved | |
+| MfaEnabled | action (enrollment_started, enrolled, regenerated, disabled, reset) | normal |
+| MfaVerified | none | normal |
+| MfaFailed | reason (wrong_code, wrong_recovery_code, replayed, locked, bad_challenge, wrong_password) | **high** |
+| MfaRecoveryCodeUsed | none | normal |
+| SigningKeyRotated | reserved | |
 
 **TokenRefreshed decision:** it is kept, with no sampling. It writes about one row per 15 minutes per active session. It
 is high-volume, so it gets the short retention below. Sampling would hide the refresh history of a stolen session, and

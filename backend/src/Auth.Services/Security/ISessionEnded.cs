@@ -40,6 +40,15 @@ public enum SessionEndCause
 
     /// <summary>A refresh found the account disabled or unverified: the family was revoked.</summary>
     AccountDisabled,
+
+    /// <summary>MFA was turned on (T21): every session of the user, opened with the password alone, was revoked.</summary>
+    MfaEnrolled,
+
+    /// <summary>The user turned MFA off with their factors: every session was revoked.</summary>
+    MfaDisabled,
+
+    /// <summary>An administrator reset the user's MFA: every session was revoked.</summary>
+    MfaReset,
 }
 
 /// <summary>Which sessions an event is about, stated by the publisher (never inferred by a listener).</summary>

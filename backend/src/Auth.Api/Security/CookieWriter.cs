@@ -29,10 +29,18 @@ public interface ICookieWriter
 
     /// <summary>Shared-domain mode: expires the host-only access, refresh and XSRF-TOKEN cookies (no-op in host-only mode).</summary>
     void ExpireHostOnlyTwins(HttpResponse response);
+
+    /// <summary>The MFA login challenge (T21): HttpOnly, Secure, SameSite Strict, host-only, Path /api/v1/auth/mfa.</summary>
+    void WriteMfaChallenge(HttpResponse response, string challenge, TimeSpan lifetime);
+
+    /// <summary>Expires the MFA login challenge cookie.</summary>
+    void ClearMfaChallenge(HttpResponse response);
 }
 
 internal sealed class CookieWriter(IOptions<AuthCookieOptions> options, IClock clock) : ICookieWriter
 {
+    public const string MfaChallengePath = "/api/v1/auth/mfa";
+
     private readonly AuthCookieOptions settings = options.Value;
 
     public string AccessCookieName => settings.Domain is null ? AuthCookieNames.Access : AuthCookieNames.AccessWithDomain;
@@ -61,6 +69,29 @@ internal sealed class CookieWriter(IOptions<AuthCookieOptions> options, IClock c
         response.Cookies.Append(AccessCookieName, string.Empty, Expired(AccessCookie(TimeSpan.Zero)));
         response.Cookies.Append(AuthCookieNames.Refresh, string.Empty, Expired(RefreshCookie(TimeSpan.Zero)));
     }
+
+    public void WriteMfaChallenge(HttpResponse response, string challenge, TimeSpan lifetime)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        response.Cookies.Append(AuthCookieNames.MfaChallenge, challenge, MfaCookie(lifetime));
+    }
+
+    public void ClearMfaChallenge(HttpResponse response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        response.Cookies.Append(AuthCookieNames.MfaChallenge, string.Empty, Expired(MfaCookie(TimeSpan.Zero)));
+    }
+
+    /// <summary>Host-only in both modes: only this API reads it, on the MFA paths.</summary>
+    private static CookieOptions MfaCookie(TimeSpan maxAge) => new()
+    {
+        HttpOnly = true,
+        Secure = true,
+        SameSite = SameSiteMode.Strict,
+        Path = MfaChallengePath,
+        MaxAge = maxAge,
+        IsEssential = true,
+    };
 
     public void ExpireHostOnlyTwins(HttpResponse response)
     {

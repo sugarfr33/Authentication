@@ -22,3 +22,12 @@ public sealed record VerifyEmailRequest(string Token);
 
 /// <summary>Second factor: a TOTP code, or a recovery code when <paramref name="IsRecoveryCode"/> is true.</summary>
 public sealed record MfaVerifyRequest(string Code, bool IsRecoveryCode);
+
+/// <summary>MFA enrollment start (T21): the current password, as re-authentication.</summary>
+public sealed record MfaEnrollRequest(string Password);
+
+/// <summary>MFA enrollment confirmation: a code from the authenticator app.</summary>
+public sealed record MfaConfirmRequest(string Code);
+
+/// <summary>Disable MFA or regenerate recovery codes: the password and a TOTP code (or, to disable, a recovery code).</summary>
+public sealed record MfaFactorsRequest(string Password, string Code, bool IsRecoveryCode);

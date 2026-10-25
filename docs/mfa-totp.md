@@ -1,6 +1,24 @@
-# Optional TOTP MFA (T21): design note
+# Optional TOTP MFA (T21)
 
-Status: **design, before code.** No schema change is needed: the existing schema already has everything (section 2).
+Status: **implemented.** No schema change was needed: the existing schema already has everything (section 2).
+
+Implementation map:
+
+| Part | Where |
+|---|---|
+| Endpoints | `MfaEndpoints` (Auth.Api), mapped only when `Mfa:Enabled` is true |
+| Service | `IMfaService` (Auth.Services/Mfa): enroll, confirm, regenerate, disable, reset, verify |
+| TOTP and base32 | `Totp`, `Base32` (hand-written) |
+| Keys, blob, pepper | `IMfaCrypto`; checked at startup by `MfaKeyCheckOnStartup` |
+| Challenge | `IMfaChallenges` |
+| Shared session start | `IBrowserSessionStarter`, used by password login and by MFA verify |
+
+Tests:
+
+- integration: `MfaApiTests`;
+- unit: `TotpAndMfaCryptoTests` and `MfaRouteMapTests`.
+
+What changed from the design during the build is marked **Built:**.
 
 ## 1. Feature flag
 
@@ -72,7 +90,8 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
 
 - **`POST /auth/mfa/enroll {password}`**:
   - **re-authentication**: the current password, checked through the timing guard. A wrong password counts toward
-    the lockout and audits `MfaFailed` with reason `wrong_password`;
+    the lockout, audits `MfaFailed` with reason `wrong_password`, and answers 400 (the user is signed in, so not
+    401);
   - creates a new secret, stored encrypted with `MfaEnabled` left **false** (pending), and replaces any earlier
     pending secret;
   - answers once with the `otpauth://totp/CentralAuth:<email>?secret=...&issuer=CentralAuth&digits=6&period=30` URI
@@ -108,6 +127,8 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
   - Rotating the pepper means users regenerate their codes (documented).
 - **Single use:** the conditional UPDATE `UsedUtc = now WHERE Id = @id AND UsedUtc IS NULL`, as for the other
   one-time tokens. Of two concurrent uses, one wins (tested).
+- **Built: lookup by hash, no index.** `MfaRecoveryCode.CodeHash` has no index (adding one is a schema change). The
+  table holds 10 rows per MFA user, so the lookup is a small scan. Add the index if MFA adoption grows large.
 
 ## 5. Login with the second factor
 
@@ -118,8 +139,10 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
 2. **Password correct and `MfaEnabled` (flag on):**
    - no session is started, and **the lockout counter is NOT reset** (otherwise an attacker who knows the password
      could alternate password and code guesses forever);
-   - the API sets a **challenge cookie** `__Host-mfa`: HttpOnly, Secure, SameSite Strict, Path
-     `/api/v1/auth/mfa`, Max-Age 300;
+   - the API sets a **challenge cookie** `__Secure-mfa`: HttpOnly, Secure, SameSite Strict, host-only (no Domain, in
+     both cookie modes), Path `/api/v1/auth/mfa`, Max-Age 300;
+   - **Built:** the name is `__Secure-mfa`, not `__Host-mfa`, because the `__Host-` prefix requires `Path=/`, and the
+     narrow path matters more;
    - the answer is `202 {"mfa_required": true}`. Tokens never travel in a body, and the challenge is a credential, so
      it is a cookie.
 3. **The challenge** is stateless (no table) and signed with HMAC-SHA256. Its MAC key is derived with `HKDF` from the
@@ -138,7 +161,11 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
    - correct: the **shared internal browser-session starter** (extracted from `LoginAsync`) resets the lockout,
      applies the session cap, issues the family, rehashes if needed and audits `LoginSucceeded`, plus `MfaVerified`
      or `MfaRecoveryCodeUsed`;
-   - the auth cookies are written and the challenge cookie is expired.
+   - the auth cookies are written and the challenge cookie is expired;
+   - **Built:** a wrong code keeps the challenge, so the user can type the next code; the lockout bounds the
+     guesses.
+   - **Built:** the password hash of an MFA account is not upgraded at sign-in, because the password is not
+     available at the verify step. It is upgraded when the password changes, or at a sign-in after MFA is turned off.
 5. **Rate limits:**
    - new kind `MfaVerify`, 10 per minute per IP (the lockout bounds guesses per account anyway);
    - new kind `MfaManage` for enroll, confirm, disable and regenerate, 10 per 15 minutes per IP;
@@ -151,16 +178,17 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
   - `MfaVerified`;
   - `MfaFailed` with a reason: `wrong_code`, `wrong_recovery_code`, `replayed`, `locked`, `bad_challenge`,
     `wrong_password`;
-  - `MfaRecoveryCodeUsed` with the number of codes left.
+  - `MfaRecoveryCodeUsed` (**Built:** without a count; counting the remaining codes would need one more query per
+    sign-in).
 - **Never in logs or audit:** codes, recovery codes, secrets, the otpauth URI or the challenge. The log redaction
   already masks keys ending in `otp` and `secret`, and `code`; a test plants them.
 - **`SessionEndCause`** values `MfaEnrolled`, `MfaDisabled` and `MfaReset`, scope All, published after the
   revocation. The architecture rule (revoking types publish) covers the new service.
 - **No `ISessionStarted`** event (as advised by the architect). The internal starter is the only seam.
 
-## 7. Decisions requested
+## 7. Decisions taken
 
-None blocking. Defaults chosen:
+These were the defaults proposed in the design note; none needed a schema change:
 
 1. flag off fails closed for users who have MFA;
 2. confirming enrollment ends every session;

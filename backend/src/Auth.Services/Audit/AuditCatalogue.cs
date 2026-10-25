@@ -35,10 +35,10 @@ public static class AuditCatalogue
         [AuditEventType.PasswordResetRequested] = new(["outcome"], AuditVolume.High),
         [AuditEventType.PasswordReset] = new([]),
         [AuditEventType.PasswordChanged] = new([]),
-        [AuditEventType.MfaEnabled] = new([], Reserved: true),
-        [AuditEventType.MfaVerified] = new([], Reserved: true),
-        [AuditEventType.MfaFailed] = new([], Reserved: true),
-        [AuditEventType.MfaRecoveryCodeUsed] = new([], Reserved: true),
+        [AuditEventType.MfaEnabled] = new(["action"]),
+        [AuditEventType.MfaVerified] = new([]),
+        [AuditEventType.MfaFailed] = new(["reason"], AuditVolume.High),
+        [AuditEventType.MfaRecoveryCodeUsed] = new([]),
         [AuditEventType.AuthorizationCodeIssued] = new(["app"]),
         [AuditEventType.AuthorizationCodeRedeemed] = new(["app", "session"]),
         [AuditEventType.SigningKeyRotated] = new([], Reserved: true),
@@ -86,7 +86,11 @@ public static class AuditCatalogue
 
         // Session end causes (SessionEndCause, T20)
         "logout", "logout_all", "session_revoked", "token_reuse", "password_change", "application_logout", "admin_revoked",
-        "application_deactivated", "code_replay", "email_verified",
+        "application_deactivated", "code_replay", "email_verified", "mfa_enrolled", "mfa_disabled", "mfa_reset",
+
+        // MFA (T21): actions and failure reasons
+        "enrollment_started", "enrolled", "disabled", "reset", "regenerated", "wrong_code", "wrong_recovery_code",
+        "bad_challenge", "mfa_unavailable",
     };
 
     /// <summary>Event names (as stored in AuditLog.EventType) with <see cref="AuditVolume.High"/>.</summary>

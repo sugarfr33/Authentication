@@ -16,6 +16,17 @@ namespace Auth.Services.Accounts;
 /// <summary>A started session: the tokens go to cookies only, the profile to the response body.</summary>
 public sealed record SignedIn(AccessToken AccessToken, IssuedRefreshToken RefreshToken, UserProfileResponse Profile);
 
+/// <summary>
+/// Outcome of a password login: a started <see cref="Session"/>, or (MFA, T21) the <see cref="MfaChallenge"/> to send
+/// as the challenge cookie, or neither (the one generic refusal).
+/// </summary>
+public sealed record LoginResult(SignedIn? Session, string? MfaChallenge)
+{
+    public bool IsSuccess => Session is not null;
+
+    public bool MfaRequired => MfaChallenge is not null;
+}
+
 /// <summary>Outcome of a refresh: <see cref="Session"/> is set only when the status is Rotated.</summary>
 /// <param name="Status">Rotated, Concurrent, ReuseDetected or Invalid.</param>
 /// <param name="Session">The new tokens and profile, when rotated.</param>
@@ -36,7 +47,7 @@ public interface ISignInService
     /// <param name="audit">Who is asking.</param>
     /// <param name="cancellationToken">Request cancellation.</param>
     /// <exception cref="PasswordHashingBusyException">No hashing slot freed up in time (the host answers 503).</exception>
-    Task<Result<SignedIn>> LoginAsync(LoginRequest request, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken);
+    Task<LoginResult> LoginAsync(LoginRequest request, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken);
 
     /// <summary>
     /// Ends the browser's session, found from either cookie: the <paramref name="accessSessionId"/> (sid) of the signed
@@ -77,18 +88,18 @@ internal sealed class SignInService(
     IAuditService audits,
     IUnitOfWork unitOfWork,
     IAuthTimingGuard timingGuard,
-    IPasswordHasher hasher,
     ILockoutService lockout,
     IRefreshTokenService refreshTokens,
-    ITokenService tokens,
-    ISessionCap sessionCap,
     ISessionRefresher refresher,
     IAccessProfileBuilder profiles,
     ISessionLiveness liveness,
     ISessionEndedPublisher sessionsEnded,
+    IBrowserSessionStarter starter,
+    Mfa.IMfaChallenges mfaChallenges,
+    Mfa.MfaOptions mfaOptions,
     IClock clock) : ISignInService
 {
-    public async Task<Result<SignedIn>> LoginAsync(LoginRequest request, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
+    public async Task<LoginResult> LoginAsync(LoginRequest request, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(audit);
@@ -105,7 +116,8 @@ internal sealed class SignInService(
             { IsActive: false } => "inactive",
             { EmailVerified: false } => "unverified",
             { PasswordHash: "" } => "no_password",
-            { MfaEnabled: true } => "mfa_not_supported",
+            // MFA turned off by configuration while this account has it: fail closed, never a password-only sign-in.
+            { MfaEnabled: true } when !mfaOptions.Enabled => "mfa_unavailable",
             _ when user.LockoutEndUtc > now => "locked",
             _ => null,
         };
@@ -115,23 +127,16 @@ internal sealed class SignInService(
         if (check == CredentialCheck.Invalid)
         {
             await RecordFailureAsync(user, refusal ?? "wrong_password", audit, now, cancellationToken);
-            return Result.Failure<SignedIn>(AuthError.GenericInvalidCredentials);
+            return new LoginResult(null, null);
         }
 
-        // Re-login replaces the browser's previous session instead of leaving it alive with no cookie pointing at it.
-        // The same user signing in again keeps their application sessions (deliberately silent); ANOTHER user taking
-        // over this browser is a sign-out of the previous one, so their application sessions end too.
-        if (await refreshTokens.FindSessionAsync(presentedRefreshToken, cancellationToken) is RefreshSession previous)
+        if (user!.MfaEnabled)
         {
-            if (previous.UserId != user!.Id && previous.ClientApplicationId is null)
-            {
-                await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.Browser, SessionEndCause.Logout, previous.UserId, previous.FamilyId), audit, cancellationToken);
-            }
-
-            await refreshTokens.RevokeFamilyForUserAsync(previous.FamilyId, previous.UserId, RefreshTokenRevokedReason.Logout, cancellationToken);
+            // Password proven, second factor pending (T21): no session and NO lockout reset until the factor succeeds.
+            return new LoginResult(null, await mfaChallenges.CreateAsync(user, audit.UserAgent, cancellationToken));
         }
 
-        return Result.Success(await StartSessionAsync(user!, check == CredentialCheck.ValidNeedsRehash ? password : null, audit, cancellationToken));
+        return new LoginResult(await starter.StartAsync(user, presentedRefreshToken, check == CredentialCheck.ValidNeedsRehash ? password : null, null, audit, cancellationToken), null);
     }
 
     public async Task<int> LogoutAsync(Guid? accessUserId, Guid? accessSessionId, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
@@ -256,54 +261,6 @@ internal sealed class SignInService(
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
-    }
-
-    private async Task<SignedIn> StartSessionAsync(User user, string? rehashPassword, AuditContext audit, CancellationToken cancellationToken)
-    {
-        // May clear the change tracker on a retry, so nothing is staged before it, and the user is read again after it.
-        await lockout.ResetAsync(user.Id, cancellationToken);
-        await sessionCap.MakeRoomAsync(user.Id, null, audit, stageAudit: false, cancellationToken);
-        string? newHash = rehashPassword is null ? null : await hasher.HashAsync(rehashPassword, cancellationToken);
-        RefreshContext refreshContext = new(audit.IpAddress ?? string.Empty, audit.UserAgent ?? string.Empty);
-
-        IssuedRefreshToken refresh;
-        try
-        {
-            refresh = await IssueWithAuditAsync(user.Id, await users.GetByIdAsync(user.Id, cancellationToken), newHash, refreshContext, audit, cancellationToken);
-        }
-        catch (ConcurrencyConflictException)
-        {
-            // The user row changed meanwhile (e.g. a concurrent failed attempt). Skip the optional user updates
-            // (last login, rehash) and start the session anyway.
-            unitOfWork.ClearChanges();
-            refresh = await IssueWithAuditAsync(user.Id, null, null, refreshContext, audit, cancellationToken);
-        }
-
-        UserProfileResponse profile = await profiles.BuildProfileAsync(user, null, cancellationToken);
-        AccessToken access = await tokens.CreateAccessTokenAsync(profiles.TokenRequest(user, profile, null, refresh.FamilyId), cancellationToken);
-        return new SignedIn(access, refresh, profile);
-    }
-
-    /// <summary>
-    /// Stages the LoginSucceeded row (and, for a tracked user, last login and a rehash) and saves them in the same save
-    /// that creates the new refresh family.
-    /// </summary>
-    private async Task<IssuedRefreshToken> IssueWithAuditAsync(
-        Guid userId, User? tracked, string? newHash, RefreshContext refreshContext, AuditContext audit, CancellationToken cancellationToken)
-    {
-        DateTime now = clock.UtcNow;
-        if (tracked is not null)
-        {
-            tracked.LastLoginUtc = now;
-            if (newHash is not null)
-            {
-                tracked.PasswordHash = newHash;
-                tracked.UpdatedUtc = now;
-            }
-        }
-
-        await audits.StageAsync(AuditEvents.LoginSucceeded(userId), audit, cancellationToken);
-        return await refreshTokens.IssueAsync(userId, null, refreshContext, cancellationToken);
     }
 
     /// <summary>

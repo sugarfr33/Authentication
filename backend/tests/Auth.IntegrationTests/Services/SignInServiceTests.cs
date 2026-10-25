@@ -158,8 +158,11 @@ public sealed class SignInServiceTests : RepositoryTestBase, IAsyncDisposable
 
     public async ValueTask DisposeAsync() => await services.DisposeAsync();
 
-    private Task<Result<SignedIn>> LoginAsync(string email, string password) =>
-        InScopeAsync(s => s.LoginAsync(new LoginRequest(email, password, null), null, new AuditContext("203.0.113.5", "tests", null), Ct));
+    private async Task<Result<SignedIn>> LoginAsync(string email, string password)
+    {
+        LoginResult result = await InScopeAsync(s => s.LoginAsync(new LoginRequest(email, password, null), null, new AuditContext("203.0.113.5", "tests", null), Ct));
+        return result.Session is SignedIn session ? Result.Success(session) : Result.Failure<SignedIn>(AuthError.GenericInvalidCredentials);
+    }
 
     private async Task<T> InScopeAsync<T>(Func<ISignInService, Task<T>> action)
     {
