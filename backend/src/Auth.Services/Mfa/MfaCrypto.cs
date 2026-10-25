@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Auth.Services.Common;
+using Microsoft.Extensions.Logging;
 
 namespace Auth.Services.Mfa;
 
@@ -11,6 +13,8 @@ internal sealed record MfaSecret(byte[] Secret, long LastUsedStep);
 /// <summary>
 /// The MFA keys (docs/mfa-totp.md section 2): AES-256-GCM protection of the TOTP secret blob, the HMAC key of login
 /// challenges (HKDF from the active key) and the recovery-code pepper. Keys are read once through ISecretStore.
+/// A blob that cannot be read (unknown key id, or tag mismatch) logs a warning with the key id only, at most once a
+/// minute per key id: dropping an old key id too early would otherwise look like users typing wrong codes.
 /// </summary>
 internal interface IMfaCrypto
 {
@@ -29,8 +33,15 @@ internal interface IMfaCrypto
     Task<byte[]> ChallengeKeyAsync(CancellationToken cancellationToken);
 }
 
-internal sealed class MfaCrypto(ISecretStore secrets, MfaOptions options) : IMfaCrypto, IDisposable
+internal sealed class MfaCrypto(ISecretStore secrets, MfaOptions options, ILogger<MfaCrypto> logger) : IMfaCrypto, IDisposable
 {
+    private static readonly TimeSpan WarningInterval = TimeSpan.FromMinutes(1);
+
+    private static readonly Action<ILogger, string, string, Exception?> LogUnreadableBlob = LoggerMessage.Define<string, string>(
+        LogLevel.Warning,
+        new EventId(5331, "MfaBlobUnreadable"),
+        "An MFA secret could not be decrypted ({Problem}, key id {KeyId}); keep old key ids in Mfa:KeyIds until every blob is rewritten");
+
     private const byte FormatVersion = 1;
     private const int KeyBytes = 32;
     private const int NonceBytes = 12;
@@ -39,6 +50,7 @@ internal sealed class MfaCrypto(ISecretStore secrets, MfaOptions options) : IMfa
     private const int PlainBytes = SecretBytes + 8;
 
     private readonly SemaphoreSlim loadLock = new(1, 1);
+    private readonly ConcurrentDictionary<string, long> lastWarnings = new(StringComparer.Ordinal);
     private Keys? keys;
 
     public async Task ValidateKeysAsync(CancellationToken cancellationToken) => await LoadAsync(cancellationToken);
@@ -86,6 +98,7 @@ internal sealed class MfaCrypto(ISecretStore secrets, MfaOptions options) : IMfa
         string keyId = Encoding.ASCII.GetString(blob, 2, idLength);
         if (!loaded.Encryption.TryGetValue(keyId, out byte[]? key))
         {
+            Warn("unknown_key", keyId);
             return null;
         }
 
@@ -103,6 +116,7 @@ internal sealed class MfaCrypto(ISecretStore secrets, MfaOptions options) : IMfa
         }
         catch (AuthenticationTagMismatchException)
         {
+            Warn("tag_mismatch", keyId);
             return null;
         }
         finally
@@ -149,6 +163,11 @@ internal sealed class MfaCrypto(ISecretStore secrets, MfaOptions options) : IMfa
             }
 
             byte[] pepper = await ReadKeyAsync("MfaRecoveryPepper", cancellationToken);
+            if (encryption.Values.Any(k => CryptographicOperations.FixedTimeEquals(k, pepper)))
+            {
+                throw new InvalidOperationException("MFA secret 'MfaRecoveryPepper' must differ from every MfaEncryptionKey.");
+            }
+
             byte[] challenge = HKDF.DeriveKey(HashAlgorithmName.SHA256, active, KeyBytes, info: Encoding.ASCII.GetBytes("mfa-challenge-v1"));
             keys = new Keys(encryption, pepper, challenge);
             return keys;
@@ -156,6 +175,18 @@ internal sealed class MfaCrypto(ISecretStore secrets, MfaOptions options) : IMfa
         finally
         {
             loadLock.Release();
+        }
+    }
+
+    /// <summary>A rate-limited warning naming the key id only (never blob data); an id that is not a plain id is not echoed.</summary>
+    private void Warn(string problem, string keyId)
+    {
+        string shown = keyId.Length is > 0 and <= 16 && keyId.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_') ? keyId : "invalid";
+        long now = Environment.TickCount64;
+        long last = lastWarnings.GetOrAdd(shown, now - (long)WarningInterval.TotalMilliseconds);
+        if (now - last >= (long)WarningInterval.TotalMilliseconds && lastWarnings.TryUpdate(shown, now, last))
+        {
+            LogUnreadableBlob(logger, problem, shown, null);
         }
     }
 

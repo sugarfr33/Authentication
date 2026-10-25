@@ -8,7 +8,7 @@ namespace Auth.Services.Mfa;
 
 /// <summary>
 /// The login challenge (docs/mfa-totp.md section 5): proof that the password was right, valid for
-/// MfaOptions.ChallengeLifetime, carried in the HttpOnly <c>__Host-mfa</c> cookie. Stateless: base64url of user id,
+/// MfaOptions.ChallengeLifetime, carried in the HttpOnly, host-only <c>__Secure-mfa</c> cookie (not <c>__Host-</c>: that prefix forces Path=/). Stateless: base64url of user id,
 /// expiry and an HMAC-SHA256 over them plus SHA-256 of the user's SecurityStamp, of the current secret blob and of the
 /// User-Agent. Every successful second factor rewrites the blob, so a challenge works once.
 /// </summary>

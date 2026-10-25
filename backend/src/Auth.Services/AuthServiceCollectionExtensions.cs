@@ -15,6 +15,8 @@ using Auth.Services.Tokens;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Auth.Services;
 
@@ -102,7 +104,9 @@ public static class AuthServiceCollectionExtensions
         services.AddScoped<ISessionRefresher, SessionRefresher>();
         services.AddScoped<IBrowserSessionStarter, BrowserSessionStarter>();
         services.TryAddSingleton(new MfaOptions());
-        services.AddSingleton<IMfaCrypto, MfaCrypto>();
+        // Logging is optional here (hosts without AddLogging, e.g. service-level test containers, get a null logger).
+        services.AddSingleton<IMfaCrypto>(sp => new MfaCrypto(
+            sp.GetRequiredService<ISecretStore>(), sp.GetRequiredService<MfaOptions>(), sp.GetService<ILogger<MfaCrypto>>() ?? NullLogger<MfaCrypto>.Instance));
         services.AddSingleton<IMfaChallenges, MfaChallenges>();
         services.AddScoped<IMfaService, MfaService>();
         services.AddScoped<ISignInService, SignInService>();

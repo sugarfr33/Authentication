@@ -16,7 +16,7 @@ public enum AuditEventType
     PasswordResetRequested,
     PasswordReset,
     PasswordChanged,
-    /// <summary>MFA enrollment started, confirmed, recovery codes regenerated, disabled or reset (an action word only).</summary>
+    /// <summary>MFA turned on (enrollment confirmed) or its recovery codes regenerated (an action word only).</summary>
     MfaEnabled,
 
     /// <summary>A sign-in passed the TOTP second factor.</summary>
@@ -81,4 +81,10 @@ public enum AuditEventType
     /// the user's sessions with it. Holds the cause, the number of tokens revoked and the app id when one asked.
     /// </summary>
     SingleLogout,
+
+    /// <summary>MFA enrollment started (a pending secret was shown; MFA is not on yet).</summary>
+    MfaEnrollmentStarted,
+
+    /// <summary>MFA turned off by the user (action disabled) or by an administrator (action reset).</summary>
+    MfaDisabled,
 }

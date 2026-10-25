@@ -2,6 +2,8 @@ using System.Text;
 using Auth.Entities;
 using Auth.Services.Common;
 using Auth.Services.Mfa;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Auth.UnitTests.Mfa;
 
@@ -114,11 +116,33 @@ public class TotpAndMfaCryptoTests
     {
         MfaOptions options = new() { Enabled = true, ActiveKeyId = "k1" };
         options.KeyIds.Add("k1");
-        MfaCrypto missing = new(new Secrets(new Dictionary<string, string>()), options);
-        MfaCrypto shortKey = new(new Secrets(new Dictionary<string, string> { ["MfaEncryptionKey-k1"] = Convert.ToBase64String(new byte[16]), ["MfaRecoveryPepper"] = Key(3) }), options);
+        MfaCrypto missing = new(new Secrets(new Dictionary<string, string>()), options, NullLogger<MfaCrypto>.Instance);
+        MfaCrypto shortKey = new(new Secrets(new Dictionary<string, string> { ["MfaEncryptionKey-k1"] = Convert.ToBase64String(new byte[16]), ["MfaRecoveryPepper"] = Key(3) }), options, NullLogger<MfaCrypto>.Instance);
+        MfaCrypto pepperIsAKey = new(new Secrets(new Dictionary<string, string> { ["MfaEncryptionKey-k1"] = Key(3), ["MfaRecoveryPepper"] = Key(3) }), options, NullLogger<MfaCrypto>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => missing.ValidateKeysAsync(CancellationToken.None));
         await Assert.ThrowsAsync<InvalidOperationException>(() => shortKey.ValidateKeysAsync(CancellationToken.None));
+        InvalidOperationException same = await Assert.ThrowsAsync<InvalidOperationException>(() => pepperIsAKey.ValidateKeysAsync(CancellationToken.None));
+        Assert.Contains("must differ", same.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_unreadable_blob_logs_one_warning_per_minute_with_the_key_id_only()
+    {
+        Guid user = Guid.NewGuid();
+        byte[] blob = await Crypto(("old", 1)).ProtectAsync(user, new MfaSecret(new byte[20], 3), CancellationToken.None);
+        CapturingLogger logger = new();
+        MfaCrypto dropped = Crypto(logger, ("k2", 2));
+        byte[] tampered = await Crypto(("k2", 2)).ProtectAsync(user, new MfaSecret(new byte[20], 3), CancellationToken.None);
+        tampered[^1] ^= 1;
+
+        Assert.Null(await dropped.UnprotectAsync(user, blob, CancellationToken.None));
+        Assert.Null(await dropped.UnprotectAsync(user, blob, CancellationToken.None));
+        Assert.Null(await dropped.UnprotectAsync(user, tampered, CancellationToken.None));
+
+        Assert.Equal(2, logger.Messages.Count);
+        Assert.Contains("unknown_key, key id old", logger.Messages[0], StringComparison.Ordinal);
+        Assert.Contains("tag_mismatch, key id k2", logger.Messages[1], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -156,7 +180,9 @@ public class TotpAndMfaCryptoTests
 
     private static string Key(int seed) => Convert.ToBase64String([.. Enumerable.Range(seed, 32).Select(i => (byte)i)]);
 
-    private static MfaCrypto Crypto(params (string Id, int Seed)[] keys)
+    private static MfaCrypto Crypto(params (string Id, int Seed)[] keys) => Crypto(NullLogger<MfaCrypto>.Instance, keys);
+
+    private static MfaCrypto Crypto(ILogger<MfaCrypto> logger, params (string Id, int Seed)[] keys)
     {
         MfaOptions options = new() { Enabled = true, ActiveKeyId = keys[0].Id };
         Dictionary<string, string> secrets = new() { ["MfaRecoveryPepper"] = Key(200) };
@@ -166,7 +192,20 @@ public class TotpAndMfaCryptoTests
             secrets["MfaEncryptionKey-" + id] = Key(seed);
         }
 
-        return new MfaCrypto(new Secrets(secrets), options);
+        return new MfaCrypto(new Secrets(secrets), options, logger);
+    }
+
+    private sealed class CapturingLogger : ILogger<MfaCrypto>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 
     private sealed class Secrets(Dictionary<string, string> values) : ISecretStore

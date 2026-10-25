@@ -18,7 +18,14 @@ Tests:
 - integration: `MfaApiTests`;
 - unit: `TotpAndMfaCryptoTests` and `MfaRouteMapTests`.
 
-What changed from the design during the build is marked **Built:**.
+What changed from the design during the build is marked **Built:**; the review fixes are marked **Fix:**.
+
+## Production gate
+
+**MFA must not be enabled for real users** until either an admin endpoint to reset a user's MFA exists (a separate
+task), or the operator has accepted the runbook docs/mfa-admin-recovery.md. Without one of them, a user who loses the
+device and every recovery code, or every MFA user after the flag is turned off, can only be recovered by hand-written
+SQL.
 
 ## 1. Feature flag
 
@@ -58,12 +65,20 @@ The blob is versioned and protected with **AES-256-GCM**, using `System.Security
 
 - **Associated data:** the user id, so a blob copied to another user row fails to decrypt.
 - **Size:** about 75 bytes, well under 256.
-- **Keys:**
-  - `Mfa:EncryptionKeys:<id>` holds base64 of 32 random bytes, read through `ISecretStore`; `Mfa:ActiveKeyId`
-    selects the key used for new writes.
-  - Any listed key decrypts, so **rotation** means adding a key, switching the active id, and dropping the old key
-    once every blob has been rewritten. Every successful verify rewrites the blob with the active key.
-  - Missing or short keys stop the app at startup when the flag is on.
+- **Keys** (**Fix:** names aligned with the code):
+  - each key is the `ISecretStore` secret `MfaEncryptionKey-<id>`, base64 of 32 random bytes (configuration
+    `Secrets:MfaEncryptionKey-<id>`, environment variable `Secrets__MfaEncryptionKey-<id>`). Secret names cannot
+    contain a colon, hence the hyphen;
+  - `Mfa:KeyIds` lists the ids that can decrypt; `Mfa:ActiveKeyId` (one of them) selects the key for new writes;
+  - the recovery pepper is the secret `MfaRecoveryPepper` (`Secrets__MfaRecoveryPepper`), also 32 bytes;
+  - missing or short keys, an active id that is not listed, or a pepper equal to an encryption key stop the app at
+    startup when the flag is on.
+- **Rotation:** add the new key and its id to `Mfa:KeyIds`, switch `Mfa:ActiveKeyId`, and **keep the old id listed
+  until every blob has been rewritten.** Every successful verify rewrites the blob with the active key; a blob of a
+  user who never signs in again stays on the old key (re-enrolling or an admin reset clears it).
+  - A blob whose key id is no longer listed cannot be read: the user's codes look wrong and count toward the lockout
+    (recovery codes still work). **Fix:** each unreadable blob logs a warning with the problem (`unknown_key` or
+    `tag_mismatch`) and the key id only, at most once a minute per key id.
 - **Writes:** every successful TOTP verify rewrites the blob (new nonce, new last step) with the user row's
   `RowVersion` concurrency check.
   - Of two concurrent verifies with the same code, only one wins.
@@ -93,7 +108,12 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
     the lockout, audits `MfaFailed` with reason `wrong_password`, and answers 400 (the user is signed in, so not
     401);
   - creates a new secret, stored encrypted with `MfaEnabled` left **false** (pending), and replaces any earlier
-    pending secret;
+    pending secret; audits `MfaEnrollmentStarted` (**Fix:** its own event, since MFA is not on yet);
+  - **Fix: the pending secret expires after 15 minutes** (`MfaService.PendingEnrollmentLifetime`), counted from the
+    account row's `UpdatedUtc` (no new column). Confirm then answers 409 and the user enrolls again. A wrong confirm
+    code also updates `UpdatedUtc` (lockout counter), which extends the window; it is still bounded by the lockout.
+    An expired pending secret stays encrypted in the row until the next enroll, confirm or reset (it can no longer be
+    confirmed); the retention purge does not clear it;
   - answers once with the `otpauth://totp/CentralAuth:<email>?secret=...&issuer=CentralAuth&digits=6&period=30` URI
     and the base32 manual-entry key, with `no-store`. Neither is ever logged;
   - if MFA is already on: 409.
@@ -103,7 +123,10 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
   - audits `MfaEnabled`;
   - **ends every session of the user** (`SessionEnded` scope All, cause `MfaEnrolled`) and clears this browser's
     cookies, so the next sign-in uses the second factor; sessions opened with the password alone do not survive;
-  - a wrong code counts toward the lockout.
+  - a wrong code counts toward the lockout;
+  - **Fix:** two concurrent confirms (double submit), or a confirm that loses a race with any other change of the
+    account row, answer **409** with no strike and nothing changed (the factor check, the recovery codes, the session
+    revocation and the audit row are one transaction). Never a 500. The same holds for regenerate and disable.
 - **`POST /auth/mfa/recovery-codes {password, code}`** (regenerate): with the password and a valid TOTP code, all
   old codes are invalidated in one UPDATE and 10 new ones are shown once.
 - **`POST /auth/mfa/disable {password, code}`**: with the password and a valid TOTP code (or a recovery code), it:
@@ -111,20 +134,25 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
   - invalidates the recovery codes;
   - changes the `SecurityStamp`;
   - **ends every session** (cause `MfaDisabled`, scope All, published after the revocation);
+  - a recovery code is spent in the same transaction as the change, so a lost race does not burn it;
   - audits; the cookies are cleared.
 - **Admin reset** (`IMfaService.ResetAsync`, service only, no endpoint): does the same as disable without the
-  factors (cause `MfaReset`).
+  factors (cause `MfaReset`). By hand: docs/mfa-admin-recovery.md.
+- **Revocation reason (Fix, L4):** the refresh rows revoked by enroll, disable and reset keep `RevokedReason`
+  `PasswordChange` (a credential change), because the column is CHECK-constrained and the schema does not change. The
+  real cause is in the audit row (`MfaEnabled`, `MfaDisabled`) and in the `SessionEnded` cause.
 
 ### Recovery codes
 
 - Each code is 10 characters from the 32-letter unambiguous alphabet `23456789ABCDEFGHJKLMNPQRSTUVWXYZ` (50 bits).
   Shown as `XXXXX-XXXXX`; input ignores case, spaces and the hyphen.
-- **Stored as HMAC-SHA256 with a server pepper** (`Mfa:RecoveryPepper`, 32 bytes, not rotated): this fits
+- **Stored as HMAC-SHA256 with a server pepper** (the secret `MfaRecoveryPepper`, 32 bytes, not rotated): this fits
   `CodeHash` binary(32) and allows lookup by hash.
   - A plain SHA-256 of 50 bits could be brute-forced offline after a database leak (about a day per code on one GPU).
     With the pepper, the database alone is not enough.
   - Argon2 would need one costly verify per stored code on each attempt.
-  - Rotating the pepper means users regenerate their codes (documented).
+  - **Pepper rotation is not supported:** a new pepper makes every stored code unusable. After any pepper change,
+    every MFA user must regenerate their recovery codes.
 - **Single use:** the conditional UPDATE `UsedUtc = now WHERE Id = @id AND UsedUtc IS NULL`, as for the other
   one-time tokens. Of two concurrent uses, one wins (tested).
 - **Built: lookup by hash, no index.** `MfaRecoveryCode.CodeHash` has no index (adding one is a schema change). The
@@ -154,6 +182,16 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
    - SHA-256 of the User-Agent. Not the IP: mobile networks change it.
 
    It is checked in constant time. Expired, altered, used or mismatched challenges all get the same 401.
+
+   - **Fix (L1):** a bad challenge is audited `MfaFailed bad_challenge` **without a user id**: the id inside an
+     unverified challenge is attacker-chosen, so it must not attribute rows to a victim.
+   - **Cookie tossing (L2, accepted):** the cookie is `__Secure-mfa`, not `__Host-`. In shared-domain mode a sibling
+     subdomain could plant its own challenge cookie for this path. That only makes the victim's verify fail (the
+     planted challenge names the attacker's account and needs the attacker's code); it cannot sign anyone in. It is a
+     denial of service at most, and the victim signs in again. A per-login nonce in a second `__Host-` cookie would
+     close it; it is not built (not cheap enough for the gain).
+   - The User-Agent binding is weak (attacker-chosen); it only stops a copied cookie being used from another browser
+     without changing its User-Agent. The factor and the lockout are the real protection.
 4. **`POST /auth/mfa/verify {code, isRecoveryCode}`** (anonymous; the challenge cookie is the credential; Origin and
    antiforgery apply):
    - a locked account, a wrong TOTP code, a wrong or used recovery code: lockout `RegisterFailureAsync` (the shared
@@ -164,6 +202,21 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
    - the auth cookies are written and the challenge cookie is expired;
    - **Built:** a wrong code keeps the challenge, so the user can type the next code; the lockout bounds the
      guesses.
+   - **No per-challenge attempt cap (L7, documented):** a cap needs state or would duplicate the account lockout.
+     Whoever holds a challenge already knows the password and can get a new challenge at any time, so a per-challenge
+     cap adds nothing. The bounds are the account lockout (5 failures, then doubling lockouts) and the per-IP
+     `MfaVerify` limit.
+   - **Fix (M1): races are not strikes.** The factor check and its write (the new last step, or the recovery code
+     spend plus a fresh nonce) are one transaction under the user row's `RowVersion`. When that save loses a race (a
+     concurrent lockout write, a double submit), or the code looks replayed, the service reloads the user and checks
+     once more against fresh state:
+     - if a concurrent sign-in used this challenge, it is now stale: `bad_challenge`, no strike;
+     - if the code is still valid, the sign-in succeeds;
+     - if it is still a replay, it is a genuine one and counts;
+     - a second lost race answers 401 with audit reason `conflict` and no strike.
+
+     A recovery code spent by a losing attempt is rolled back, so it still works. A double-submitted code starts one
+     session and the other request is refused without a strike (tested).
    - **Built:** the password hash of an MFA account is not upgraded at sign-in, because the password is not
      available at the verify step. It is upgraded when the password changes, or at a sign-in after MFA is turned off.
 5. **Rate limits:**
@@ -174,10 +227,13 @@ metadata, `RequireAuthorization`). None of them works with a Bearer application 
 ## 6. Audit, logs, events
 
 - **Audit events** (the reserved catalogue names, now used; details are words and ids only):
-  - `MfaEnabled` (also used for disable and reset, with an `action` word: `enrolled`, `disabled`, `reset`, `regenerated`);
+  - `MfaEnrollmentStarted` (**Fix:** its own event);
+  - `MfaEnabled` with an `action` word: `enrolled` or `regenerated`;
+  - `MfaDisabled` (**Fix:** its own event) with an `action` word: `disabled` (by the user) or `reset` (by an
+    administrator);
   - `MfaVerified`;
-  - `MfaFailed` with a reason: `wrong_code`, `wrong_recovery_code`, `replayed`, `locked`, `bad_challenge`,
-    `wrong_password`;
+  - `MfaFailed` with a reason: `wrong_code`, `wrong_recovery_code`, `replayed`, `locked`, `bad_challenge` (no user
+    id), `wrong_password`, `conflict` (no strike);
   - `MfaRecoveryCodeUsed` (**Built:** without a count; counting the remaining codes would need one more query per
     sign-in).
 - **Never in logs or audit:** codes, recovery codes, secrets, the otpauth URI or the challenge. The log redaction

@@ -44,6 +44,8 @@ public class AuditCoverageTests
         [AuditEventType.MfaEnabled] = "Api.MfaApiTests.Enrollment_is_confirmed_by_a_code_shows_recovery_codes_once_and_ends_every_session",
         [AuditEventType.MfaVerified] = "Api.MfaApiTests.Login_with_MFA_needs_the_challenge_and_a_code_and_the_challenge_works_once",
         [AuditEventType.MfaFailed] = "Api.MfaApiTests.Wrong_codes_count_toward_the_lockout_like_wrong_passwords",
+        [AuditEventType.MfaEnrollmentStarted] = "Api.MfaApiTests.Enrollment_is_confirmed_by_a_code_shows_recovery_codes_once_and_ends_every_session",
+        [AuditEventType.MfaDisabled] = "Api.MfaApiTests.Disabling_needs_the_password_and_a_code_and_ends_every_session",
         [AuditEventType.MfaRecoveryCodeUsed] = "Api.MfaApiTests.A_recovery_code_works_once_even_when_used_concurrently_and_regeneration_replaces_them",
         [AuditEventType.SingleLogout] = "Api.SingleLogoutApiTests.Logout_ends_every_application_session_of_the_user",
         [AuditEventType.AppDeactivated] = "Services.ClientApplicationRegistryTests.Deactivation_ends_the_applications_sessions_and_it_cannot_get_new_tokens",

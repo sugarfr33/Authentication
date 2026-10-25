@@ -77,9 +77,11 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | AuthorizationCodeRedeemed | app (id), session (id) | normal |
 | AuthorizationCodeRejected | app (id, when known), reason | **high** |
 | SingleLogout | cause (logout, logout_all, session_revoked, token_reuse, password_change, application_logout), revoked (count), app (id, RP-initiated only) | normal |
-| MfaEnabled | action (enrollment_started, enrolled, regenerated, disabled, reset) | normal |
+| MfaEnrollmentStarted | none | normal |
+| MfaEnabled | action (enrolled, regenerated) | normal |
+| MfaDisabled | action (disabled, reset) | normal |
 | MfaVerified | none | normal |
-| MfaFailed | reason (wrong_code, wrong_recovery_code, replayed, locked, bad_challenge, wrong_password) | **high** |
+| MfaFailed | reason (wrong_code, wrong_recovery_code, replayed, locked, bad_challenge without user id, wrong_password, conflict) | **high** |
 | MfaRecoveryCodeUsed | none | normal |
 | SigningKeyRotated | reserved | |
 

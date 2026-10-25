@@ -87,8 +87,14 @@ internal static class AuditEvents
     public static AuditEvent AuthorizationCodeRedeemed(Guid userId, Guid applicationId, Guid session) =>
         new(AuditEventType.AuthorizationCodeRedeemed, userId, new AuditField("app", applicationId), new AuditField("session", session));
 
-    /// <summary>MFA state changed: action enrollment_started, enrolled, regenerated, disabled or reset. Never a code or secret.</summary>
+    /// <summary>MFA turned on or its recovery codes changed: action enrolled or regenerated. Never a code or secret.</summary>
     public static AuditEvent MfaEnabled(Guid userId, string action) => new(AuditEventType.MfaEnabled, userId, new AuditField("action", action));
+
+    /// <summary>An MFA enrollment started (a pending secret was shown once). Never the secret.</summary>
+    public static AuditEvent MfaEnrollmentStarted(Guid userId) => new(AuditEventType.MfaEnrollmentStarted, userId);
+
+    /// <summary>MFA turned off: action disabled (by the user, with factors) or reset (by an administrator).</summary>
+    public static AuditEvent MfaDisabled(Guid userId, string action) => new(AuditEventType.MfaDisabled, userId, new AuditField("action", action));
 
     /// <summary>A sign-in passed the TOTP second factor.</summary>
     public static AuditEvent MfaVerified(Guid userId) => new(AuditEventType.MfaVerified, userId);

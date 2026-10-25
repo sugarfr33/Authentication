@@ -56,6 +56,8 @@ public static class AuditCatalogue
         [AuditEventType.AppDeactivated] = new(["app", "revoked"]),
         [AuditEventType.AuthorizationCodeRejected] = new(["app", "reason"], AuditVolume.High),
         [AuditEventType.SingleLogout] = new(["cause", "revoked", "app"]),
+        [AuditEventType.MfaEnrollmentStarted] = new([]),
+        [AuditEventType.MfaDisabled] = new(["action"]),
     };
 
     /// <summary>
@@ -89,8 +91,8 @@ public static class AuditCatalogue
         "application_deactivated", "code_replay", "email_verified", "mfa_enrolled", "mfa_disabled", "mfa_reset",
 
         // MFA (T21): actions and failure reasons
-        "enrollment_started", "enrolled", "disabled", "reset", "regenerated", "wrong_code", "wrong_recovery_code",
-        "bad_challenge", "mfa_unavailable",
+        "enrolled", "disabled", "reset", "regenerated", "wrong_code", "wrong_recovery_code", "bad_challenge",
+        "mfa_unavailable", "conflict",
     };
 
     /// <summary>Event names (as stored in AuditLog.EventType) with <see cref="AuditVolume.High"/>.</summary>

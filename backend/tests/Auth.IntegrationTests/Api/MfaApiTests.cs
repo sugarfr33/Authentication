@@ -32,6 +32,7 @@ public sealed class MfaApiTests(ApiFixture api) : IAsyncLifetime
     private static readonly string Pepper = Convert.ToBase64String([.. Enumerable.Range(101, 32).Select(i => (byte)i)]);
 
     private readonly ShiftableClock clock = new();
+    private readonly ConflictInjector conflicts = new();
     private WebApplicationFactory<Program> app = null!;
 
     public Task InitializeAsync()
@@ -89,6 +90,7 @@ public sealed class MfaApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal(10, await QueryAsync(c => c.MfaRecoveryCode.CountAsync(r => r.UserId == userId && r.UsedUtc == null)));
         List<AuditLog> audit = await AuditAsync(userId);
         Assert.Contains(audit, a => a.EventType == nameof(AuditEventType.MfaEnabled) && a.Detail == """{"action":"enrolled"}""");
+        Assert.Contains(audit, a => a.EventType == nameof(AuditEventType.MfaEnrollmentStarted));
         Assert.Contains(audit, a => a.EventType == nameof(AuditEventType.MfaFailed) && a.Detail == """{"reason":"wrong_code"}""");
     }
 
@@ -127,6 +129,9 @@ public sealed class MfaApiTests(ApiFixture api) : IAsyncLifetime
         replay.Plant(AuthCookieNames.MfaChallenge, challenge.Value, "/api/v1/auth/mfa");
         clock.Shift(TimeSpan.FromSeconds(30));
         Assert.Equal(HttpStatusCode.Unauthorized, (await VerifyAsync(replay, Code(key), false)).StatusCode);
+
+        // An untrusted challenge is never attributed to the account it names (anyone can forge one naming a victim).
+        Assert.DoesNotContain(await AuditAsync(userId), a => a.Detail == """{"reason":"bad_challenge"}""");
 
         // A code already used (same step) is refused with a fresh challenge too.
         using Browser again = await NewBrowserAsync();
@@ -217,6 +222,7 @@ public sealed class MfaApiTests(ApiFixture api) : IAsyncLifetime
         Assert.False(user.MfaEnabled);
         Assert.Null(user.MfaSecretEncrypted);
         Assert.Equal(0, await QueryAsync(c => c.MfaRecoveryCode.CountAsync(r => r.UserId == userId && r.UsedUtc == null)));
+        Assert.Contains(await AuditAsync(userId), a => a.EventType == nameof(AuditEventType.MfaDisabled) && a.Detail == """{"action":"disabled"}""");
     }
 
     [Fact]
@@ -233,7 +239,115 @@ public sealed class MfaApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized, (await browser.GetAsync("/api/v1/auth/me")).StatusCode);
         using Browser plain = await NewBrowserAsync();
         Assert.Equal(HttpStatusCode.OK, (await PostLoginAsync(plain, email, Password)).StatusCode);
-        Assert.Contains(await AuditAsync(userId), a => a.EventType == nameof(AuditEventType.MfaEnabled) && a.Detail == """{"action":"reset"}""");
+        Assert.Contains(await AuditAsync(userId), a => a.EventType == nameof(AuditEventType.MfaDisabled) && a.Detail == """{"action":"reset"}""");
+    }
+
+    [Fact]
+    public async Task A_verify_that_loses_a_race_is_retried_and_a_lost_recovery_code_spend_is_rolled_back()
+    {
+        (Guid userId, string email, string key, IReadOnlyList<string> codes) = await MfaUserAsync();
+
+        // One lost RowVersion race (e.g. a concurrent lockout write): checked again against fresh state, it succeeds.
+        using Browser browser = await NewBrowserAsync();
+        Assert.Equal(HttpStatusCode.Accepted, (await PostLoginAsync(browser, email, Password)).StatusCode);
+        conflicts.Arm(userId, 1);
+        Assert.Equal(HttpStatusCode.OK, (await VerifyAsync(browser, Code(key), false)).StatusCode);
+        Assert.DoesNotContain(await AuditAsync(userId), a => a.EventType == nameof(AuditEventType.MfaFailed));
+
+        // Losing twice: refused without a strike, and the recovery code spend is rolled back, so the code still works.
+        using Browser second = await NewBrowserAsync();
+        Assert.Equal(HttpStatusCode.Accepted, (await PostLoginAsync(second, email, Password)).StatusCode);
+        conflicts.Arm(userId, 2);
+        HttpResponseMessage lost = await VerifyAsync(second, codes[0], true);
+        User afterLoss = await QueryAsync(c => c.User.AsNoTracking().SingleAsync(u => u.Id == userId));
+        int unusedAfterLoss = await QueryAsync(c => c.MfaRecoveryCode.CountAsync(r => r.UserId == userId && r.UsedUtc == null));
+        HttpResponseMessage retried = await VerifyAsync(second, codes[0], true);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, lost.StatusCode);
+        Assert.Equal(0, afterLoss.FailedLoginCount);
+        Assert.Equal(10, unusedAfterLoss);
+        Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
+        List<AuditLog> audit = await AuditAsync(userId);
+        Assert.Equal(["""{"reason":"conflict"}"""], audit.Where(a => a.EventType == nameof(AuditEventType.MfaFailed)).Select(a => a.Detail));
+    }
+
+    [Fact]
+    public async Task A_double_submitted_code_starts_one_session_and_the_loser_is_not_a_strike()
+    {
+        (Guid userId, string email, string key, IReadOnlyList<string> codes) = await MfaUserAsync();
+        using Browser a = await NewBrowserAsync();
+        using Browser b = await NewBrowserAsync();
+        Assert.Equal(HttpStatusCode.Accepted, (await PostLoginAsync(a, email, Password)).StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, (await PostLoginAsync(b, email, Password)).StatusCode);
+        string code = Code(key);
+        HttpResponseMessage[] totp = await Task.WhenAll(VerifyAsync(a, code, false), VerifyAsync(b, code, false));
+
+        using Browser c = await NewBrowserAsync();
+        using Browser d = await NewBrowserAsync();
+        Assert.Equal(HttpStatusCode.Accepted, (await PostLoginAsync(c, email, Password)).StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, (await PostLoginAsync(d, email, Password)).StatusCode);
+        HttpResponseMessage[] recovery = await Task.WhenAll(VerifyAsync(c, codes[0], true), VerifyAsync(d, codes[0], true));
+
+        Assert.Single(totp, r => r.StatusCode == HttpStatusCode.OK);
+        Assert.Single(totp, r => r.StatusCode == HttpStatusCode.Unauthorized);
+        Assert.Single(recovery, r => r.StatusCode == HttpStatusCode.OK);
+        Assert.Single(recovery, r => r.StatusCode == HttpStatusCode.Unauthorized);
+        Assert.DoesNotContain(await AuditAsync(userId), r => r.EventType == nameof(AuditEventType.MfaFailed));
+        Assert.Equal(0, (await QueryAsync(q => q.User.AsNoTracking().SingleAsync(u => u.Id == userId))).FailedLoginCount);
+    }
+
+    [Fact]
+    public async Task A_confirm_that_loses_a_race_answers_409_never_500_and_is_not_a_strike()
+    {
+        (Guid userId, _, Browser browser) = await SignedInAsync();
+        using (browser)
+        {
+            MfaEnrollResponse enrollment = (await (await PostJsonAsync(browser, "/enroll", new MfaEnrollRequest(Password))).Content.ReadFromJsonAsync<MfaEnrollResponse>())!;
+            conflicts.Arm(userId, 1);
+            HttpResponseMessage lost = await PostJsonAsync(browser, "/confirm", new MfaConfirmRequest(Code(enrollment.ManualEntryKey)));
+            User afterLoss = await QueryAsync(c => c.User.AsNoTracking().SingleAsync(u => u.Id == userId));
+            int codesAfterLoss = await QueryAsync(c => c.MfaRecoveryCode.CountAsync(r => r.UserId == userId));
+            HttpResponseMessage again = await PostJsonAsync(browser, "/confirm", new MfaConfirmRequest(Code(enrollment.ManualEntryKey)));
+
+            Assert.Equal(HttpStatusCode.Conflict, lost.StatusCode);
+            Assert.False(afterLoss.MfaEnabled);
+            Assert.Equal(0, afterLoss.FailedLoginCount);
+            Assert.Equal(0, codesAfterLoss);
+            Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+            Assert.DoesNotContain(await AuditAsync(userId), a => a.EventType == nameof(AuditEventType.MfaFailed));
+        }
+
+        // Two real concurrent confirms with the same code: one turns MFA on, the other is refused, never a 500.
+        (Guid otherId, _, Browser other) = await SignedInAsync();
+        using (other)
+        {
+            MfaEnrollResponse enrollment = (await (await PostJsonAsync(other, "/enroll", new MfaEnrollRequest(Password))).Content.ReadFromJsonAsync<MfaEnrollResponse>())!;
+            string code = Code(enrollment.ManualEntryKey);
+            HttpResponseMessage[] race = await Task.WhenAll(
+                PostJsonAsync(other, "/confirm", new MfaConfirmRequest(code)),
+                PostJsonAsync(other, "/confirm", new MfaConfirmRequest(code)));
+
+            Assert.Single(race, r => r.StatusCode == HttpStatusCode.OK);
+            Assert.All(race, r => Assert.True((int)r.StatusCode < 500, "confirm answered " + r.StatusCode));
+            Assert.Equal(10, await QueryAsync(c => c.MfaRecoveryCode.CountAsync(r => r.UserId == otherId && r.UsedUtc == null)));
+        }
+    }
+
+    [Fact]
+    public async Task A_pending_enrollment_expires_after_15_minutes()
+    {
+        (_, _, Browser browser) = await SignedInAsync();
+        using (browser)
+        {
+            MfaEnrollResponse stale = (await (await PostJsonAsync(browser, "/enroll", new MfaEnrollRequest(Password))).Content.ReadFromJsonAsync<MfaEnrollResponse>())!;
+            clock.Shift(TimeSpan.FromMinutes(16));
+            HttpResponseMessage expired = await PostJsonAsync(browser, "/confirm", new MfaConfirmRequest(Code(stale.ManualEntryKey)));
+            MfaEnrollResponse fresh = (await (await PostJsonAsync(browser, "/enroll", new MfaEnrollRequest(Password))).Content.ReadFromJsonAsync<MfaEnrollResponse>())!;
+            HttpResponseMessage confirmed = await PostJsonAsync(browser, "/confirm", new MfaConfirmRequest(Code(fresh.ManualEntryKey)));
+
+            Assert.Equal(HttpStatusCode.Conflict, expired.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
+        }
     }
 
     [Fact]
@@ -292,7 +406,12 @@ public sealed class MfaApiTests(ApiFixture api) : IAsyncLifetime
             }
 
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
-            builder.ConfigureTestServices(services => services.AddSingleton<IClock>(clock));
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddSingleton<IClock>(clock);
+                services.AddScoped<IUnitOfWork>(sp => new ConflictingUnitOfWork(
+                    new UnitOfWork(sp.GetRequiredService<AuthDbContext>()), sp.GetRequiredService<AuthDbContext>(), sp.GetRequiredService<IServiceScopeFactory>(), conflicts));
+            });
         });
     }
 
@@ -419,6 +538,46 @@ public sealed class MfaApiTests(ApiFixture api) : IAsyncLifetime
     {
         await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
         return await query(scope.ServiceProvider.GetRequiredService<AuthDbContext>());
+    }
+
+    /// <summary>Makes the next N saves that update the given user lose the RowVersion race (a concurrent write first).</summary>
+    private sealed class ConflictInjector
+    {
+        private int remaining;
+
+        public Guid UserId { get; private set; }
+
+        public void Arm(Guid userId, int saves)
+        {
+            UserId = userId;
+            Volatile.Write(ref remaining, saves);
+        }
+
+        public bool TryTake(AuthDbContext context) =>
+            Volatile.Read(ref remaining) > 0
+            && context.ChangeTracker.Entries<User>().Any(e => e.State == EntityState.Modified && e.Entity.Id == UserId)
+            && Interlocked.Decrement(ref remaining) >= 0;
+    }
+
+    private sealed class ConflictingUnitOfWork(IUnitOfWork inner, AuthDbContext context, IServiceScopeFactory scopes, ConflictInjector injector) : IUnitOfWork
+    {
+        public Task<IUnitOfWorkTransaction> BeginTransactionAsync(System.Data.IsolationLevel isolationLevel, CancellationToken cancellationToken) =>
+            inner.BeginTransactionAsync(isolationLevel, cancellationToken);
+
+        public void ClearChanges() => inner.ClearChanges();
+
+        public async Task<int> SaveChangesAsync(CancellationToken cancellationToken)
+        {
+            if (injector.TryTake(context))
+            {
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                await scope.ServiceProvider.GetRequiredService<AuthDbContext>().User
+                    .Where(u => u.Id == injector.UserId)
+                    .ExecuteUpdateAsync(u => u.SetProperty(x => x.LastLoginUtc, DateTime.UtcNow), cancellationToken);
+            }
+
+            return await inner.SaveChangesAsync(cancellationToken);
+        }
     }
 
     private sealed class ShiftableClock : IClock
