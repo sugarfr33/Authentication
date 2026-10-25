@@ -122,7 +122,68 @@ public sealed class RefreshServiceTests : RepositoryTestBase, IAsyncDisposable
         Assert.Contains(await AuditAsync(stolenUser), a => a.EventType == nameof(AuditEventType.TokenReuse));
     }
 
+    /// <summary>T19 arch M2: the app refresh grant uses the same pipeline, so a failing mint never loses the rotated token.</summary>
+    [Fact]
+    public async Task An_application_refresh_that_fails_before_rotation_leaves_the_presented_token_usable()
+    {
+        (Guid userId, ClientApplication application, string token) = await AppSessionAsync();
+        faults.FailMint = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => AppRefreshAsync(token, application.ClientId, "agent-a"));
+
+        faults.FailMint = false;
+        Result<SignedIn> retry = await AppRefreshAsync(token, application.ClientId, "agent-a");
+        Assert.True(retry.IsSuccess);
+        Assert.Equal((userId, application.Id), (retry.Value!.RefreshToken.UserId, retry.Value.RefreshToken.ClientApplicationId!.Value));
+    }
+
+    /// <summary>T19 arch M2: a password change during an app refresh is detected, as for browser sessions.</summary>
+    [Fact]
+    public async Task A_credential_change_during_an_application_refresh_revokes_the_new_session()
+    {
+        (Guid userId, ClientApplication application, string token) = await AppSessionAsync();
+        faults.ChangeStampDuringRotation = userId;
+
+        Result<SignedIn> outcome = await AppRefreshAsync(token, application.ClientId, "agent-a");
+
+        Assert.Equal(AuthError.InvalidGrant, outcome.Error);
+        Assert.All(await TokensAsync(userId), t => Assert.NotNull(t.RevokedUtc));
+        Assert.Contains(await AuditAsync(userId), a => a.EventType == nameof(AuditEventType.RefreshRejected)
+            && a.Detail!.Contains("credentials_changed", StringComparison.Ordinal) && a.Detail.Contains(application.Id.ToString("D"), StringComparison.Ordinal));
+    }
+
+    /// <summary>T19 arch L2: a browser family presented to the app grant is a RefreshRejected with the application, not a code rejection.</summary>
+    [Fact]
+    public async Task A_browser_family_presented_to_the_application_grant_is_refused_and_audited_as_a_refresh_rejection()
+    {
+        (Guid userId, string browserToken) = await SessionAsync();
+        ClientApplication application = TestData.ClientApplication();
+        await SeedAsync(application);
+
+        Result<SignedIn> outcome = await AppRefreshAsync(browserToken, application.ClientId, "agent-a");
+
+        Assert.Equal(AuthError.InvalidGrant, outcome.Error);
+        Assert.Null(Assert.Single(await TokensAsync(userId)).RevokedUtc);
+        List<AuditLog> audit = await AuditAsync(userId);
+        Assert.Contains(audit, a => a.EventType == nameof(AuditEventType.RefreshRejected) && a.Detail!.Contains("client_mismatch", StringComparison.Ordinal));
+        Assert.DoesNotContain(audit, a => a.EventType == nameof(AuditEventType.AuthorizationCodeRejected));
+    }
+
     public async ValueTask DisposeAsync() => await services.DisposeAsync();
+
+    private Task<Result<SignedIn>> AppRefreshAsync(string token, string clientId, string userAgent) =>
+        InAppScopeAsync<Auth.Services.ClientApplications.IClientSessionService, Result<SignedIn>>(s =>
+            s.RefreshAsync(token, clientId, new RefreshContext("203.0.113.1", userAgent), new AuditContext("203.0.113.1", userAgent, null), Ct));
+
+    private async Task<(Guid UserId, ClientApplication Application, string Token)> AppSessionAsync()
+    {
+        User user = await SeedUserAsync();
+        ClientApplication application = TestData.ClientApplication();
+        await SeedAsync(application);
+        IssuedRefreshToken issued = await InAppScopeAsync<IRefreshTokenService, IssuedRefreshToken>(s =>
+            s.IssueAsync(user.Id, application.Id, new RefreshContext("203.0.113.1", "owner-agent"), Ct));
+        return (user.Id, application, issued.Token);
+    }
 
     private static void Decorate<TService>(IServiceCollection collection, Func<IServiceProvider, TService, TService> decorate)
         where TService : class
@@ -223,6 +284,9 @@ public sealed class RefreshServiceTests : RepositoryTestBase, IAsyncDisposable
 
         public Task<IssuedRefreshToken> IssueAsync(Guid userId, Guid? clientApplicationId, RefreshContext context, CancellationToken cancellationToken) =>
             inner.IssueAsync(userId, clientApplicationId, context, cancellationToken);
+
+        public Task<IssuedRefreshToken> IssueAsync(Guid userId, Guid? clientApplicationId, Guid familyId, RefreshContext context, CancellationToken cancellationToken) =>
+            inner.IssueAsync(userId, clientApplicationId, familyId, context, cancellationToken);
 
         public Task<int> RevokeFamilyAsync(Guid familyId, string reason, CancellationToken cancellationToken) => inner.RevokeFamilyAsync(familyId, reason, cancellationToken);
 

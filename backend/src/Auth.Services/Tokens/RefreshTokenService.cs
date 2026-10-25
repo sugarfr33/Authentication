@@ -29,9 +29,13 @@ internal sealed class RefreshTokenService(
         RefreshTokenRevokedReason.LogoutAll, RefreshTokenRevokedReason.PasswordChange, RefreshTokenRevokedReason.Admin,
     ];
 
-    public async Task<IssuedRefreshToken> IssueAsync(Guid userId, Guid? clientApplicationId, RefreshContext context, CancellationToken cancellationToken)
+    public Task<IssuedRefreshToken> IssueAsync(Guid userId, Guid? clientApplicationId, RefreshContext context, CancellationToken cancellationToken) =>
+        IssueAsync(userId, clientApplicationId, Guid.NewGuid(), context, cancellationToken);
+
+    public async Task<IssuedRefreshToken> IssueAsync(Guid userId, Guid? clientApplicationId, Guid familyId, RefreshContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentOutOfRangeException.ThrowIfEqual(familyId, Guid.Empty, nameof(familyId));
         if (clientApplicationId is Guid applicationId
             && await applications.GetByIdAsync(applicationId, cancellationToken) is not { IsActive: true })
         {
@@ -40,7 +44,6 @@ internal sealed class RefreshTokenService(
         }
 
         DateTime now = clock.UtcNow;
-        Guid familyId = Guid.NewGuid();
         (RefreshToken row, string raw) = NewToken(userId, clientApplicationId, familyId, now, now + options.SlidingLifetime, context);
 
         await refreshTokens.AddAsync(row, cancellationToken);

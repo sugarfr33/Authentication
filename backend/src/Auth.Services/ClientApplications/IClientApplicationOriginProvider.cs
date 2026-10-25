@@ -6,7 +6,16 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Auth.Services.ClientApplications;
 
-/// <summary>Browser origins allowed to call the API with credentials: the AllowedOrigin entries of active client applications.</summary>
+/// <summary>
+/// The cached read model of one ACTIVE client application: canonical client id (as stored), normalized origins and
+/// exact redirect URIs. Origins that are not allowed (plain http outside Development) are left out.
+/// </summary>
+public sealed record ClientApplicationView(Guid Id, string ClientId, IReadOnlySet<string> Origins, IReadOnlyList<string> RedirectUris);
+
+/// <summary>
+/// Browser origins allowed to call the API with credentials (the AllowedOrigin entries of active client applications),
+/// and the per-client read model the OAuth endpoints use (one client's own origins and redirect URIs).
+/// </summary>
 public interface IClientApplicationOriginProvider
 {
     /// <summary>Normalized origins (<c>scheme://host[:port]</c>, lower case, no trailing slash).</summary>
@@ -14,6 +23,15 @@ public interface IClientApplicationOriginProvider
 
     /// <summary>Exact (normalized) match against <see cref="GetAllowedOriginsAsync"/>. Wildcards are never allowed.</summary>
     Task<bool> IsAllowedAsync(string origin, CancellationToken cancellationToken);
+
+    /// <summary>The active application with this client id (any letter case, as the database collation), or null.</summary>
+    Task<ClientApplicationView?> FindActiveAsync(string? clientId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The active application with this client id when <paramref name="origin"/> is one of ITS OWN registered origins
+    /// (exact, normalized), or null: being registered for another application is not enough.
+    /// </summary>
+    Task<ClientApplicationView?> MatchOriginAsync(string? clientId, string? origin, CancellationToken cancellationToken);
 
     /// <summary>
     /// Drops the cached list: the next call reads the registry. The registry calls it after every change, so a change is
@@ -46,12 +64,27 @@ internal sealed class ClientApplicationOriginProvider(
     /// <summary>Bumped by <see cref="Invalidate"/>: a load that overlaps an invalidation is used once but not cached.</summary>
     private long generation;
 
-    public async Task<IReadOnlySet<string>> GetAllowedOriginsAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlySet<string>> GetAllowedOriginsAsync(CancellationToken cancellationToken) =>
+        (await CurrentAsync(cancellationToken)).Origins;
+
+    public async Task<ClientApplicationView?> FindActiveAsync(string? clientId, CancellationToken cancellationToken) =>
+        string.IsNullOrWhiteSpace(clientId) || clientId.Length > 100
+            ? null
+            : (await CurrentAsync(cancellationToken)).Applications.GetValueOrDefault(clientId);
+
+    public async Task<ClientApplicationView?> MatchOriginAsync(string? clientId, string? origin, CancellationToken cancellationToken) =>
+        OriginNormalizer.TryNormalize(origin, out string normalized)
+        && await FindActiveAsync(clientId, cancellationToken) is ClientApplicationView view
+        && view.Origins.Contains(normalized)
+            ? view
+            : null;
+
+    private async Task<Snapshot> CurrentAsync(CancellationToken cancellationToken)
     {
         Snapshot? current = snapshot;
         if (current is not null && clock.UtcNow < current.LoadedUtc + options.CacheDuration)
         {
-            return current.Origins;
+            return current;
         }
 
         await refreshLock.WaitAsync(cancellationToken);
@@ -60,7 +93,7 @@ internal sealed class ClientApplicationOriginProvider(
             current = snapshot;
             if (current is not null && clock.UtcNow < current.LoadedUtc + options.CacheDuration)
             {
-                return current.Origins;
+                return current;
             }
 
             long loadedIn = Interlocked.Read(ref generation);
@@ -69,23 +102,29 @@ internal sealed class ClientApplicationOriginProvider(
                 .GetActiveAsync(cancellationToken);
 
             HashSet<string> origins = new(StringComparer.Ordinal);
+            Dictionary<string, ClientApplicationView> applications = new(StringComparer.OrdinalIgnoreCase);
             foreach (ClientApplication application in active)
             {
-                foreach (string entry in ReadJsonArray(application.AllowedOrigin))
+                HashSet<string> own = new(StringComparer.Ordinal);
+                foreach (string entry in ClientApplicationLists.Read(application.AllowedOrigin))
                 {
                     if (OriginNormalizer.TryNormalize(entry, options.RequireHttps, out string normalized))
                     {
-                        origins.Add(normalized);
+                        own.Add(normalized);
                     }
                 }
+
+                origins.UnionWith(own);
+                applications[application.ClientId] = new ClientApplicationView(application.Id, application.ClientId, own, ClientApplicationLists.Read(application.RedirectUri));
             }
 
+            Snapshot loaded = new(clock.UtcNow, origins, applications);
             if (Interlocked.Read(ref generation) == loadedIn)
             {
-                snapshot = new Snapshot(clock.UtcNow, origins);
+                snapshot = loaded;
             }
 
-            return origins;
+            return loaded;
         }
         finally
         {
@@ -105,7 +144,14 @@ internal sealed class ClientApplicationOriginProvider(
         OriginNormalizer.TryNormalize(origin, out string normalized)
         && (await GetAllowedOriginsAsync(cancellationToken)).Contains(normalized);
 
-    private static string[] ReadJsonArray(string json)
+    private sealed record Snapshot(DateTime LoadedUtc, IReadOnlySet<string> Origins, IReadOnlyDictionary<string, ClientApplicationView> Applications);
+}
+
+/// <summary>The JSON string arrays stored in ClientApplication (origins, redirect URIs): one reader for every caller.</summary>
+internal static class ClientApplicationLists
+{
+    /// <summary>The entries, or none for a malformed value (which then grants nothing).</summary>
+    public static string[] Read(string json)
     {
         try
         {
@@ -116,8 +162,6 @@ internal sealed class ClientApplicationOriginProvider(
             return [];
         }
     }
-
-    private sealed record Snapshot(DateTime LoadedUtc, IReadOnlySet<string> Origins);
 }
 
 /// <summary>Canonical origin form used for every comparison.</summary>

@@ -28,7 +28,7 @@ public sealed class ClientApplicationApiTests(ApiFixture api)
         await using (AsyncServiceScope scope = api.Factory.Services.CreateAsyncScope())
         {
             session = (await scope.ServiceProvider.GetRequiredService<IClientSessionService>()
-                .StartAsync(userId, app.ClientId, new RefreshContext("203.0.113.9", "tests"), CancellationToken.None)).Value!;
+                .StartAsync(userId, app.ClientId, Guid.NewGuid(), new RefreshContext("203.0.113.9", "tests"), AuditContext.None, CancellationToken.None)).Value!;
         }
 
         JsonWebToken token = new(session.AccessToken.Jwt);

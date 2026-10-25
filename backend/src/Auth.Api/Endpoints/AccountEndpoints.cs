@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using Auth.Api.Http;
 using Auth.Contracts.Requests;
 using Auth.Contracts.Responses;
 using Auth.Services.Accounts;
@@ -34,14 +34,9 @@ internal sealed class AccountEndpoints : IEndpointModule
             .ProducesProblem(StatusCodes.Status400BadRequest);
     }
 
-    internal static AuditContext AuditFrom(HttpContext http) => new(
-        http.Connection.RemoteIpAddress?.ToString(),
-        http.Request.Headers.UserAgent.ToString(),
-        Activity.Current?.TraceId.ToString() ?? http.TraceIdentifier);
-
     private static async Task<IResult> RegisterAsync([FromBody] RegisterRequest request, IRegistrationService registration, HttpContext http, CancellationToken cancellationToken)
     {
-        RegistrationResult result = await registration.RegisterAsync(request, AuditFrom(http), cancellationToken);
+        RegistrationResult result = await registration.RegisterAsync(request, HttpAudit.From(http), cancellationToken);
         return result.IsAccepted
             ? TypedResults.Accepted((string?)null, new RegisterResponse(RegisterAcceptedMessage))
             : TypedResults.ValidationProblem(result.ValidationErrors, title: "The registration request is invalid.");
@@ -49,7 +44,7 @@ internal sealed class AccountEndpoints : IEndpointModule
 
     private static async Task<IResult> VerifyEmailAsync([FromBody] VerifyEmailRequest request, IRegistrationService registration, HttpContext http, CancellationToken cancellationToken)
     {
-        Contracts.Result result = await registration.VerifyEmailAsync(request.Token, AuditFrom(http), cancellationToken);
+        Contracts.Result result = await registration.VerifyEmailAsync(request.Token, HttpAudit.From(http), cancellationToken);
         return result.IsSuccess
             ? TypedResults.NoContent()
             : TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "The verification link is invalid or has expired.");

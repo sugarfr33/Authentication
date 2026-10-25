@@ -14,6 +14,7 @@ using Auth.Services;
 using Auth.Services.Accounts;
 using Auth.Services.Authorization;
 using Auth.Services.ClientApplications;
+using Auth.Services.OAuth;
 using Auth.Services.Passwords;
 using Auth.Services.Retention;
 using Auth.Services.Security;

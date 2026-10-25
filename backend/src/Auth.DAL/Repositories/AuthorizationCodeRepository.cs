@@ -13,13 +13,14 @@ public interface IAuthorizationCodeRepository
     Task<AuthorizationCode?> FindByHashAsync(byte[] codeHash, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Sets UsedUtc only if the code is still unused, in one conditional UPDATE. False when it was already used (or does
-    /// not exist), so two concurrent redemptions cannot both win.
+    /// Sets UsedUtc AND the refresh family the redemption will start, only if the code is still unused, in one
+    /// conditional UPDATE. False when it was already used (or does not exist), so two concurrent redemptions cannot both
+    /// win, and a replay always finds the family to revoke.
     /// </summary>
-    Task<bool> TryMarkUsedAsync(Guid id, DateTime usedUtc, CancellationToken cancellationToken);
+    Task<bool> TryRedeemAsync(Guid id, DateTime usedUtc, Guid familyId, CancellationToken cancellationToken);
 
-    /// <summary>Records the refresh family started from the code (for replay revocation). One UPDATE.</summary>
-    Task<int> SetFamilyAsync(Guid id, Guid familyId, CancellationToken cancellationToken);
+    /// <summary>The family recorded for the code (fresh read, untracked); null when none was recorded.</summary>
+    Task<Guid?> GetFamilyAsync(Guid id, CancellationToken cancellationToken);
 }
 
 internal sealed class AuthorizationCodeRepository(AuthDbContext context) : IAuthorizationCodeRepository
@@ -30,13 +31,11 @@ internal sealed class AuthorizationCodeRepository(AuthDbContext context) : IAuth
     public Task<AuthorizationCode?> FindByHashAsync(byte[] codeHash, CancellationToken cancellationToken) =>
         context.AuthorizationCode.AsNoTracking().FirstOrDefaultAsync(c => c.CodeHash == codeHash, cancellationToken);
 
-    public async Task<bool> TryMarkUsedAsync(Guid id, DateTime usedUtc, CancellationToken cancellationToken) =>
+    public async Task<bool> TryRedeemAsync(Guid id, DateTime usedUtc, Guid familyId, CancellationToken cancellationToken) =>
         await context.AuthorizationCode
             .Where(c => c.Id == id && c.UsedUtc == null)
-            .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedUtc, usedUtc), cancellationToken) == 1;
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedUtc, usedUtc).SetProperty(c => c.FamilyId, familyId), cancellationToken) == 1;
 
-    public Task<int> SetFamilyAsync(Guid id, Guid familyId, CancellationToken cancellationToken) =>
-        context.AuthorizationCode
-            .Where(c => c.Id == id)
-            .ExecuteUpdateAsync(s => s.SetProperty(c => c.FamilyId, familyId), cancellationToken);
+    public Task<Guid?> GetFamilyAsync(Guid id, CancellationToken cancellationToken) =>
+        context.AuthorizationCode.AsNoTracking().Where(c => c.Id == id).Select(c => c.FamilyId).FirstOrDefaultAsync(cancellationToken);
 }

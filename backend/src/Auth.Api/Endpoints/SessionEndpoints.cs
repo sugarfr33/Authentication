@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Auth.Api.Http;
 using Auth.Api.Security;
 using Auth.Contracts;
 using Auth.Contracts.Requests;
@@ -77,7 +78,7 @@ internal sealed partial class SessionEndpoints : IEndpointModule
         HttpContext http,
         CancellationToken cancellationToken)
     {
-        Result<SignedIn> result = await signIn.LoginAsync(request, RefreshCookie(http), AccountEndpoints.AuditFrom(http), cancellationToken);
+        Result<SignedIn> result = await signIn.LoginAsync(request, RefreshCookie(http), HttpAudit.From(http), cancellationToken);
         if (!result.IsSuccess)
         {
             return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: InvalidCredentialsTitle);
@@ -123,7 +124,7 @@ internal sealed partial class SessionEndpoints : IEndpointModule
                 }
             }
 
-            await signIn.LogoutAsync(userId, sessionId, RefreshCookie(http), AccountEndpoints.AuditFrom(http), cancellationToken);
+            await signIn.LogoutAsync(userId, sessionId, RefreshCookie(http), HttpAudit.From(http), cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -149,7 +150,7 @@ internal sealed partial class SessionEndpoints : IEndpointModule
 
         try
         {
-            await signIn.LogoutAllAsync(userId, AccountEndpoints.AuditFrom(http), cancellationToken);
+            await signIn.LogoutAllAsync(userId, HttpAudit.From(http), cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -169,7 +170,7 @@ internal sealed partial class SessionEndpoints : IEndpointModule
         HttpContext http,
         CancellationToken cancellationToken)
     {
-        RefreshOutcome outcome = await signIn.RefreshAsync(RefreshCookie(http), AccountEndpoints.AuditFrom(http), cancellationToken);
+        RefreshOutcome outcome = await signIn.RefreshAsync(RefreshCookie(http), HttpAudit.From(http), cancellationToken);
         switch (outcome.Status)
         {
             case RotationStatus.Rotated when outcome.Session is SignedIn session:
@@ -219,7 +220,7 @@ internal sealed partial class SessionEndpoints : IEndpointModule
         }
 
         // A malformed id, an unknown one and another user's session all get this same 404.
-        if (!Guid.TryParse(id, out Guid familyId) || !await signIn.RevokeSessionAsync(userId, familyId, AccountEndpoints.AuditFrom(http), cancellationToken))
+        if (!Guid.TryParse(id, out Guid familyId) || !await signIn.RevokeSessionAsync(userId, familyId, HttpAudit.From(http), cancellationToken))
         {
             return TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: "Session not found.");
         }

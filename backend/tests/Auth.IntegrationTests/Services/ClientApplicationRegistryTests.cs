@@ -262,7 +262,7 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
     private async Task<Result<SignedIn>> SessionAsync(Guid userId, string clientId)
     {
         await using AsyncServiceScope scope = services.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<IClientSessionService>().StartAsync(userId, clientId, new RefreshContext("203.0.113.1", "tests"), Ct);
+        return await scope.ServiceProvider.GetRequiredService<IClientSessionService>().StartAsync(userId, clientId, Guid.NewGuid(), new RefreshContext("203.0.113.1", "tests"), AuditContext.None, Ct);
     }
 
     private Task<List<AuditLog>> AuditAsync(AuditEventType type, Guid applicationId)

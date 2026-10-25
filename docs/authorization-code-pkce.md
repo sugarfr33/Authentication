@@ -10,10 +10,16 @@ Implementation map:
 | Endpoints | `OAuthEndpoints` (Auth.Api) |
 | Authorize, exchange and refresh | `IOAuthService` (Auth.Services/OAuth) |
 | App sessions | `IClientSessionService` (`StartAsync` and `RefreshAsync`) |
+| Session cap, one refresh pipeline, one claims builder | `ISessionCap`, `ISessionRefresher`, `IAccessProfileBuilder` (Auth.Services/Tokens), shared with browser sessions |
+| Per-client origins and redirect URIs | `IClientApplicationOriginProvider.FindActiveAsync` / `MatchOriginAsync` (cached read model) |
+| Seams for later clients | `IClientAuthenticator` (public clients: none), `IConsentDecision` (first-party: auto-approve) |
+| Error codes | `OAuthErrorCodes` (Auth.Contracts) |
 | Code storage | `IAuthorizationCodeRepository` (DAL) |
 | Purge | `IRetentionRepository.DeleteEndedAuthorizationCodesAsync` |
+| Settings | `OAuth:LoginUrl`, `OAuth:CodeLifetime` (default 60 s, 10 s to 10 min) |
 
-What changed from the design during the build is noted inline (**Built:**). The tests are in `OAuthApiTests`.
+What changed from the design during the build is noted inline (**Built:**). The tests are in `OAuthApiTests`,
+`OAuthExchangeTests` (exchange branches with a fake code store) and `RefreshServiceTests`.
 
 ## 1. Scope
 
@@ -26,7 +32,7 @@ What changed from the design during the build is noted inline (**Built:**). The 
 
 ## 2. Endpoints
 
-All three endpoints are explicitly `AllowAnonymous`: each authenticates in its own way.
+Both endpoints are explicitly `AllowAnonymous`: each authenticates in its own way.
 
 ### `GET /api/v1/oauth/authorize`
 
@@ -91,105 +97,90 @@ The reason goes to the audit log only. Nothing in the error body says which chec
 - **CORS:** `/token` and the refresh grant are called by the SPA's JavaScript from its own origin. CORS already allows
   only registry origins (T18). The token endpoint additionally requires the request `Origin` to be one of the
   calling `client_id`'s **own** registered origins, not just any registered one.
+- **Browser clients only, by design.** Because the Origin must be the client's own, `/token` serves SPAs in a browser.
+  A non-browser public client (no `Origin` header) is refused; supporting one would be a deliberate later change.
 - **CSRF:** `/token` uses no cookie, so antiforgery is not involved: the code plus the PKCE verifier is the credential.
-  The path is exempted from the antiforgery check, and the Origin rule above replaces it. `/authorize` is a GET with
-  side effects, covered by PKCE (section 6).
-- **Rate limits:** new kinds `OAuthAuthorize` (per IP) and `OAuthToken` (per IP and per `client_id`, the "account"
-  key for this path).
+  The endpoint declares `DisableAntiforgery()` (endpoint metadata, not a path list), and the Origin rule above
+  replaces the token check. `/authorize` is a GET with side effects, covered by PKCE (section 6).
+- **Rate limits:** kinds `OAuthAuthorize` (per IP) and `OAuthToken` (per IP and per client).
   - **Built:** `OAuthAuthorize` allows 60 per minute per IP.
   - `OAuthToken` allows 30 per minute per IP and 600 per minute per client. The per-client limit is high on purpose,
     so that one IP cannot starve every user of an application.
-  - A form body with a duplicated or missing `client_id` goes into one shared bucket.
+  - The per-client limit is applied **by the endpoint, after the Origin matched the client's own registered origin**,
+    and keyed on the canonical client id in lower case. A request that only names a client in its body, from anywhere
+    else, counts against its IP only, so nobody can exhaust another application's bucket; letter-case variants of a
+    client id share one bucket (T19 audit M1, tested).
+  - An architecture-style test maps the real OAuth routes and checks that every anonymous one has a rate-limit kind.
+- **Per-IP limits need the real client IP.** Behind a reverse proxy, `ForwardedHeaders:KnownProxies` must be set (the
+  `ProxyMisconfigurationDetector` warns otherwise); without it every user shares the proxy's bucket, and one office
+  behind NAT shares one bucket in any case (60 `/authorize` per minute).
 - **Built: answers.**
   - Errors are always `{"error": "<code>"}`, never a description of which check failed.
   - Before the redirect URI is trusted: `invalid_client` or `invalid_redirect_uri` (400), or `invalid_request` for
     duplicate parameters or a query over 4 KB.
   - Without a session and without `OAuth:LoginUrl`: `login_required` (401).
-- **Built:** a deactivated application's origins leave the CORS and origin lists at once. Its `/token` calls are then
-  refused by the general origin check (403) before the exchange (tested: never tokens).
+- **Built:** a deactivated application's origins leave the CORS and origin lists at once on this instance (within
+  the 30 s cache elsewhere). Its `/token` calls are then refused by the general origin check (403) before the exchange
+  (tested: never tokens). The client and redirect-URI checks of `/authorize` use the same cached read model; the
+  exchange itself re-reads the application from the database.
 
-## 3. Where codes are stored (decision needed)
+## 3. Where codes are stored (decided: table `auth.AuthorizationCode`)
 
-What a code must be:
+What a code is:
 
 - 256-bit random value (`ITokenGenerator`, base64url, 43 characters);
 - **hashed at rest** (SHA-256);
-- **60 s** lifetime;
+- **60 s** lifetime (`OAuth:CodeLifetime`);
 - **single use** through a conditional UPDATE (`UsedUtc IS NULL`, like the one-time-token pattern);
 - bound to user, client, exact redirect URI and code challenge.
-
-### Option A (recommended): new table `auth.AuthorizationCode`, an additive migration
 
 | Column | Type |
 |---|---|
 | `Id` | uniqueidentifier, PK, sequential |
 | `CodeHash` | binary(32), unique |
-| `UserId` | FK to User |
-| `ClientApplicationId` | FK to ClientApplication |
+| `UserId` | FK to User (cascade) |
+| `ClientApplicationId` | FK to ClientApplication (restrict) |
 | `RedirectUri` | nvarchar(512) |
-| `CodeChallenge` | varchar(128) |
-| `CreatedUtc`, `ExpiresUtc` | datetime2 |
+| `CodeChallenge` | varchar(128), check 43 to 128 |
+| `CreatedUtc`, `ExpiresUtc` | datetime2, check expiry after creation |
 | `UsedUtc` | datetime2, null |
-| `FamilyId` | uniqueidentifier, null: the session started from the code |
+| `FamilyId` | uniqueidentifier, null: the session started from the code, written with `UsedUtc` |
 
 Indexes `UQ_AuthorizationCode_CodeHash` and `IX_AuthorizationCode_ExpiresUtc`; foreign keys
 `FK_AuthorizationCode_User_UserId` and `FK_AuthorizationCode_ClientApplication_ClientApplicationId`.
 
-- Redemption is one transaction:
-  1. a conditional UPDATE marks the code used and returns its row;
-  2. the bindings and the verifier are checked;
-  3. `IClientSessionService.StartAsync` runs, and `FamilyId` is recorded.
-- A **replay** (the conditional UPDATE finds `UsedUtc` already set) revokes the family recorded in `FamilyId`
-  (RFC 6819 4.4.1.1) and is audited.
-- Retention: used or expired codes go with the one-time tokens (7 days after expiry). The purge gets one more batched
-  statement.
-- Pros: simple, the same patterns as the reset and verification links, safe on several instances, auditable, tested
-  like the rest.
-- Cons: a schema change (one table, two indexes, two foreign keys, no change to existing tables).
-
-### Option B (no schema change): sealed code plus the refresh family as the single-use marker
-
-- The code is a 256-bit random value, followed by the binding (user, client, redirect URI, challenge, expiry)
-  **encrypted and authenticated** (AES-GCM) with a new server key from `ISecretStore`. That makes it about 200
-  characters.
-- At `/authorize`, the application's refresh family is created at once. Its first row has
-  `TokenHash = SHA-256(code)` and a 60 s expiry, and that row is the single-use marker. The exchange rotates it, so
-  the existing reuse detection gives replay revocation for free.
-- Cons:
-  - a second key to manage and rotate;
-  - a refresh token row that is really a code: the refresh grant must be taught never to accept a first-generation
-    row, or a stolen code could be refreshed without the verifier;
-  - families created for every unexchanged code;
-  - harder to explain and review.
-
-**Recommendation: A.** B avoids a migration at the price of a subtler design in the most sensitive flow of the
-system.
-
-A process-memory code store is ruled out: it is not safe on several instances, and a restart loses the codes.
+- Retention: used or expired codes go with the one-time tokens (7 days after expiry), in bounded batches.
+- The alternative without a schema change (a sealed code with the refresh family as the single-use marker) was
+  rejected: a second key to manage, and a refresh row that is really a code. A process-memory store was ruled out
+  (several instances, restarts).
 
 ## 4. Code exchange and binding
 
-On `/token` with `authorization_code`:
+On `/token` with `authorization_code` (`OAuthService.ExchangeAsync`), after the endpoint checked the Origin and
+the per-client limit:
 
-1. Hash the code.
-2. Conditional UPDATE: `UsedUtc = now WHERE CodeHash = @h AND UsedUtc IS NULL AND ExpiresUtc > now`.
-3. Zero rows: either it is a replay (the code exists and is used: revoke its family and audit
-   `AuthorizationCodeRejected` with reason `replayed`), or it is unknown or expired. Both answer `invalid_grant`.
-4. Check that the stored `ClientApplicationId` is the requested `client_id`'s, and that the app is still active.
-5. Check that the stored `RedirectUri` is **ordinal-equal** to the posted `redirect_uri`.
-6. Check `BASE64URL(SHA256(ASCII(code_verifier)))` against the stored challenge with
-   `CryptographicOperations.FixedTimeEquals`.
-7. Check that the user is still active and verified.
-8. Only then call `IClientSessionService.StartAsync(userId, clientId, ...)`: the T18 criterion, this is its only
-   caller.
+1. Hash the code and read its row. **Unknown:** `invalid_grant`, counted in the metric `auth.oauth.unknown_codes`
+   but **not audited** (such requests carry no user or client, and an audit row each would let anyone grow the audit
+   log; T19 audit L2).
+2. Choose the family id of the session to come, then open **one transaction** (read committed):
+   1. the **burn**, one conditional UPDATE: `UsedUtc = now, FamilyId = @family WHERE Id = @id AND UsedUtc IS NULL`;
+   2. the checks, in order, the first failure winning: not expired; the stored `ClientApplicationId` is the requested
+      `client_id`'s; the application is active; client authentication (`IClientAuthenticator`: none for public
+      clients); `RedirectUri` **ordinal-equal** to the posted one; `BASE64URL(SHA256(ASCII(code_verifier)))` equal to
+      the stored challenge (`CryptographicOperations.FixedTimeEquals`);
+   3. `IClientSessionService.StartAsync(userId, clientId, family, ...)`: the user must be active and verified, the
+      per-user session cap is applied, and the family is created **with that id**. It is the only caller of
+      `StartAsync` (T18 criterion; an architecture test scans the IL of Auth.Services and Auth.Api for call sites);
+   4. commit. A failed check commits the burn alone. An unexpected exception rolls everything back: the code stays
+      redeemable until it expires, and nothing half-done remains.
+3. **Zero rows** at the burn: a **replay**. The family recorded on the code is revoked (RFC 6819 4.4.1.1), audited
+   `AuthorizationCodeRejected` with reason `replayed`, answered `invalid_grant`.
 
-**Built:**
-
-- The code is marked used before any other check. An expired code is refused right after that.
-- A replay runs the conditional UPDATE again, finds the code already used, and revokes the family recorded in
-  `FamilyId`.
-- Narrow race: a replay that lands between the first exchange's `StartAsync` and its `SetFamilyAsync` finds no family
-  yet to revoke. It is still refused, and the window is a few milliseconds.
+**Built: no replay window.** Because the burn and the family id are one UPDATE and the family is created before the
+commit, a replay racing the legitimate exchange blocks on the code row until the commit, then finds the code used and
+its family existing, and revokes it (tested with concurrent exchanges, and with a mutation that commits early).
+A code redeemed before this fix (used, `FamilyId` null) falls back to revoking the user's families at that application
+that started at or after the code was issued.
 
 A failed check does **not** give the code back: it stays used. A failed exchange burns the code, so an attacker cannot
 retry verifiers. The failure is audited with its reason and answered with `invalid_grant`.
@@ -201,10 +192,12 @@ retry verifiers. The failure is audited with its reason and answered with `inval
   "access_token": "<JWT>",
   "token_type": "Bearer",
   "expires_in": 900,
-  "refresh_token": "<opaque>",
-  "scope": "<as requested>"
+  "refresh_token": "<opaque>"
 }
 ```
+
+There is no `scope` member: a requested `scope` is validated for syntax and otherwise ignored, because roles and
+permissions decide what the token allows.
 
 The access token is the T18 app token:
 
@@ -253,23 +246,28 @@ cookie.
   need that application's backend, which is out of scope for public clients.
 - **Refresh:** `/token` with `grant_type=refresh_token` and `client_id`.
   - The family must belong to that application, the application must be active, and the user must be active.
-  - It uses the existing rotation with reuse detection; reuse revokes the family.
+  - **Built:** it is the same pipeline as the cookie refresh (`ISessionRefresher`): read-only preparation first (a
+    failure there, such as signing, leaves the presented token usable), then the rotation with reuse detection, then a
+    fresh read of the user (password change, disabled) and of the application, revoking the successor if either
+    changed. Rejections are audited `RefreshRejected` with the application id, not as code rejections.
   - Cookie refresh keeps refusing application families (T18), and the app grant refuses browser-session families
     (`ClientApplicationId` null).
 - **After a reload** the memory is gone. The SPA starts `/authorize` again with a top-level redirect. Our cookie
   session (still on our domain, first-party in that navigation) is auto-approved, so the user sees a quick bounce, not
   a login form.
 - **Threat trade-offs:**
-  - XSS in the application can read in-memory tokens while the page is open. That is no worse than any bearer token
-    in a SPA. Nothing persists, so the theft ends with the tab, and refresh reuse detection kills a stolen family on
-    the next legitimate refresh.
+  - Nothing persists, so a theft ends with the tab, and refresh reuse detection kills a stolen family on the next
+    legitimate refresh (the XSS trade-off below).
   - Each application's tokens are limited to its own audience and its own `app:` roles.
-  - Sessions per user are capped (20), and deactivating the application kills every family (T18).
+  - Sessions per user are capped (`RefreshTokens:MaxSessionsPerUser`, 20), counted across browser and application
+    sessions alike (`ISessionCap`, used by sign-in and by the code exchange; tested), and deactivating the application
+    kills every family (T18).
 - **Lifetimes:** access 15 min; refresh sliding 14 days and absolute 30 days, as for browser sessions. A shorter
   absolute cap for application families would be one option in `RefreshTokenOptions`. It is not proposed now.
 - **XSS trade-off (accepted, documented):**
-  - Script injected into the application can read and use the in-memory tokens while the tab is open. No storage
-    choice in the browser prevents that; only the application's own CSP and output encoding do.
+  - The in-memory tokens are as exposed as the page: injected script can use them, including the refresh grant, while
+    the tab is open. No storage choice in the browser prevents that; only the application's own CSP and output
+    encoding do.
   - So keep the access token short: 15 minutes is the default, and shorter is better for applications with a large
     attack surface. Today `TokenOptions.AccessTokenLifetime` is set in code only; binding it from configuration is
     a small follow-up.
@@ -288,6 +286,8 @@ cookie.
 | `AuthorizationCodeRejected` (appended) | app id when known, and a reason: `unknown_or_expired`, `replayed`, `client_mismatch`, `redirect_mismatch`, `pkce_mismatch`, `inactive_client`, `inactive_user` |
 
 All of these are catalogue-validated, so a code, verifier, challenge, `state` or redirect URI can never be written.
+A code that matches no row is not audited: `auth.oauth.unknown_codes` counts it (section 4). The app refresh grant
+writes `TokenRefreshed`, `TokenReuse` or `RefreshRejected` (with `app`).
 
 Logs:
 
@@ -295,7 +295,7 @@ Logs:
 - the `Location` header is never logged;
 - the T17 redaction masks `code=` pairs and 43-character opaque values anyway, and a test plants codes and verifiers.
 
-## 9. Tests planned
+## 9. Tests
 
 1. **Full flow:** login, `/authorize`, exchange, the app token's claims, refresh, reuse.
 2. **Open-redirect matrix:** unregistered URI, prefix, case, trailing slash, user info, fragment, scheme mismatch,
@@ -318,3 +318,14 @@ Logs:
 - **Logs:** the `state` query parameter is masked by the log redaction, like `code` and `code_verifier`.
 - **Configuration:** `OAuth:LoginUrl` must be an absolute https URL without user info or fragment (http only for
   localhost in Development); otherwise the app stops at startup.
+- **Code lifetime:** `OAuth:CodeLifetime`, validated at startup (10 s to 10 min).
+
+## 11. Not now (noted for later tasks)
+
+- **Session-ended fan-out (T20):** single logout needs a hook when a session ends (revoke the family, notify the
+  client or validate `post_logout_redirect_uri`): an `ISessionEnded` event raised by the revocation paths, rather than
+  more code in each logout path. Part of the T20 dispatch.
+- **`iss` in authorization responses (RFC 9207):** protects clients that talk to several authorization servers
+  against mix-up. Not needed while each application uses only this server; add it with T22's client library.
+- **Confidential clients and consent:** the seams exist (`IClientAuthenticator`, `IConsentDecision`); both are
+  no-ops today, and secrets or a consent screen would need a schema change.

@@ -46,7 +46,7 @@ public static class AuditCatalogue
         [AuditEventType.RegistrationRejected] = new(["fields"], AuditVolume.High),
         [AuditEventType.PasswordResetFailed] = new(["reason"]),
         [AuditEventType.PasswordChangeFailed] = new(["reason"]),
-        [AuditEventType.RefreshRejected] = new(["reason"], AuditVolume.High),
+        [AuditEventType.RefreshRejected] = new(["reason", "app"], AuditVolume.High),
         [AuditEventType.RoleAssigned] = new(["role", "source"]),
         [AuditEventType.RoleRemoved] = new(["role"]),
         [AuditEventType.RolePermissionRemoved] = new(["role", "permission"]),

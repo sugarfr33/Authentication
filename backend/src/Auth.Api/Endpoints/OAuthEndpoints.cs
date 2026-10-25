@@ -1,8 +1,11 @@
 using System.Security.Claims;
+using Auth.Api.Http;
+using Auth.Api.RateLimiting;
 using Auth.Contracts;
 using Auth.Contracts.Requests;
 using Auth.Contracts.Responses;
 using Auth.Services.Accounts;
+using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.OAuth;
 using Auth.Services.Tokens;
@@ -13,7 +16,9 @@ namespace Auth.Api.Endpoints;
 /// <summary>
 /// T19 Authorization Code + PKCE for registered public clients (docs/authorization-code-pkce.md), under /api/v1/oauth.
 /// Both endpoints are anonymous by design: /authorize reads the browser session itself, /token is authenticated by the
-/// code plus the PKCE verifier (no cookie, so it is exempt from antiforgery; the Origin must be the client's own).
+/// code plus the PKCE verifier (no cookie, so it declares DisableAntiforgery(); the Origin must be the client's own,
+/// which also means /token serves browser clients only). The per-client rate limit of /token is applied here, after the
+/// Origin matched.
 /// Every answer is no-store and no-referrer. Codes appear only in a Location header, never in a body or a log.
 /// </summary>
 internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
@@ -37,6 +42,7 @@ internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
 
         oauth.MapPost("/token", TokenAsync)
             .AllowAnonymous()
+            .DisableAntiforgery()
             .Produces<OAuthTokenResponse>()
             .Produces<OAuthErrorResponse>(StatusCodes.Status400BadRequest);
     }
@@ -47,7 +53,7 @@ internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
         IQueryCollection query = http.Request.Query;
         if ((http.Request.QueryString.Value?.Length ?? 0) > MaxQueryLength || HasDuplicates(query, AuthorizeParameters))
         {
-            return Error(StatusCodes.Status400BadRequest, OAuthErrors.InvalidRequest);
+            return Error(StatusCodes.Status400BadRequest, OAuthErrorCodes.InvalidRequest);
         }
 
         AuthorizeRequest request = new(
@@ -58,7 +64,7 @@ internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
             One(query, "code_challenge_method") ?? string.Empty,
             One(query, "state"),
             One(query, "scope"));
-        AuthorizeOutcome outcome = await oauth.AuthorizeAsync(request, SignedInUser(http.User), AccountEndpoints.AuditFrom(http), cancellationToken);
+        AuthorizeOutcome outcome = await oauth.AuthorizeAsync(request, SignedInUser(http.User), HttpAudit.From(http), cancellationToken);
 
         switch (outcome.Kind)
         {
@@ -70,51 +76,58 @@ internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
                 string separator = string.IsNullOrEmpty(login.Query) ? "?" : "&";
                 return Results.Redirect(login.AbsoluteUri + separator + "returnTo=" + Uri.EscapeDataString(returnTo));
             case AuthorizeOutcomeKind.LoginRequired:
-                return Error(StatusCodes.Status401Unauthorized, OAuthErrors.LoginRequired);
+                return Error(StatusCodes.Status401Unauthorized, OAuthErrorCodes.LoginRequired);
             default:
-                return Error(StatusCodes.Status400BadRequest, outcome.Error ?? OAuthErrors.InvalidRequest);
+                return Error(StatusCodes.Status400BadRequest, outcome.Error ?? OAuthErrorCodes.InvalidRequest);
         }
     }
 
-    private static async Task<IResult> TokenAsync(HttpContext http, IOAuthService oauth, TokenOptions tokenOptions, CancellationToken cancellationToken)
+    private static async Task<IResult> TokenAsync(
+        HttpContext http, IOAuthService oauth, IClientApplicationOriginProvider clients, AccountRateLimiter limiter, TokenOptions tokenOptions, CancellationToken cancellationToken)
     {
         NoStore(http.Response);
         if (!http.Request.HasFormContentType)
         {
-            return Error(StatusCodes.Status415UnsupportedMediaType, OAuthErrors.InvalidRequest);
+            return Error(StatusCodes.Status415UnsupportedMediaType, OAuthErrorCodes.InvalidRequest);
         }
 
         IFormCollection form = await http.Request.ReadFormAsync(cancellationToken);
         if (HasDuplicates(form, TokenParameters))
         {
-            return Error(StatusCodes.Status400BadRequest, OAuthErrors.InvalidRequest);
+            return Error(StatusCodes.Status400BadRequest, OAuthErrorCodes.InvalidRequest);
         }
 
-        string? clientId = One(form, "client_id");
-
-        // The caller must be the client's own page: its exact registered origin, not just any registered one.
-        if (!await oauth.IsClientOriginAsync(clientId, http.Request.Headers.Origin, cancellationToken))
+        // The caller must be the client's own page: its exact registered origin, not just any registered one. Only then
+        // does the request count against that client's budget (canonical client id: letter case gives no new bucket).
+        ClientApplicationView? client = await clients.MatchOriginAsync(One(form, "client_id"), http.Request.Headers.Origin, cancellationToken);
+        if (client is null)
         {
-            return Error(StatusCodes.Status400BadRequest, OAuthErrors.InvalidClient);
+            return Error(StatusCodes.Status400BadRequest, OAuthErrorCodes.InvalidClient);
         }
 
-        AuditContext audit = AccountEndpoints.AuditFrom(http);
+        if (!await ClientRateLimit.TryAcquireAsync(http, limiter, client.ClientId))
+        {
+            return Results.Empty;
+        }
+
+        string clientId = client.ClientId;
+        AuditContext audit = HttpAudit.From(http);
         RefreshContext context = new(audit.IpAddress ?? string.Empty, audit.UserAgent ?? string.Empty);
         TokenGrantResult result = One(form, "grant_type") switch
         {
             "authorization_code" => await oauth.ExchangeAsync(
-                new TokenExchangeRequest("authorization_code", One(form, "code") ?? string.Empty, One(form, "redirect_uri") ?? string.Empty, clientId!, One(form, "code_verifier") ?? string.Empty),
+                new TokenExchangeRequest("authorization_code", One(form, "code") ?? string.Empty, One(form, "redirect_uri") ?? string.Empty, clientId, One(form, "code_verifier") ?? string.Empty),
                 context,
                 audit,
                 cancellationToken),
             "refresh_token" => await oauth.RefreshAsync(One(form, "refresh_token"), clientId, context, audit, cancellationToken),
-            null => new TokenGrantResult(null, OAuthErrors.InvalidRequest),
-            _ => new TokenGrantResult(null, OAuthErrors.UnsupportedGrantType),
+            null => new TokenGrantResult(null, OAuthErrorCodes.InvalidRequest),
+            _ => new TokenGrantResult(null, OAuthErrorCodes.UnsupportedGrantType),
         };
 
         if (result.Session is not SignedIn session)
         {
-            return Error(StatusCodes.Status400BadRequest, result.Error ?? OAuthErrors.InvalidGrant);
+            return Error(StatusCodes.Status400BadRequest, result.Error ?? OAuthErrorCodes.InvalidGrant);
         }
 
         return Results.Json(new OAuthTokenResponse(
@@ -143,14 +156,4 @@ internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
     private static string? One(IQueryCollection values, string name) => values.TryGetValue(name, out StringValues value) && value.Count == 1 ? value[0] : null;
 
     private static string? One(IFormCollection values, string name) => values.TryGetValue(name, out StringValues value) && value.Count == 1 ? value[0] : null;
-}
-
-/// <summary>RFC 6749 error codes used by the OAuth endpoints.</summary>
-internal static class OAuthErrors
-{
-    public const string InvalidRequest = "invalid_request";
-    public const string InvalidClient = "invalid_client";
-    public const string InvalidGrant = "invalid_grant";
-    public const string UnsupportedGrantType = "unsupported_grant_type";
-    public const string LoginRequired = "login_required";
 }

@@ -111,6 +111,13 @@ public interface IRefreshTokenRepository
     /// <summary>Revokes every not-yet-revoked token issued to the client application, in one UPDATE. Returns the number revoked.</summary>
     Task<int> RevokeAllForClientApplicationAsync(Guid clientApplicationId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Revokes the live tokens of the user's families at the client application that STARTED at or after
+    /// <paramref name="sinceUtc"/> (no token of the family is older), in one UPDATE. Replay fallback for an authorization
+    /// code redeemed before its family id was recorded. Returns the number revoked.
+    /// </summary>
+    Task<int> RevokeFamiliesStartedSinceAsync(Guid userId, Guid clientApplicationId, DateTime sinceUtc, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
+
     /// <summary>Revokes every not-yet-revoked token of every user holding the role, in one UPDATE. Returns the number revoked.</summary>
     Task<int> RevokeAllForRoleHoldersAsync(Guid roleId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
 

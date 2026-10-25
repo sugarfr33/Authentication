@@ -38,7 +38,10 @@ internal static class AuditEvents
 
     public static AuditEvent TokenReuse(Guid userId, int revoked) => new(AuditEventType.TokenReuse, userId, new AuditField("revoked", revoked));
 
-    public static AuditEvent RefreshRejected(Guid userId, string reason) => new(AuditEventType.RefreshRejected, userId, new AuditField("reason", reason));
+    /// <summary>A refresh refused after the token was found; <paramref name="applicationId"/> for an application family.</summary>
+    public static AuditEvent RefreshRejected(Guid userId, string reason, Guid? applicationId = null) => applicationId is Guid app
+        ? new(AuditEventType.RefreshRejected, userId, new AuditField("reason", reason), new AuditField("app", app))
+        : new(AuditEventType.RefreshRejected, userId, new AuditField("reason", reason));
 
     /// <summary>A session ended by its owner (no reason) or by the server (reason, e.g. session_cap).</summary>
     public static AuditEvent SessionRevoked(Guid userId, Guid session, string? reason = null) => reason is null

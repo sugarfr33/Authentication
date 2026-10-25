@@ -74,7 +74,6 @@ public interface ISignInService
 internal sealed class SignInService(
     IUserRepository users,
     IRefreshTokenRepository refreshRows,
-    IRoleRepository roles,
     IAuditService audits,
     IUnitOfWork unitOfWork,
     IAuthTimingGuard timingGuard,
@@ -82,8 +81,9 @@ internal sealed class SignInService(
     ILockoutService lockout,
     IRefreshTokenService refreshTokens,
     ITokenService tokens,
-    TokenOptions tokenOptions,
-    RefreshTokenOptions refreshOptions,
+    ISessionCap sessionCap,
+    ISessionRefresher refresher,
+    IAccessProfileBuilder profiles,
     ISessionLiveness liveness,
     IClock clock) : ISignInService
 {
@@ -163,113 +163,14 @@ internal sealed class SignInService(
         return revoked;
     }
 
-    public async Task<RefreshOutcome> RefreshAsync(string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
+    public Task<RefreshOutcome> RefreshAsync(string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(audit);
 
-        // 1. Read-only preparation BEFORE rotating, so a failure here (database, signing) leaves the presented token
-        //    untouched and the client can simply retry: the session, its user, the profile and the new access token.
-        RefreshSession? session = await refreshTokens.FindSessionAsync(presentedRefreshToken, cancellationToken);
-        if (session is null)
-        {
-            return new RefreshOutcome(RotationStatus.Invalid, null);
-        }
-
-        if (session.ClientApplicationId is not null)
-        {
-            // Cookie refresh is for the browser's own sessions only; a client-application family keeps its own audience
-            // and is refreshed by the OAuth flow, never silently converted to the default audience.
-            return new RefreshOutcome(RotationStatus.Invalid, null);
-        }
-
-        User? user = await users.GetByIdAsync(session.UserId, cancellationToken);
-        if (user is not { IsActive: true, EmailVerified: true })
-        {
-            await refreshTokens.RevokeFamilyForUserAsync(session.FamilyId, session.UserId, RefreshTokenRevokedReason.Admin, cancellationToken);
-            return new RefreshOutcome(RotationStatus.Invalid, null);
-        }
-
-        Guid stamp = user.SecurityStamp;
-        UserProfileResponse profile = await ProfileAsync(user, cancellationToken);
-        AccessToken access = await tokens.CreateAccessTokenAsync(
-            new AccessTokenRequest(user.Id, user.Email, user.DisplayName, profile.Roles, profile.Permissions, tokenOptions.DefaultAudience, null, session.FamilyId),
-            cancellationToken);
-
-        // 2. The rotation (its own transaction; may clear the change tracker on its retry).
-        RotationResult rotation = await refreshTokens.RotateAsync(
-            presentedRefreshToken!, new RefreshContext(audit.IpAddress ?? string.Empty, audit.UserAgent ?? string.Empty), cancellationToken);
-
-        switch (rotation.Status)
-        {
-            case RotationStatus.Rotated when rotation.Token is IssuedRefreshToken token:
-                // 3. After the commit nothing may fail silently: a session that cannot be completed is revoked, so no
-                //    orphaned successor stays live and the client gets a clean 401 instead of a 500.
-                string? rejection;
-                try
-                {
-                    rejection = await CheckAfterRotationAsync(token, session, stamp, cancellationToken);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    rejection = "post_rotation_failure";
-                }
-
-                if (rejection is not null)
-                {
-                    await TryRevokeAsync(token.FamilyId, token.UserId, cancellationToken);
-                    await audits.TryWriteAsync(AuditEvents.RefreshRejected(token.UserId, rejection), audit, cancellationToken);
-                    return new RefreshOutcome(RotationStatus.Invalid, null);
-                }
-
-                await audits.TryWriteAsync(AuditEvents.TokenRefreshed(user.Id), audit, cancellationToken);
-                return new RefreshOutcome(RotationStatus.Rotated, new SignedIn(access, token, profile));
-
-            case RotationStatus.ReuseDetected when rotation.Reuse is TokenReuseDetected reuse:
-                // Only a replay that actually revoked a live family is a theft signal. A token of a session that had
-                // already ended (logout, password change, revoked session) is just rejected.
-                await audits.TryWriteAsync(
-                    reuse.RevokedCount > 0 ? AuditEvents.TokenReuse(reuse.UserId, reuse.RevokedCount) : AuditEvents.RefreshRejected(reuse.UserId, "ended_session_replayed"),
-                    audit,
-                    cancellationToken);
-                return new RefreshOutcome(RotationStatus.ReuseDetected, null);
-
-            default:
-                return new RefreshOutcome(rotation.Status, null);
-        }
-    }
-
-    /// <summary>
-    /// Re-reads the user after the rotation (not the tracked copy): if the password changed (new SecurityStamp) or the
-    /// account was disabled while refreshing, the successor must not live. Returns a rejection reason or null.
-    /// </summary>
-    private async Task<string?> CheckAfterRotationAsync(IssuedRefreshToken token, RefreshSession session, Guid stamp, CancellationToken cancellationToken)
-    {
-        if (token.FamilyId != session.FamilyId || token.UserId != session.UserId)
-        {
-            return "session_mismatch";
-        }
-
-        unitOfWork.ClearChanges();
-        User? current = await users.GetByIdAsync(token.UserId, cancellationToken);
-        return current switch
-        {
-            null => "unknown_user",
-            { IsActive: false } or { EmailVerified: false } => "account_disabled",
-            _ when current.SecurityStamp != stamp => "credentials_changed",
-            _ => null,
-        };
-    }
-
-    private async Task TryRevokeAsync(Guid familyId, Guid userId, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await refreshTokens.RevokeFamilyForUserAsync(familyId, userId, RefreshTokenRevokedReason.Admin, cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // Best effort: the rotated token was never handed out, so the family is unusable to the client anyway.
-        }
+        // Cookie refresh is for the browser's own sessions only (application null): a client-application family keeps
+        // its own audience and is refreshed by the OAuth flow, never silently converted to the default audience.
+        return refresher.RefreshAsync(
+            presentedRefreshToken, null, new RefreshContext(audit.IpAddress ?? string.Empty, audit.UserAgent ?? string.Empty), audit, cancellationToken);
     }
 
     public async Task<IReadOnlyList<SessionResponse>> ListSessionsAsync(Guid userId, Guid? currentSessionId, int max, CancellationToken cancellationToken)
@@ -301,7 +202,7 @@ internal sealed class SignInService(
     {
         User? user = await users.GetByIdAsync(userId, cancellationToken);
         return user is { IsActive: true }
-            ? Result.Success(await ProfileAsync(user, cancellationToken))
+            ? Result.Success(await profiles.BuildProfileAsync(user, null, cancellationToken))
             : Result.Failure<UserProfileResponse>(AuthError.NotFound);
     }
 
@@ -327,7 +228,7 @@ internal sealed class SignInService(
     {
         // May clear the change tracker on a retry, so nothing is staged before it, and the user is read again after it.
         await lockout.ResetAsync(user.Id, cancellationToken);
-        await MakeRoomForSessionAsync(user.Id, audit, cancellationToken);
+        await sessionCap.MakeRoomAsync(user.Id, audit, cancellationToken);
         string? newHash = rehashPassword is null ? null : await hasher.HashAsync(rehashPassword, cancellationToken);
         RefreshContext refreshContext = new(audit.IpAddress ?? string.Empty, audit.UserAgent ?? string.Empty);
 
@@ -344,31 +245,9 @@ internal sealed class SignInService(
             refresh = await IssueWithAuditAsync(user.Id, null, null, refreshContext, audit, cancellationToken);
         }
 
-        UserProfileResponse profile = await ProfileAsync(user, cancellationToken);
-        AccessToken access = await tokens.CreateAccessTokenAsync(
-            new AccessTokenRequest(user.Id, user.Email, user.DisplayName, profile.Roles, profile.Permissions, tokenOptions.DefaultAudience, null, refresh.FamilyId),
-            cancellationToken);
+        UserProfileResponse profile = await profiles.BuildProfileAsync(user, null, cancellationToken);
+        AccessToken access = await tokens.CreateAccessTokenAsync(profiles.TokenRequest(user, profile, null, refresh.FamilyId), cancellationToken);
         return new SignedIn(access, refresh, profile);
-    }
-
-    /// <summary>
-    /// Session cap (T15 review): before a new family is issued, the least recently used live families beyond
-    /// MaxSessionsPerUser - 1 are revoked, each audited as SessionRevoked with reason session_cap. Done before the issue,
-    /// so a failure here fails the login without leaving a new session behind. Two logins at the same moment can
-    /// briefly leave one session over the cap; the next login trims it.
-    /// </summary>
-    private async Task MakeRoomForSessionAsync(Guid userId, AuditContext audit, CancellationToken cancellationToken)
-    {
-        int keep = refreshOptions.MaxSessionsPerUser - 1;
-        IReadOnlyList<IRefreshSessionSummary> live = await refreshRows.GetActiveSessionsAsync(userId, clock.UtcNow, refreshOptions.MaxSessionsPerUser + 100, cancellationToken);
-        foreach (IRefreshSessionSummary oldest in live.Skip(keep))
-        {
-            if (await refreshTokens.RevokeFamilyForUserAsync(oldest.FamilyId, userId, RefreshTokenRevokedReason.Admin, cancellationToken) > 0)
-            {
-                liveness.Invalidate(oldest.FamilyId);
-                await audits.TryWriteAsync(AuditEvents.SessionRevoked(userId, oldest.FamilyId, "session_cap"), audit, cancellationToken);
-            }
-        }
     }
 
     /// <summary>
@@ -391,20 +270,6 @@ internal sealed class SignInService(
 
         await audits.StageAsync(AuditEvents.LoginSucceeded(userId), audit, cancellationToken);
         return await refreshTokens.IssueAsync(userId, null, refreshContext, cancellationToken);
-    }
-
-    private async Task<UserProfileResponse> ProfileAsync(User user, CancellationToken cancellationToken)
-    {
-        IReadOnlyList<Role> userRoles = await roles.GetForUserAsync(user.Id, null, cancellationToken);
-        IReadOnlyList<string> permissions = await roles.GetPermissionCodesForUserAsync(user.Id, null, cancellationToken);
-        return new UserProfileResponse(
-            user.Id,
-            user.Email,
-            user.EmailVerified,
-            user.DisplayName,
-            user.MfaEnabled,
-            [.. userRoles.Select(r => r.Name).Order(StringComparer.Ordinal)],
-            [.. permissions.Order(StringComparer.Ordinal)]);
     }
 
     /// <summary>

@@ -358,6 +358,131 @@ public sealed class OAuthApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.TooManyRequests, statuses[^1]);
     }
 
+    /// <summary>
+    /// T19 review and audit M1: only a request from the client's own origin counts against its bucket, and every letter
+    /// case of its client id counts against the same one.
+    /// </summary>
+    [Fact]
+    public async Task Only_requests_from_the_clients_own_origin_count_against_its_bucket_whatever_the_letter_case()
+    {
+        await app.DisposeAsync();
+        app = WithSettings(new Dictionary<string, string?>
+        {
+            ["OAuth:LoginUrl"] = LoginUrl,
+            ["RateLimiting:Policies:OAuthToken:PerIp:PermitLimit"] = "1000",
+            ["RateLimiting:Policies:OAuthToken:PerAccount:PermitLimit"] = "3",
+        });
+        Spa victim = await RegisterSpaAsync();
+        Spa attacker = await RegisterSpaAsync();
+        static FormUrlEncodedContent Grant(string clientId) => Form(("grant_type", "authorization_code"), ("client_id", clientId));
+
+        List<HttpStatusCode> flood = [];
+        for (int i = 0; i < 6; i++)
+        {
+            flood.Add((await TokenAsync(attacker.Origin, Grant(victim.ClientId))).StatusCode);
+        }
+
+        HttpStatusCode lower = (await TokenAsync(victim.Origin, Grant(victim.ClientId))).StatusCode;
+        HttpStatusCode upper = (await TokenAsync(victim.Origin, Grant(victim.ClientId.ToUpperInvariant()))).StatusCode;
+        HttpStatusCode mixed = (await TokenAsync(victim.Origin, Grant("SPA" + victim.ClientId[3..]))).StatusCode;
+        HttpStatusCode overBudget = (await TokenAsync(victim.Origin, Grant(victim.ClientId.ToUpperInvariant()))).StatusCode;
+
+        Assert.All(flood, s => Assert.Equal(HttpStatusCode.BadRequest, s));
+        Assert.Equal((HttpStatusCode.BadRequest, HttpStatusCode.BadRequest, HttpStatusCode.BadRequest), (lower, upper, mixed));
+        Assert.Equal(HttpStatusCode.TooManyRequests, overBudget);
+    }
+
+    /// <summary>
+    /// T19 review and audit M2: the burn records the family in the same UPDATE and the family is created before the
+    /// commit, so a replay racing the legitimate exchange always finds and revokes the session it started.
+    /// </summary>
+    [Fact]
+    public async Task A_replay_racing_the_exchange_always_revokes_the_session_it_started()
+    {
+        Spa spa = await RegisterSpaAsync();
+        (_, Browser browser) = await SignedInAsync();
+        for (int round = 0; round < 5; round++)
+        {
+            Pkce pkce = Pkce.Create();
+            string code = await CodeAsync(browser, spa, pkce);
+            FormUrlEncodedContent Exchange() => Form(("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", pkce.Verifier));
+
+            HttpResponseMessage[] both = await Task.WhenAll(TokenAsync(spa.Origin, Exchange()), TokenAsync(spa.Origin, Exchange()));
+
+            HttpResponseMessage winner = Assert.Single(both, r => r.StatusCode == HttpStatusCode.OK);
+            Assert.Equal("invalid_grant", await ErrorAsync(Assert.Single(both, r => r.StatusCode != HttpStatusCode.OK)));
+            OAuthTokenResponse tokens = (await winner.Content.ReadFromJsonAsync<OAuthTokenResponse>())!;
+            Guid family = Guid.Parse(new JsonWebToken(tokens.AccessToken).GetClaim(AuthClaimTypes.SessionId).Value);
+            List<RefreshToken> rows = await QueryAsync(c => c.RefreshToken.AsNoTracking().Where(t => t.FamilyId == family).ToListAsync());
+            Assert.NotEmpty(rows);
+            Assert.All(rows, t => Assert.Equal(RefreshTokenRevokedReason.Reuse, t.RevokedReason));
+        }
+    }
+
+    /// <summary>A code redeemed before the family was recorded with the burn (FamilyId null): the replay revokes by user and client.</summary>
+    [Fact]
+    public async Task A_replayed_legacy_code_without_a_recorded_family_revokes_the_sessions_started_since_it_was_issued()
+    {
+        Spa spa = await RegisterSpaAsync();
+        (Guid userId, Browser browser) = await SignedInAsync();
+        Pkce pkce = Pkce.Create();
+        string code = await CodeAsync(browser, spa, pkce);
+        FormUrlEncodedContent Exchange() => Form(("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", pkce.Verifier));
+        OAuthTokenResponse first = (await (await TokenAsync(spa.Origin, Exchange())).Content.ReadFromJsonAsync<OAuthTokenResponse>())!;
+        await QueryAsync(c => c.AuthorizationCode.Where(a => a.UserId == userId).ExecuteUpdateAsync(s => s.SetProperty(a => a.FamilyId, (Guid?)null)));
+
+        HttpResponseMessage replay = await TokenAsync(spa.Origin, Exchange());
+        HttpResponseMessage refresh = await TokenAsync(spa.Origin, Form(("grant_type", "refresh_token"), ("refresh_token", first.RefreshToken), ("client_id", spa.ClientId)));
+
+        Assert.Equal("invalid_grant", await ErrorAsync(replay));
+        Assert.Equal("invalid_grant", await ErrorAsync(refresh));
+        Assert.Contains(await QueryAsync(c => c.RefreshToken.AsNoTracking().Where(t => t.UserId == userId && t.ClientApplicationId == null).ToListAsync()), t => t.RevokedUtc is null);
+    }
+
+    /// <summary>T19 arch M1: application sessions count against the per-user cap, together with browser sessions.</summary>
+    [Fact]
+    public async Task Application_sessions_count_against_the_per_user_session_cap()
+    {
+        await app.DisposeAsync();
+        app = WithSettings(new Dictionary<string, string?>
+        {
+            ["OAuth:LoginUrl"] = LoginUrl,
+            ["RefreshTokens:MaxSessionsPerUser"] = "2",
+            ["RateLimiting:Policies:Login:PerIp:PermitLimit"] = "1000",
+            ["RateLimiting:Policies:OAuthToken:PerIp:PermitLimit"] = "1000",
+        });
+        Spa spa = await RegisterSpaAsync();
+        (Guid userId, Browser browser) = await SignedInAsync();
+        Pkce first = Pkce.Create();
+        Pkce second = Pkce.Create();
+        string code1 = await CodeAsync(browser, spa, first);
+        string code2 = await CodeAsync(browser, spa, second);
+
+        foreach ((string code, Pkce pkce) in new[] { (code1, first), (code2, second) })
+        {
+            HttpResponseMessage exchange = await TokenAsync(spa.Origin, Form(("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", pkce.Verifier)));
+            Assert.Equal(HttpStatusCode.OK, exchange.StatusCode);
+        }
+
+        List<RefreshToken> live = await QueryAsync(c => c.RefreshToken.AsNoTracking().Where(t => t.UserId == userId && t.RevokedUtc == null).ToListAsync());
+        Assert.Equal(2, live.Select(t => t.FamilyId).Distinct().Count());
+        Assert.Contains(await QueryAsync(c => c.AuditLog.AsNoTracking().Where(a => a.UserId == userId).ToListAsync()), a =>
+            a.EventType == nameof(AuditEventType.SessionRevoked) && a.Detail!.Contains("session_cap", StringComparison.Ordinal));
+    }
+
+    /// <summary>T19 audit L2: a code that matches no row is counted, not audited (anyone could otherwise grow the audit log).</summary>
+    [Fact]
+    public async Task Unknown_codes_write_no_audit_rows()
+    {
+        Spa spa = await RegisterSpaAsync();
+        string garbage = "garbage-" + Guid.NewGuid().ToString("N");
+
+        HttpResponseMessage response = await TokenAsync(spa.Origin, Form(("grant_type", "authorization_code"), ("code", garbage), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", Pkce.Create().Verifier)));
+
+        Assert.Equal("invalid_grant", await ErrorAsync(response));
+        Assert.Empty(await RejectionsAsync(spa));
+    }
+
     private WebApplicationFactory<Program> WithSettings(Dictionary<string, string?> settings) => api.Factory.WithWebHostBuilder(builder =>
     {
         foreach (KeyValuePair<string, string?> setting in settings)

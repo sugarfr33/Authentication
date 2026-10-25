@@ -32,9 +32,19 @@ public class PkceAndKeysTests
         Assert.Equal(reserved, RoleNames.IsReservedForApplications(name));
 
     [Theory]
-    [InlineData("grant_type=authorization_code&client_id=orders-spa", "client:orders-spa")]
-    [InlineData("client_id=a&client_id=b", "(ambiguous)")]
-    [InlineData("grant_type=authorization_code", "(ambiguous)")]
-    public void The_token_endpoint_is_limited_per_client_id(string form, string key) =>
-        Assert.Equal(key, AccountKeyMiddleware.FindClientId(System.Text.Encoding.UTF8.GetBytes(form)));
+    [InlineData("orders-spa")]
+    [InlineData("Orders-SPA")]
+    [InlineData("ORDERS-SPA")]
+    public void Every_letter_case_of_a_client_id_shares_one_rate_limit_bucket(string clientId) =>
+        Assert.Equal("client:orders-spa", ClientRateLimit.Key(clientId));
+
+    /// <summary>T19 audit L1: a .NET $ also matches before a final newline; the anchors are \z.</summary>
+    [Fact]
+    public void A_verifier_with_a_trailing_newline_never_matches()
+    {
+        const string Verifier = "dBjftJeZ4CVP-mJ92K9qO7JcNx7ap2dsPS-aaHoJMKQ";
+        string challenge = OAuthService.Base64Url(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(Verifier + "\n")));
+
+        Assert.False(OAuthService.VerifierMatches(Verifier + "\n", challenge));
+    }
 }

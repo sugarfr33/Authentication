@@ -55,6 +55,10 @@ public class CorsPolicyProviderTests
 
         public Task<bool> IsAllowedAsync(string origin, CancellationToken cancellationToken) => Task.FromResult(set.Contains(origin));
 
+        public Task<ClientApplicationView?> FindActiveAsync(string? clientId, CancellationToken cancellationToken) => Task.FromResult<ClientApplicationView?>(null);
+
+        public Task<ClientApplicationView?> MatchOriginAsync(string? clientId, string? origin, CancellationToken cancellationToken) => Task.FromResult<ClientApplicationView?>(null);
+
         public void Invalidate()
         {
         }

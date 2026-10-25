@@ -61,12 +61,9 @@ internal sealed partial class AccountKeyMiddleware(
             return;
         }
 
-        if (kind == AuthRateLimitKind.OAuthToken && context.Request.HasFormContentType)
-        {
-            // The per-client limit of /oauth/token: the client_id of the form body (duplicates share one bucket).
-            context.Items[ItemKey] = FindClientId(body);
-        }
-        else if (settings.Policies.TryGetValue(kind.Value, out AuthRateLimitPolicy? policy) && policy.PerAccount is not null && context.Request.HasJsonContentType())
+        // The per-client limit of /oauth/token is not keyed here: the endpoint applies it after the Origin check
+        // (ClientRateLimit), so an unauthenticated client_id in a body cannot spend another application's budget.
+        if (kind != AuthRateLimitKind.OAuthToken && settings.Policies.TryGetValue(kind.Value, out AuthRateLimitPolicy? policy) && policy.PerAccount is not null && context.Request.HasJsonContentType())
         {
             if (!IsUtf8Charset(context.Request.ContentType))
             {
@@ -149,16 +146,6 @@ internal sealed partial class AccountKeyMiddleware(
             // Malformed JSON, or invalid UTF-8 inside a string (GetString throws InvalidOperationException).
             return AmbiguousAccount;
         }
-    }
-
-    /// <summary>"client:" plus the single client_id of a form body; the shared ambiguous bucket otherwise.</summary>
-    internal static string FindClientId(ReadOnlySpan<byte> form)
-    {
-        Dictionary<string, Microsoft.Extensions.Primitives.StringValues> fields =
-            Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(System.Text.Encoding.UTF8.GetString(form));
-        return fields.TryGetValue("client_id", out Microsoft.Extensions.Primitives.StringValues value) && value.Count == 1 && !string.IsNullOrEmpty(value[0])
-            ? "client:" + value[0]
-            : AmbiguousAccount;
     }
 
     internal static bool IsUtf8Charset(string? contentType)

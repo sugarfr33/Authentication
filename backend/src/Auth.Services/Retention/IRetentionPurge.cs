@@ -67,11 +67,11 @@ public sealed record RetentionPurgeResult(
     int PendingRegistrationsErased,
     int EmailVerificationTokensDeleted,
     int PasswordResetTokensDeleted,
+    int AuthorizationCodesDeleted,
     int RefreshTokensDeleted,
-    int AuditRowsDeleted,
-    int AuthorizationCodesDeleted = 0)
+    int AuditRowsDeleted)
 {
-    public int Total => PendingRegistrationsErased + EmailVerificationTokensDeleted + PasswordResetTokensDeleted + RefreshTokensDeleted + AuditRowsDeleted + AuthorizationCodesDeleted;
+    public int Total => PendingRegistrationsErased + EmailVerificationTokensDeleted + PasswordResetTokensDeleted + AuthorizationCodesDeleted + RefreshTokensDeleted + AuditRowsDeleted;
 }
 
 /// <summary>
@@ -107,7 +107,7 @@ internal sealed class RetentionPurge(IRetentionRepository repository, IClock clo
         // Rows of event types that no longer exist (legacy or renamed) follow the normal retention.
         audit += await RepeatAsync(batch => repository.DeleteUnknownAuditLogAsync(KnownEventTypes, now - options.AuditLog, batch, cancellationToken));
 
-        return new RetentionPurgeResult(erased, verification, reset, refresh, audit, codes);
+        return new RetentionPurgeResult(erased, verification, reset, codes, refresh, audit);
     }
 
     /// <summary>Runs one batched statement until it touches less than a full batch, at most MaxBatchesPerRun times.</summary>

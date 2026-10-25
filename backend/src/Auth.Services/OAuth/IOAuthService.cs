@@ -1,6 +1,7 @@
+using System.Data;
+using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using Auth.Contracts;
 using Auth.Contracts.Requests;
@@ -47,8 +48,9 @@ public sealed record TokenGrantResult(SignedIn? Session, string? Error)
 
 /// <summary>
 /// Authorization Code with PKCE for registered public clients (T19, docs/authorization-code-pkce.md). First-party
-/// applications only: a signed-in user is auto-approved. Codes are 256-bit, stored as SHA-256 hashes, valid 60 seconds,
-/// redeemed at most once, and bound to the user, the client, the exact redirect URI and the S256 challenge.
+/// applications only: a signed-in user is auto-approved. Codes are 256-bit, stored as SHA-256 hashes, valid
+/// OAuth:CodeLifetime (60 s), redeemed at most once, and bound to the user, the client, the exact redirect URI and the
+/// S256 challenge. HTTP concerns (the caller's Origin, rate limits) stay in the endpoint.
 /// </summary>
 public interface IOAuthService
 {
@@ -63,35 +65,60 @@ public interface IOAuthService
 
     /// <summary>grant_type=refresh_token for an application family.</summary>
     Task<TokenGrantResult> RefreshAsync(string? refreshToken, string? clientId, RefreshContext context, AuditContext audit, CancellationToken cancellationToken);
+}
 
-    /// <summary>True when <paramref name="origin"/> is one of the active <paramref name="clientId"/>'s own registered origins.</summary>
-    Task<bool> IsClientOriginAsync(string? clientId, string? origin, CancellationToken cancellationToken);
+/// <summary>
+/// Client authentication at the token endpoint. Seam for confidential clients (a later task); registered public clients
+/// have no secret: PKCE plus the client's own Origin is their proof.
+/// </summary>
+internal interface IClientAuthenticator
+{
+    Task<bool> AuthenticateAsync(ClientApplication application, TokenExchangeRequest request, CancellationToken cancellationToken);
+}
+
+internal sealed class PublicClientAuthenticator : IClientAuthenticator
+{
+    public Task<bool> AuthenticateAsync(ClientApplication application, TokenExchangeRequest request, CancellationToken cancellationToken) => Task.FromResult(true);
+}
+
+/// <summary>Whether the user agreed to sign in to the application. Seam for a consent screen (third-party clients, later).</summary>
+internal interface IConsentDecision
+{
+    Task<bool> IsApprovedAsync(Guid userId, ClientApplicationView application, string? scope, CancellationToken cancellationToken);
+}
+
+/// <summary>Every registered application is first-party today: a signed-in user is approved without asking.</summary>
+internal sealed class FirstPartyAutoApproval : IConsentDecision
+{
+    public Task<bool> IsApprovedAsync(Guid userId, ClientApplicationView application, string? scope, CancellationToken cancellationToken) => Task.FromResult(true);
 }
 
 internal sealed partial class OAuthService(
+    IClientApplicationOriginProvider clients,
     IClientApplicationRepository applications,
     IUserRepository users,
     IAuthorizationCodeRepository codes,
     IRefreshTokenRepository refreshRows,
     IClientSessionService sessions,
+    IClientAuthenticator clientAuthenticator,
+    IConsentDecision consent,
     ITokenGenerator generator,
     IAuditService audits,
     IUnitOfWork unitOfWork,
     ISessionLiveness liveness,
+    OAuthOptions options,
     IClock clock) : IOAuthService
 {
-    public static readonly TimeSpan CodeLifetime = TimeSpan.FromSeconds(60);
-
-    public const string InvalidRequest = "invalid_request";
-    public const string InvalidClient = "invalid_client";
-    public const string InvalidGrant = "invalid_grant";
-    public const string UnsupportedResponseType = "unsupported_response_type";
-    public const string UnsupportedGrantType = "unsupported_grant_type";
-    public const string AccessDenied = "access_denied";
-    public const string InvalidRedirectUri = "invalid_redirect_uri";
-
     private const int MaxStateLength = 512;
     private const int MaxScopeLength = 256;
+
+    private static readonly Meter OAuthMeter = new("Auth.OAuth");
+
+    /// <summary>
+    /// Codes that match no row (garbage or long purged) are counted here, not audited: they carry no user or client and
+    /// cost the caller nothing, so an audit row each would let anyone grow the audit log (T19 audit L2).
+    /// </summary>
+    private static readonly Counter<long> UnknownCodes = OAuthMeter.CreateCounter<long>("auth.oauth.unknown_codes");
 
     public async Task<AuthorizeOutcome> AuthorizeAsync(AuthorizeRequest request, Guid? signedInUserId, AuditContext audit, CancellationToken cancellationToken)
     {
@@ -99,25 +126,23 @@ internal sealed partial class OAuthService(
         ArgumentNullException.ThrowIfNull(audit);
 
         // 1-2. Until the client and the redirect URI are trusted, nothing may redirect (no open redirect).
-        ClientApplication? application = string.IsNullOrWhiteSpace(request.ClientId) || request.ClientId.Length > 100
-            ? null
-            : await applications.GetByClientIdAsync(request.ClientId, cancellationToken);
-        if (application is not { IsActive: true })
+        ClientApplicationView? application = await clients.FindActiveAsync(request.ClientId, cancellationToken);
+        if (application is null)
         {
-            return new AuthorizeOutcome(AuthorizeOutcomeKind.ErrorPage, InvalidClient);
+            return new AuthorizeOutcome(AuthorizeOutcomeKind.ErrorPage, OAuthErrorCodes.InvalidClient);
         }
 
         string? redirectUri = request.RedirectUri;
-        if (string.IsNullOrEmpty(redirectUri) || !RegisteredRedirects(application).Contains(redirectUri, StringComparer.Ordinal))
+        if (string.IsNullOrEmpty(redirectUri) || !application.RedirectUris.Contains(redirectUri, StringComparer.Ordinal))
         {
-            return new AuthorizeOutcome(AuthorizeOutcomeKind.ErrorPage, InvalidRedirectUri);
+            return new AuthorizeOutcome(AuthorizeOutcomeKind.ErrorPage, OAuthErrorCodes.InvalidRedirectUri);
         }
 
         // 3. The redirect URI is trusted from here on: errors go back to it, with the state when it is acceptable.
         string? state = IsValidState(request.State) ? request.State : null;
         if (!string.Equals(request.ResponseType, "code", StringComparison.Ordinal))
         {
-            return ErrorRedirect(redirectUri, UnsupportedResponseType, state);
+            return ErrorRedirect(redirectUri, OAuthErrorCodes.UnsupportedResponseType, state);
         }
 
         if (state is null
@@ -125,7 +150,7 @@ internal sealed partial class OAuthService(
             || request.CodeChallenge is null || !PkceValue().IsMatch(request.CodeChallenge)
             || (request.Scope is not null && (request.Scope.Length > MaxScopeLength || !ScopeValue().IsMatch(request.Scope))))
         {
-            return ErrorRedirect(redirectUri, InvalidRequest, state);
+            return ErrorRedirect(redirectUri, OAuthErrorCodes.InvalidRequest, state);
         }
 
         // 4. A browser session on our domain is required.
@@ -137,10 +162,15 @@ internal sealed partial class OAuthService(
         User? user = await users.GetByIdAsync(userId, cancellationToken);
         if (user is not { IsActive: true, EmailVerified: true })
         {
-            return ErrorRedirect(redirectUri, AccessDenied, state);
+            return ErrorRedirect(redirectUri, OAuthErrorCodes.AccessDenied, state);
         }
 
-        // 5. First-party application: auto-approved. Issue the code.
+        // 5. Consent (first-party applications: auto-approved), then issue the code.
+        if (!await consent.IsApprovedAsync(user.Id, application, request.Scope, cancellationToken))
+        {
+            return ErrorRedirect(redirectUri, OAuthErrorCodes.AccessDenied, state);
+        }
+
         GeneratedToken code = generator.Generate();
         DateTime now = clock.UtcNow;
         await codes.AddAsync(
@@ -152,7 +182,7 @@ internal sealed partial class OAuthService(
                 RedirectUri = redirectUri,
                 CodeChallenge = request.CodeChallenge,
                 CreatedUtc = now,
-                ExpiresUtc = now + CodeLifetime,
+                ExpiresUtc = now + options.CodeLifetime,
             },
             cancellationToken);
         await audits.StageAsync(AuditEvents.AuthorizationCodeIssued(user.Id, application.Id), audit, cancellationToken);
@@ -169,60 +199,60 @@ internal sealed partial class OAuthService(
         if (string.IsNullOrEmpty(request.Code) || request.Code.Length > 256 || string.IsNullOrEmpty(request.ClientId)
             || string.IsNullOrEmpty(request.RedirectUri) || string.IsNullOrEmpty(request.CodeVerifier))
         {
-            return TokenGrantResult.Fail(InvalidRequest);
+            return TokenGrantResult.Fail(OAuthErrorCodes.InvalidRequest);
         }
 
         AuthorizationCode? code = await codes.FindByHashAsync(generator.Hash(request.Code), cancellationToken);
-        DateTime now = clock.UtcNow;
         if (code is null)
         {
-            return await RejectAsync(null, null, "unknown_or_expired", InvalidGrant, audit, cancellationToken);
+            UnknownCodes.Add(1);
+            return TokenGrantResult.Fail(OAuthErrorCodes.InvalidGrant);
         }
 
-        // Burn first: whatever happens next, this code is never accepted again.
-        if (!await codes.TryMarkUsedAsync(code.Id, now, cancellationToken))
+        // One transaction: the conditional UPDATE that burns the code also records the family the redemption will start
+        // (chosen here), and that family is created before the commit. A concurrent replay blocks on the code row until
+        // the commit, then finds the code used AND its family existing, and revokes it: no window. A failed check commits
+        // the burn alone; an unexpected exception rolls everything back (the code stays redeemable until it expires).
+        Guid familyId = Guid.NewGuid();
+        DateTime now = clock.UtcNow;
+        Rejection? rejection;
+        SignedIn? session = null;
+        await using (IUnitOfWorkTransaction transaction = await unitOfWork.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken))
         {
-            await RevokeReplayedAsync(code, cancellationToken);
-            return await RejectAsync(code.UserId, code.ClientApplicationId, "replayed", InvalidGrant, audit, cancellationToken);
+            if (!await codes.TryRedeemAsync(code.Id, now, familyId, cancellationToken))
+            {
+                rejection = new Rejection("replayed", OAuthErrorCodes.InvalidGrant, code.ClientApplicationId);
+            }
+            else
+            {
+                (rejection, ClientApplication? application) = await VerifyAsync(code, request, now, cancellationToken);
+                if (rejection is null)
+                {
+                    // Verified exchange for this user and this client: the only call site of StartAsync (T18 criterion,
+                    // checked by an architecture test).
+                    Result<SignedIn> started = await sessions.StartAsync(code.UserId, application!.ClientId, familyId, context, audit, cancellationToken);
+                    session = started.Value;
+                    rejection = session is not null ? null
+                        : started.Error == AuthError.InvalidClient ? new Rejection("inactive_client", OAuthErrorCodes.InvalidClient, application.Id)
+                        : new Rejection("inactive_user", OAuthErrorCodes.InvalidGrant, application.Id);
+                }
+
+                await transaction.CommitAsync(cancellationToken);
+            }
         }
 
-        if (code.ExpiresUtc <= now)
+        if (rejection is not null)
         {
-            return await RejectAsync(code.UserId, code.ClientApplicationId, "unknown_or_expired", InvalidGrant, audit, cancellationToken);
+            if (rejection.Reason == "replayed")
+            {
+                await RevokeReplayedAsync(code, cancellationToken);
+            }
+
+            await audits.TryWriteAsync(AuditEvents.AuthorizationCodeRejected(code.UserId, rejection.ApplicationId, rejection.Reason), audit, cancellationToken);
+            return TokenGrantResult.Fail(rejection.Error);
         }
 
-        ClientApplication? application = await applications.GetByClientIdAsync(request.ClientId, cancellationToken);
-        if (application is null || application.Id != code.ClientApplicationId)
-        {
-            return await RejectAsync(code.UserId, code.ClientApplicationId, "client_mismatch", InvalidGrant, audit, cancellationToken);
-        }
-
-        if (!application.IsActive)
-        {
-            return await RejectAsync(code.UserId, application.Id, "inactive_client", InvalidClient, audit, cancellationToken);
-        }
-
-        if (!string.Equals(code.RedirectUri, request.RedirectUri, StringComparison.Ordinal))
-        {
-            return await RejectAsync(code.UserId, application.Id, "redirect_mismatch", InvalidGrant, audit, cancellationToken);
-        }
-
-        if (!VerifierMatches(request.CodeVerifier, code.CodeChallenge))
-        {
-            return await RejectAsync(code.UserId, application.Id, "pkce_mismatch", InvalidGrant, audit, cancellationToken);
-        }
-
-        // Verified exchange for this user and this client: the only call site of StartAsync (T18 criterion).
-        Result<SignedIn> started = await sessions.StartAsync(code.UserId, application.ClientId, context, cancellationToken);
-        if (started.Value is not SignedIn session)
-        {
-            return started.Error == AuthError.InvalidClient
-                ? await RejectAsync(code.UserId, application.Id, "inactive_client", InvalidClient, audit, cancellationToken)
-                : await RejectAsync(code.UserId, application.Id, "inactive_user", InvalidGrant, audit, cancellationToken);
-        }
-
-        await codes.SetFamilyAsync(code.Id, session.RefreshToken.FamilyId, cancellationToken);
-        await audits.TryWriteAsync(AuditEvents.AuthorizationCodeRedeemed(code.UserId, application.Id, session.RefreshToken.FamilyId), audit, cancellationToken);
+        await audits.TryWriteAsync(AuditEvents.AuthorizationCodeRedeemed(code.UserId, code.ClientApplicationId, familyId), audit, cancellationToken);
         return new TokenGrantResult(session, null);
     }
 
@@ -230,24 +260,13 @@ internal sealed partial class OAuthService(
     {
         if (string.IsNullOrEmpty(refreshToken) || string.IsNullOrEmpty(clientId))
         {
-            return TokenGrantResult.Fail(InvalidRequest);
+            return TokenGrantResult.Fail(OAuthErrorCodes.InvalidRequest);
         }
 
         Result<SignedIn> refreshed = await sessions.RefreshAsync(refreshToken, clientId, context, audit, cancellationToken);
         return refreshed.Value is SignedIn session
             ? new TokenGrantResult(session, null)
-            : TokenGrantResult.Fail(refreshed.Error == AuthError.InvalidClient ? InvalidClient : InvalidGrant);
-    }
-
-    public async Task<bool> IsClientOriginAsync(string? clientId, string? origin, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrEmpty(clientId) || !OriginNormalizer.TryNormalize(origin, out string normalized))
-        {
-            return false;
-        }
-
-        ClientApplication? application = await applications.GetByClientIdAsync(clientId, cancellationToken);
-        return application is { IsActive: true } && ReadList(application.AllowedOrigin).Contains(normalized, StringComparer.Ordinal);
+            : TokenGrantResult.Fail(refreshed.Error == AuthError.InvalidClient ? OAuthErrorCodes.InvalidClient : OAuthErrorCodes.InvalidGrant);
     }
 
     /// <summary>BASE64URL(SHA-256(ASCII(verifier))) compared to the stored challenge in constant time.</summary>
@@ -264,21 +283,59 @@ internal sealed partial class OAuthService(
 
     internal static string Base64Url(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
-    /// <summary>RFC 6819 4.4.1.1: a used code presented again revokes the session it started.</summary>
-    private async Task RevokeReplayedAsync(AuthorizationCode code, CancellationToken cancellationToken)
+    /// <summary>The checks after the burn, in order; the first failure wins. Every answer except an inactive client is invalid_grant.</summary>
+    private async Task<(Rejection? Rejection, ClientApplication? Application)> VerifyAsync(AuthorizationCode code, TokenExchangeRequest request, DateTime now, CancellationToken cancellationToken)
     {
-        AuthorizationCode? current = await codes.FindByHashAsync(code.CodeHash, cancellationToken);
-        if (current?.FamilyId is Guid family)
+        if (code.ExpiresUtc <= now)
         {
-            await refreshRows.RevokeFamilyAsync(family, RefreshTokenRevokedReason.Reuse, clock.UtcNow, cancellationToken);
-            liveness.Invalidate(family);
+            return (new Rejection("unknown_or_expired", OAuthErrorCodes.InvalidGrant, code.ClientApplicationId), null);
         }
+
+        ClientApplication? application = await applications.GetByClientIdAsync(request.ClientId, cancellationToken);
+        if (application is null || application.Id != code.ClientApplicationId)
+        {
+            return (new Rejection("client_mismatch", OAuthErrorCodes.InvalidGrant, code.ClientApplicationId), null);
+        }
+
+        if (!application.IsActive)
+        {
+            return (new Rejection("inactive_client", OAuthErrorCodes.InvalidClient, application.Id), null);
+        }
+
+        if (!await clientAuthenticator.AuthenticateAsync(application, request, cancellationToken))
+        {
+            return (new Rejection("client_mismatch", OAuthErrorCodes.InvalidClient, application.Id), null);
+        }
+
+        if (!string.Equals(code.RedirectUri, request.RedirectUri, StringComparison.Ordinal))
+        {
+            return (new Rejection("redirect_mismatch", OAuthErrorCodes.InvalidGrant, application.Id), null);
+        }
+
+        return VerifierMatches(request.CodeVerifier, code.CodeChallenge)
+            ? (null, application)
+            : (new Rejection("pkce_mismatch", OAuthErrorCodes.InvalidGrant, application.Id), null);
     }
 
-    private async Task<TokenGrantResult> RejectAsync(Guid? userId, Guid? applicationId, string reason, string error, AuditContext audit, CancellationToken cancellationToken)
+    /// <summary>
+    /// RFC 6819 4.4.1.1: a used code presented again revokes the session it started. The family id is read fresh (the
+    /// code read before the burn may predate the redemption). A code redeemed before family ids were recorded with the
+    /// burn (null) falls back to the user's families at that application started since the code was issued.
+    /// </summary>
+    private async Task RevokeReplayedAsync(AuthorizationCode code, CancellationToken cancellationToken)
     {
-        await audits.TryWriteAsync(AuditEvents.AuthorizationCodeRejected(userId, applicationId, reason), audit, cancellationToken);
-        return TokenGrantResult.Fail(error);
+        DateTime now = clock.UtcNow;
+        if (await codes.GetFamilyAsync(code.Id, cancellationToken) is Guid family)
+        {
+            await refreshRows.RevokeFamilyAsync(family, RefreshTokenRevokedReason.Reuse, now, cancellationToken);
+            liveness.Invalidate(family);
+            return;
+        }
+
+        if (await refreshRows.RevokeFamiliesStartedSinceAsync(code.UserId, code.ClientApplicationId, code.CreatedUtc, RefreshTokenRevokedReason.Reuse, now, cancellationToken) > 0)
+        {
+            liveness.InvalidateUser(code.UserId);
+        }
     }
 
     private static AuthorizeOutcome ErrorRedirect(string redirectUri, string error, string? state) =>
@@ -300,24 +357,12 @@ internal sealed partial class OAuthService(
     private static bool IsValidState(string? state) =>
         state is { Length: > 0 and <= MaxStateLength } && state.All(c => c is >= ' ' and <= '~');
 
-    private static string[] RegisteredRedirects(ClientApplication application) => ReadList(application.RedirectUri);
-
-    private static string[] ReadList(string json)
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<string[]>(json) ?? [];
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-    }
-
-    /// <summary>RFC 7636: 43 to 128 unreserved characters (code_challenge and code_verifier).</summary>
-    [GeneratedRegex("^[A-Za-z0-9._~-]{43,128}$", RegexOptions.CultureInvariant)]
+    /// <summary>RFC 7636: 43 to 128 unreserved characters (code_challenge and code_verifier). \z, not $: $ also matches before a final newline.</summary>
+    [GeneratedRegex(@"^[A-Za-z0-9._~-]{43,128}\z", RegexOptions.CultureInvariant)]
     private static partial Regex PkceValue();
 
-    [GeneratedRegex("^[a-z0-9_.:]+( [a-z0-9_.:]+)*$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[a-z0-9_.:]+( [a-z0-9_.:]+)*\z", RegexOptions.CultureInvariant)]
     private static partial Regex ScopeValue();
+
+    private sealed record Rejection(string Reason, string Error, Guid? ApplicationId);
 }

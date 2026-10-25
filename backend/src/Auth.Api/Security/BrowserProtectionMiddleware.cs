@@ -26,7 +26,6 @@ internal sealed class BrowserProtectionMiddleware(
     IHostEnvironment environment)
 {
     private static readonly PathString ApiPrefix = new("/api");
-    private static readonly PathString OAuthTokenPath = new(Endpoints.OAuthEndpoints.TokenPath);
 
     private readonly HashSet<string> trustedOrigins = NormalizeTrusted(options.Value.TrustedOrigins, requireHttps: !environment.IsDevelopment());
 
@@ -56,9 +55,10 @@ internal sealed class BrowserProtectionMiddleware(
             return;
         }
 
-        // /oauth/token uses no cookie: the code plus the PKCE verifier is the credential, and the endpoint itself requires
-        // the client's own registered Origin. Antiforgery (bound to a cookie session) does not apply there.
-        if (context.Request.Path.Equals(OAuthTokenPath, StringComparison.OrdinalIgnoreCase))
+        // Endpoints that use no cookie (/oauth/token: the code plus the PKCE verifier, or the refresh token, is the
+        // credential, and the endpoint itself requires the client's own registered Origin) declare DisableAntiforgery();
+        // antiforgery, bound to a cookie session, does not apply there. The origin check above still does.
+        if (context.GetEndpoint()?.Metadata.GetMetadata<IAntiforgeryMetadata>() is { RequiresValidation: false })
         {
             await next(context);
             return;

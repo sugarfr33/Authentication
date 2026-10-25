@@ -90,16 +90,18 @@ protocol-relative URLs, own audience, caps, and loopback in Development only.
 
 ## App tokens (`IClientSessionService`)
 
-`StartAsync(userId, clientId, context)` is for the OAuth code exchange (T19); there is no HTTP route to it yet. For an
-**active** application and an active, verified user it does three things:
+`StartAsync(userId, clientId, familyId, context, audit)` is for the OAuth code exchange (T19, `/api/v1/oauth/token`).
+For an **active** application and an active, verified user it does three things:
 
-1. Starts a refresh family tied to the application.
+1. Applies the per-user session cap (`ISessionCap`, counted across browser and application sessions), then starts a
+   refresh family tied to the application, with the id the exchange recorded on the code.
 2. Mints an access token with these claims:
    - `aud` = the application's audience;
    - `client_id` = its client id;
    - `sid` = the family;
    - the global roles **plus that application's roles, prefixed `app:{clientId}:{name}`**, with their permissions.
-     A resource server can therefore never confuse an application role with a global role of the same name.
+     A resource server can therefore never confuse an application role with a global role of the same name. The
+     claims are built by `IAccessProfileBuilder`, the same builder as for browser sessions.
 3. Returns them.
 
 An unknown or inactive application gets `InvalidClient`.
@@ -110,7 +112,8 @@ An unknown or inactive application gets `InvalidClient`.
   never a 500.
 - **T19 criterion (met):** `StartAsync` mints a session for whatever user id it is given. Its only caller is
   `OAuthService.ExchangeAsync`, after a verified authorization-code exchange bound to the same user and the same
-  client. The refresh grant for application families is `IClientSessionService.RefreshAsync`. See
+  client; an architecture test scans the IL for other call sites. The refresh grant for application families is
+  `IClientSessionService.RefreshAsync`, on the same pipeline as the cookie refresh (`ISessionRefresher`). See
   authorization-code-pkce.md.
 - The browser's own cookie session keeps the default audience and global roles, as before.
 - `AccessTokenCookieHandler` refuses any token that carries `client_id`, even one with this API's audience (tested).

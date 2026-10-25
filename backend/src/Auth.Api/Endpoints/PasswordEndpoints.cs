@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Auth.Api.Http;
 using Auth.Api.Security;
 using Auth.Contracts;
 using Auth.Contracts.Requests;
@@ -46,7 +47,7 @@ internal sealed partial class PasswordEndpoints : IEndpointModule
 
     private static async Task<IResult> ForgotAsync([FromBody] ForgotPasswordRequest request, IPasswordService passwords, HttpContext http, CancellationToken cancellationToken)
     {
-        PasswordResult result = await passwords.ForgotPasswordAsync(request, AccountEndpoints.AuditFrom(http), cancellationToken);
+        PasswordResult result = await passwords.ForgotPasswordAsync(request, HttpAudit.From(http), cancellationToken);
         return result.IsSuccess
             ? TypedResults.Accepted((string?)null, new ForgotPasswordResponse(ForgotAcceptedMessage))
             : TypedResults.ValidationProblem(result.ValidationErrors!, title: "The request is invalid.");
@@ -59,7 +60,7 @@ internal sealed partial class PasswordEndpoints : IEndpointModule
         HttpContext http,
         CancellationToken cancellationToken)
     {
-        PasswordResult result = await passwords.ResetPasswordAsync(request, AccountEndpoints.AuditFrom(http), cancellationToken);
+        PasswordResult result = await passwords.ResetPasswordAsync(request, HttpAudit.From(http), cancellationToken);
         LogNoticeFailure(logger, result);
         return result switch
         {
@@ -83,7 +84,7 @@ internal sealed partial class PasswordEndpoints : IEndpointModule
             return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Authentication required.");
         }
 
-        PasswordResult result = await passwords.ChangePasswordAsync(userId, request, AccountEndpoints.AuditFrom(http), cancellationToken);
+        PasswordResult result = await passwords.ChangePasswordAsync(userId, request, HttpAudit.From(http), cancellationToken);
         LogNoticeFailure(logger, result);
         if (result.IsSuccess)
         {

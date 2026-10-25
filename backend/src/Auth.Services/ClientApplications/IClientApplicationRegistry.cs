@@ -318,21 +318,9 @@ internal sealed class ClientApplicationRegistry(
         application.ClientId,
         application.Name,
         application.Audience,
-        ReadList(application.AllowedOrigin),
-        ReadList(application.RedirectUri),
-        ReadList(application.PostLogoutRedirectUri),
+        ClientApplicationLists.Read(application.AllowedOrigin),
+        ClientApplicationLists.Read(application.RedirectUri),
+        ClientApplicationLists.Read(application.PostLogoutRedirectUri),
         application.RequirePkce,
         application.IsActive);
-
-    private static string[] ReadList(string json)
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<string[]>(json) ?? [];
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-    }
 }

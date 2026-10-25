@@ -53,6 +53,9 @@ public static class AuthServiceCollectionExtensions
             new ClientApplicationValidator(sp.GetRequiredService<ClientApplicationOriginOptions>().RequireHttps, sp.GetRequiredService<TokenOptions>().DefaultAudience),
             sp.GetRequiredService<IClock>()));
         services.AddScoped<IClientSessionService, ClientSessionService>();
+        services.TryAddSingleton(new OAuthOptions().Validated(requireHttps: true));
+        services.AddSingleton<IClientAuthenticator, PublicClientAuthenticator>();
+        services.AddSingleton<IConsentDecision, FirstPartyAutoApproval>();
         services.AddScoped<IOAuthService, OAuthService>();
         services.AddTokenServices(configuration);
         services.AddAccountServices();
@@ -89,6 +92,9 @@ public static class AuthServiceCollectionExtensions
             sp.GetRequiredService<IEmailSender>(),
             sp.GetRequiredService<IClock>(),
             sp.GetRequiredService<AccountEmailOptions>().Validated()));
+        services.AddScoped<IAccessProfileBuilder, AccessProfileBuilder>();
+        services.AddScoped<ISessionCap, SessionCap>();
+        services.AddScoped<ISessionRefresher, SessionRefresher>();
         services.AddScoped<ISignInService, SignInService>();
         services.AddScoped<IPasswordService>(sp => ActivatorUtilities.CreateInstance<PasswordService>(
             sp, sp.GetRequiredService<AccountEmailOptions>().Validated()));

@@ -77,6 +77,12 @@ public interface IRefreshTokenService
     Task<IssuedRefreshToken> IssueAsync(Guid userId, Guid? clientApplicationId, RefreshContext context, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Starts a new family with an id chosen in advance (the authorization-code exchange records it on the code in the
+    /// same UPDATE that redeems the code, so a replay can always find the family to revoke).
+    /// </summary>
+    Task<IssuedRefreshToken> IssueAsync(Guid userId, Guid? clientApplicationId, Guid familyId, RefreshContext context, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Exchanges a token for its successor in one RepeatableRead transaction with a RowVersion check, so of two
     /// simultaneous refreshes exactly one wins and the other gets <see cref="RotationStatus.Concurrent"/>.
     /// </summary>
