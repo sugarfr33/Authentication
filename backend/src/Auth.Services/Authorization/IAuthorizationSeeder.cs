@@ -3,6 +3,7 @@ using Auth.Contracts.Requests;
 using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
+using Auth.Services.Audit;
 using Auth.Services.Common;
 
 namespace Auth.Services.Authorization;
@@ -59,7 +60,7 @@ public interface IAuthorizationSeeder
 internal sealed class AuthorizationSeeder(
     IRoleRepository roles,
     IUserRepository users,
-    IAuditLogRepository auditLog,
+    IAuditService audits,
     IUnitOfWork unitOfWork,
     IClock clock,
     AuthorizationSeedOptions options) : IAuthorizationSeeder
@@ -133,7 +134,7 @@ internal sealed class AuthorizationSeeder(
         foreach (Guid userId in missing)
         {
             await roles.AddUserRoleAsync(new UserRole { UserId = userId, RoleId = user.Id, AssignedUtc = now }, cancellationToken);
-            await auditLog.AddAsync(AuditContext.None.Entry(AuditEventType.RoleAssigned, userId, now, """{"role":"User","source":"backfill"}"""), cancellationToken);
+            await audits.StageAsync(AuditEvents.RoleAssigned(userId, AuthRoles.User, "backfill"), AuditContext.None, cancellationToken);
         }
 
         return missing.Count;
@@ -178,7 +179,7 @@ internal sealed class AuthorizationSeeder(
         DateTime now = clock.UtcNow;
         await roles.AddUserRoleAsync(new UserRole { UserId = user.Id, RoleId = admin.Id, AssignedUtc = now }, cancellationToken);
 
-        await auditLog.AddAsync(AuditContext.None.Entry(AuditEventType.RoleAssigned, user.Id, now, """{"role":"Admin","source":"bootstrap"}"""), cancellationToken);
+        await audits.StageAsync(AuditEvents.RoleAssigned(user.Id, AuthRoles.Admin, "bootstrap"), AuditContext.None, cancellationToken);
         return BootstrapAdminOutcome.Assigned;
     }
 }

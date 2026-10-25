@@ -15,12 +15,20 @@ public sealed class RefreshTokenOptions
     /// </summary>
     public TimeSpan ReuseGraceWindow { get; init; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Live sessions (refresh families) one user may have. A login that would exceed it first ends the least recently
+    /// used ones (default 20, 1 to 1000).
+    /// </summary>
+    public int MaxSessionsPerUser { get; init; } = 20;
+
     internal RefreshTokenOptions Validated()
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(SlidingLifetime, TimeSpan.Zero, nameof(SlidingLifetime));
         ArgumentOutOfRangeException.ThrowIfLessThan(AbsoluteLifetime, SlidingLifetime, nameof(AbsoluteLifetime));
         ArgumentOutOfRangeException.ThrowIfLessThan(ReuseGraceWindow, TimeSpan.Zero, nameof(ReuseGraceWindow));
         ArgumentOutOfRangeException.ThrowIfGreaterThan(ReuseGraceWindow, TimeSpan.FromSeconds(30), nameof(ReuseGraceWindow));
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaxSessionsPerUser, 1, nameof(MaxSessionsPerUser));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxSessionsPerUser, 1000, nameof(MaxSessionsPerUser));
         return this;
     }
 }

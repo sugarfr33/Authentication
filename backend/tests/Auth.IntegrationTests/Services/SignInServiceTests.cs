@@ -39,6 +39,7 @@ public sealed class SignInServiceTests : RepositoryTestBase, IAsyncDisposable
         ServiceCollection collection = new();
         collection.AddSingleton(new PasswordHashingOptions { MemorySizeKiB = 1024, Iterations = 1, Parallelism = 1 });
         collection.AddSingleton<IEmailSender>(new CapturingEmailSender());
+        collection.AddSingleton(new RefreshTokenOptions { MaxSessionsPerUser = 3 });
         collection.AddAuthServices(configuration);
         collection.AddSingleton<ITokenService>(tokens);
         ServiceDescriptor real = collection.Last(d => d.ServiceType == typeof(IPasswordHasher));
@@ -118,6 +119,28 @@ public sealed class SignInServiceTests : RepositoryTestBase, IAsyncDisposable
         Assert.Null(minted.ClientId);
         Assert.Equal(session.RefreshToken.FamilyId, minted.SessionId);
         Assert.Equal((user.Id, email), (minted.UserId, minted.Email));
+    }
+
+    /// <summary>T15 review: a login beyond MaxSessionsPerUser (3 here) ends the least recently used session first.</summary>
+    [Fact]
+    public async Task A_login_over_the_session_cap_ends_the_least_recently_used_session()
+    {
+        string email = await SeedAsync();
+        List<Guid> families = [];
+        for (int i = 0; i < 4; i++)
+        {
+            families.Add((await LoginAsync(email, Password)).Value!.RefreshToken.FamilyId);
+        }
+
+        Guid userId = (await LoadAsync(email)).Id;
+        IReadOnlyList<SessionResponse> live = await InScopeAsync(s => s.ListSessionsAsync(userId, null, 50, Ct));
+
+        Assert.Equal(families.Skip(1).Order(), live.Select(l => l.FamilyId).Order());
+        await using AsyncServiceScope scope = Database.CreateScope();
+        AuthDbContext context = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
+        Assert.All(await context.RefreshToken.AsNoTracking().Where(t => t.FamilyId == families[0]).ToListAsync(), t => Assert.Equal(RefreshTokenRevokedReason.Admin, t.RevokedReason));
+        AuditLog audit = Assert.Single(await context.AuditLog.AsNoTracking().Where(a => a.UserId == userId && a.EventType == "SessionRevoked").ToListAsync());
+        Assert.Equal("{\"session\":\"" + families[0].ToString("D") + "\",\"reason\":\"session_cap\"}", audit.Detail);
     }
 
     [Fact]

@@ -17,11 +17,25 @@ public sealed class LockoutOptions
     /// <summary>Upper bound of a single lock.</summary>
     public TimeSpan MaxLockout { get; init; } = TimeSpan.FromHours(1);
 
+    /// <summary>
+    /// Failures count toward a lock only while they keep coming: when the last failure is older than this, the counter
+    /// starts again from zero (default 15 minutes).
+    /// </summary>
+    public TimeSpan FailureWindow { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// The backoff level is forgotten after this long without a new lock, counted from the end of the last lock
+    /// (default 24 hours): an account locked once months ago starts again at the first step.
+    /// </summary>
+    public TimeSpan LevelDecayAfter { get; init; } = TimeSpan.FromHours(24);
+
     internal LockoutOptions Validated()
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(FailuresBeforeLockout, 1, nameof(FailuresBeforeLockout));
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(BaseLockout, TimeSpan.Zero, nameof(BaseLockout));
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxLockout, BaseLockout, nameof(MaxLockout));
+        ArgumentOutOfRangeException.ThrowIfLessThan(FailureWindow, TimeSpan.FromMinutes(1), nameof(FailureWindow));
+        ArgumentOutOfRangeException.ThrowIfLessThan(LevelDecayAfter, MaxLockout, nameof(LevelDecayAfter));
         return this;
     }
 
@@ -45,7 +59,9 @@ public sealed record LockoutResult(bool IsLockedOut, DateTime? LockoutEndUtc, in
 /// <summary>
 /// Per-account lockout persisted on the User row (FailedLoginCount, LockoutEndUtc, LockoutLevel). Writes use the
 /// User RowVersion with a bounded retry, so concurrent failures are never lost. Login (T13) must treat a locked
-/// account exactly like a wrong password in the response.
+/// account exactly like a wrong password in the response. No extra columns: every counted failure sets UpdatedUtc,
+/// which is then the time of the last failure for the <see cref="LockoutOptions.FailureWindow"/>; the level decay is
+/// measured from LockoutEndUtc (kept after the lock expires).
 /// </summary>
 public interface ILockoutService
 {
@@ -82,7 +98,19 @@ internal sealed class LockoutService(IUserRepository users, IUnitOfWork unitOfWo
                     return (false, new LockoutResult(true, user.LockoutEndUtc, user.FailedLoginCount, null));
                 }
 
+                // A quiet period forgets old failures, and a long one the backoff level (T11 audit LOW-4).
+                if (user.FailedLoginCount > 0 && now - user.UpdatedUtc >= options.FailureWindow)
+                {
+                    user.FailedLoginCount = 0;
+                }
+
+                if (user.LockoutLevel > 0 && user.LockoutEndUtc is DateTime lastLockEnd && now - lastLockEnd >= options.LevelDecayAfter)
+                {
+                    user.LockoutLevel = 0;
+                }
+
                 user.FailedLoginCount++;
+                user.UpdatedUtc = now;
                 if (user.FailedLoginCount < options.FailuresBeforeLockout)
                 {
                     return (true, new LockoutResult(false, null, user.FailedLoginCount, null));

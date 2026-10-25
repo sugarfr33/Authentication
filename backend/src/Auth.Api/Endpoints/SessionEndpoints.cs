@@ -166,16 +166,10 @@ internal sealed partial class SessionEndpoints : IEndpointModule
         ICookieWriter cookies,
         IAntiforgery antiforgery,
         RefreshRejectionLog rejections,
-        ILogger<SessionEndpoints> logger,
         HttpContext http,
         CancellationToken cancellationToken)
     {
         RefreshOutcome outcome = await signIn.RefreshAsync(RefreshCookie(http), AccountEndpoints.AuditFrom(http), cancellationToken);
-        if (outcome.AuditFailure is string auditFailure)
-        {
-            LogAuditNotWritten(logger, auditFailure);
-        }
-
         switch (outcome.Status)
         {
             case RotationStatus.Rotated when outcome.Session is SignedIn session:
@@ -276,9 +270,6 @@ internal sealed partial class SessionEndpoints : IEndpointModule
 
     private static string? RefreshCookie(HttpContext http) =>
         http.Request.Cookies.TryGetValue(AuthCookieNames.Refresh, out string? value) && value is { Length: > 0 } ? value : null;
-
-    [LoggerMessage(EventId = 5301, Level = LogLevel.Warning, Message = "A refresh audit row could not be written ({ExceptionType}); the answer was not changed")]
-    private static partial void LogAuditNotWritten(ILogger logger, string exceptionType);
 
     [LoggerMessage(EventId = 5300, Level = LogLevel.Warning, Message = "Sign-out could not be completed on the server ({ExceptionType}); the browser cookies were cleared")]
     private static partial void LogSignOutFailed(ILogger logger, string exceptionType);

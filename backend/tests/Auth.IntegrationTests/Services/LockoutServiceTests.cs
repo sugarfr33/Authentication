@@ -119,6 +119,40 @@ public sealed class LockoutServiceTests : RepositoryTestBase, IAsyncDisposable
         Assert.True(row.LockoutEndUtc > clock.UtcNow);
     }
 
+    /// <summary>T11 audit LOW-4: failures spread out over more than the window never add up to a lock.</summary>
+    [Fact]
+    public async Task Failures_older_than_the_window_are_forgotten()
+    {
+        User user = await SeedUserAsync();
+        await FailAsync(user.Id, 4);
+        clock.Advance(TimeSpan.FromMinutes(15));
+
+        LockoutResult afterQuiet = await RegisterFailureAsync(user.Id);
+        clock.Advance(TimeSpan.FromMinutes(14));
+        LockoutResult withinWindow = await FailAsync(user.Id, 3);
+
+        Assert.Equal((false, 1), (afterQuiet.IsLockedOut, afterQuiet.FailedCount));
+        Assert.Equal((false, 4), (withinWindow.IsLockedOut, withinWindow.FailedCount));
+        Assert.True((await RegisterFailureAsync(user.Id)).IsLockedOut);
+    }
+
+    /// <summary>T11 audit LOW-4: the backoff level decays after a quiet day, but not within it.</summary>
+    [Fact]
+    public async Task The_backoff_level_decays_after_a_quiet_period()
+    {
+        User user = await SeedUserAsync();
+        LockoutResult first = await FailAsync(user.Id, 5);
+        clock.Set(first.LockoutEndUtc!.Value + TimeSpan.FromHours(23));
+        LockoutResult second = await FailAsync(user.Id, 5);
+        clock.Set(second.LockoutEndUtc!.Value + TimeSpan.FromHours(24));
+
+        LockoutResult third = await FailAsync(user.Id, 5);
+
+        Assert.Equal(2, second.LockedOut!.Level);
+        Assert.Equal(1, third.LockedOut!.Level);
+        Assert.Equal(clock.UtcNow.AddMinutes(1), third.LockoutEndUtc);
+    }
+
     [Fact]
     public async Task Unknown_user_is_not_locked_and_failures_are_ignored()
     {

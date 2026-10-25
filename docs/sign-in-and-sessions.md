@@ -134,10 +134,13 @@ cookies, like logout. A revoked session cannot refresh (tested through `/refresh
 
 ## Deferred (notes from the T15 review and audit)
 
-- **No cap on live sessions per user** (T17): anyone with the password can create unlimited families; the list shows
-  the 50 most recent and logout-all ends them all. Option: revoke the oldest family on login above a cap.
-- **Audit volume** (T17 retention): `TokenRefreshed` writes one row per refresh (about every 15 minutes per active
-  session), plus `SessionRevoked`; decide whether to keep, sample or drop `TokenRefreshed`.
+- **Cap on live sessions per user (done in T17).** `RefreshTokenOptions.MaxSessionsPerUser` (default 20, 1 to 1000).
+  Before a login issues a new family, the least recently used live families beyond 19 are revoked (reason `Admin`,
+  audited `SessionRevoked` with reason `session_cap`, cache invalidated on this instance). Done before the new session
+  exists, so a failure fails the login cleanly. Two simultaneous logins can leave one family over the cap until the
+  next login (tested: the 4th login with a cap of 3 ends the oldest; the list shows the 3 newest).
+- **Audit volume (decided in T17).** `TokenRefreshed` is kept (no sampling) but is high-volume: it gets the short audit
+  retention (default 90 days), see audit-and-retention.md.
 - **Sessions limiter is per IP** (60 per minute), not per user.
 - **Cross-tab refresh** (T23): serialise refresh in the SPA (see above).
 
@@ -184,7 +187,8 @@ user (`sub`) is still active. That is one indexed query (`IsSessionLiveAsync`), 
   the raw 1024 / 128 code-point caps is refused before any Verify for every account alike (it reveals nothing), but it
   still counts as a failure toward the lockout of the named account.
 - **Audit volume.** `LoginFailed` rows are written for unauthenticated requests (bounded by the login rate limits) and
-  their reason names the real cause: keep them in the T17 retention job and keep audit reads restricted.
+  their reason names the real cause: they are high-volume (short retention) and audit reads are restricted (see
+  audit-and-retention.md).
 
 ## Signing keys in one process
 

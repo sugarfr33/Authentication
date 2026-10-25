@@ -5,6 +5,7 @@ using Auth.Contracts.Requests;
 using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
+using Auth.Services.Audit;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
 using Auth.Services.Tokens;
@@ -49,7 +50,7 @@ internal sealed class RegistrationService(
     IOneTimeTokenRepository<EmailVerificationToken> verificationTokens,
     IRefreshTokenRepository refreshTokens,
     IRoleRepository roles,
-    IAuditLogRepository auditLog,
+    IAuditService audits,
     IUnitOfWork unitOfWork,
     ITokenGenerator generator,
     IEmailSender emailSender,
@@ -79,8 +80,7 @@ internal sealed class RegistrationService(
         if (errors.Count > 0)
         {
             // Field names only: never the submitted values. No account lookup, so it reveals nothing about existence.
-            string fields = string.Join(",", errors.Keys.Order(StringComparer.Ordinal).Select(k => "\"" + k + "\""));
-            await auditLog.AddAsync(audit.Entry(AuditEventType.RegistrationRejected, null, clock.UtcNow, "{\"fields\":[" + fields + "]}"), cancellationToken);
+            await audits.StageAsync(AuditEvents.RegistrationRejected(errors.Keys), audit, cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
             return new RegistrationResult(errors);
         }
@@ -129,8 +129,7 @@ internal sealed class RegistrationService(
     private async Task<Result> AuditVerifyFailureAsync(Guid? userId, string reason, AuditContext audit, CancellationToken cancellationToken)
     {
         unitOfWork.ClearChanges();
-        await auditLog.AddAsync(audit.Entry(AuditEventType.EmailVerificationFailed, userId, clock.UtcNow, "{\"reason\":\"" + reason + "\"}"), cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        await audits.WriteAsync(AuditEvents.EmailVerificationFailed(userId, reason), audit, cancellationToken);
         return Result.Failure(AuthError.InvalidOrExpiredToken);
     }
 
@@ -158,7 +157,7 @@ internal sealed class RegistrationService(
         // AddAsync assigns the sequential Id (EF client-side generator) that the link row needs.
         await users.AddAsync(user, cancellationToken);
         string token = await AddVerificationTokenAsync(user.Id, registrant, now, cancellationToken);
-        await auditLog.AddAsync(audit.Entry(AuditEventType.Registered, user.Id, now, """{"outcome":"created"}"""), cancellationToken);
+        await audits.StageAsync(AuditEvents.Registered(user.Id, "created"), audit, cancellationToken);
 
         try
         {
@@ -201,7 +200,7 @@ internal sealed class RegistrationService(
                 + "If it was not you, you can ignore this email; nothing has changed.");
         }
 
-        await auditLog.AddAsync(audit.Entry(AuditEventType.Registered, user.Id, now, """{"outcome":"duplicate"}"""), cancellationToken);
+        await audits.StageAsync(AuditEvents.Registered(user.Id, "duplicate"), audit, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return message;
     }
@@ -291,7 +290,7 @@ internal sealed class RegistrationService(
         {
             await roles.AddUserRoleAsync(new UserRole { UserId = user.Id, RoleId = defaultRole.Id, AssignedUtc = now }, cancellationToken);
         }
-        await auditLog.AddAsync(audit.Entry(AuditEventType.EmailVerified, user.Id, now), cancellationToken);
+        await audits.StageAsync(AuditEvents.EmailVerified(user.Id), audit, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return (user.Id, null);

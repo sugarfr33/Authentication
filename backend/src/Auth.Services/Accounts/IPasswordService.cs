@@ -5,6 +5,7 @@ using Auth.Contracts.Requests;
 using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
+using Auth.Services.Audit;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
 using Auth.Services.Security;
@@ -65,7 +66,7 @@ internal sealed class PasswordService(
     IOneTimeTokenRepository<PasswordResetToken> resetTokens,
     IOneTimeTokenRepository<EmailVerificationToken> verificationTokens,
     IRefreshTokenRepository refreshTokens,
-    IAuditLogRepository auditLog,
+    IAuditService audits,
     IUnitOfWork unitOfWork,
     ITokenGenerator generator,
     IEmailSender emailSender,
@@ -123,7 +124,7 @@ internal sealed class PasswordService(
         }
 
         // Same database work on every path: this one save (a link row plus the audit row, or the audit row alone).
-        await auditLog.AddAsync(audit.Entry(AuditEventType.PasswordResetRequested, user?.Id, now, "{\"outcome\":\"" + reason + "\"}"), cancellationToken);
+        await audits.StageAsync(AuditEvents.PasswordResetRequested(user?.Id, reason), audit, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await emailSender.SendAsync(message, cancellationToken);
         return PasswordResult.Ok;
@@ -200,7 +201,7 @@ internal sealed class PasswordService(
         string[] policy = validator.PasswordErrors(request.NewPassword, user?.Email);
         if (policy.Length > 0)
         {
-            await AuditAsync(AuditEventType.PasswordChangeFailed, user?.Id, "{\"reason\":\"policy\"}", audit, cancellationToken);
+            await audits.WriteAsync(AuditEvents.PasswordChangeFailed(user?.Id, "policy"), audit, cancellationToken);
             return PasswordResult.Invalid(new Dictionary<string, string[]> { [NewPasswordField] = policy });
         }
 
@@ -210,7 +211,7 @@ internal sealed class PasswordService(
         {
             // The lockout runs first: its retry clears the change tracker, so the audit row is staged after it.
             await lockout.RegisterFailureAsync(user?.Id ?? Guid.Empty, cancellationToken);
-            await AuditAsync(AuditEventType.PasswordChangeFailed, user?.Id, "{\"reason\":\"" + (usable ? "wrong_password" : "unusable_account") + "\"}", audit, cancellationToken);
+            await audits.WriteAsync(AuditEvents.PasswordChangeFailed(user?.Id, usable ? "wrong_password" : "unusable_account"), audit, cancellationToken);
             return PasswordResult.Failure(AuthError.GenericInvalidCredentials);
         }
 
@@ -222,7 +223,7 @@ internal sealed class PasswordService(
                 await using IUnitOfWorkTransaction transaction = await unitOfWork.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
                 User current = await users.GetByIdAsync(userId, cancellationToken) ?? throw new InvalidOperationException("The user disappeared during a password change.");
                 await SetPasswordAsync(current, newHash, cancellationToken);
-                await auditLog.AddAsync(audit.Entry(AuditEventType.PasswordChanged, current.Id, clock.UtcNow), cancellationToken);
+                await audits.StageAsync(AuditEvents.PasswordChanged(current.Id), audit, cancellationToken);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return await NotifyChangedAsync(current.Email, cancellationToken);
@@ -255,7 +256,7 @@ internal sealed class PasswordService(
         // EmailVerified is deliberately left as it is: a reset proves control of the mailbox only for accounts that
         // were verified when the link was sent (links go to verified accounts only), so it never needs to change it.
         await SetPasswordAsync(user, newHash, cancellationToken);
-        await auditLog.AddAsync(audit.Entry(AuditEventType.PasswordReset, user.Id, now), cancellationToken);
+        await audits.StageAsync(AuditEvents.PasswordReset(user.Id), audit, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return null;
@@ -301,16 +302,8 @@ internal sealed class PasswordService(
     private async Task<PasswordResult> ResetFailedAsync(Guid? userId, string reason, AuditContext audit, CancellationToken cancellationToken)
     {
         unitOfWork.ClearChanges();
-        await AuditAsync(AuditEventType.PasswordResetFailed, userId, "{\"reason\":\"" + reason + "\"}", audit, cancellationToken);
+        await audits.WriteAsync(AuditEvents.PasswordResetFailed(userId, reason), audit, cancellationToken);
         return PasswordResult.Failure(AuthError.InvalidOrExpiredToken);
-    }
-
-    /// <summary>Audit row in its own save; the user id is kept only when the account still exists (AuditLog FK).</summary>
-    private async Task AuditAsync(AuditEventType type, Guid? userId, string detail, AuditContext audit, CancellationToken cancellationToken)
-    {
-        Guid? existing = userId is Guid id && await users.GetByIdAsync(id, cancellationToken) is not null ? id : null;
-        await auditLog.AddAsync(audit.Entry(type, existing, clock.UtcNow, detail), cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
     private EmailMessage ResetMessage(string email, string token, DateTime requestedUtc) => new(

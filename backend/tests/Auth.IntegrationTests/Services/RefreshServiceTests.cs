@@ -6,6 +6,7 @@ using Auth.Entities;
 using Auth.IntegrationTests.DAL;
 using Auth.Services;
 using Auth.Services.Accounts;
+using Auth.Services.Audit;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
 using Auth.Services.Tokens;
@@ -37,6 +38,7 @@ public sealed class RefreshServiceTests : RepositoryTestBase, IAsyncDisposable
         collection.AddSingleton<IEmailSender>(new CapturingEmailSender());
         collection.AddAuthServices(configuration);
         collection.AddSingleton(faults);
+        collection.AddSingleton<IAuditFailureReporter>(faults);
         collection.AddSingleton<ITokenService, FaultyTokenService>();
         Decorate<IAuditLogRepository>(collection, (sp, inner) => new FaultyAudit(inner, faults));
         Decorate<IRefreshTokenService>(collection, (sp, inner) => new StampChangingRefresh(inner, faults, sp));
@@ -67,7 +69,7 @@ public sealed class RefreshServiceTests : RepositoryTestBase, IAsyncDisposable
 
         faults.FailAudit = false;
         Assert.Equal(RotationStatus.Rotated, outcome.Status);
-        Assert.Equal(nameof(InvalidOperationException), outcome.AuditFailure);
+        Assert.Equal([(AuditEventType.TokenRefreshed, nameof(InvalidOperationException))], faults.AuditFailures);
         Assert.Equal(RotationStatus.Rotated, (await RefreshAsync(outcome.Session!.RefreshToken.Token, "agent-a")).Status);
     }
 
@@ -171,8 +173,12 @@ public sealed class RefreshServiceTests : RepositoryTestBase, IAsyncDisposable
         return await scope.ServiceProvider.GetRequiredService<AuthDbContext>().AuditLog.AsNoTracking().Where(a => a.UserId == userId).ToListAsync();
     }
 
-    private sealed class Faults
+    private sealed class Faults : IAuditFailureReporter
     {
+        public List<(AuditEventType Type, string ExceptionType)> AuditFailures { get; } = [];
+
+        public void Report(AuditEventType type, string exceptionType) => AuditFailures.Add((type, exceptionType));
+
         public bool FailMint { get; set; }
 
         public bool FailAudit { get; set; }

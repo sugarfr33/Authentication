@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using Auth.Services.Authorization;
+using Auth.Services.Retention;
 using Auth.Services.Security;
 
 namespace Auth.Api.Hosting;
@@ -82,6 +83,51 @@ internal sealed partial class AuthorizationSeedOnStartup(
 
     [LoggerMessage(EventId = 5401, Level = LogLevel.Warning, Message = "Authorization seed failed ({ExceptionType}); existing roles and permissions are unchanged")]
     private static partial void LogSeedFailed(ILogger logger, string exceptionType);
+}
+
+/// <summary>
+/// Runs the retention purge every RetentionOptions.Interval when Retention:Enabled is true (T17). A failed run is
+/// logged with the exception type only and retried at the next interval; it never stops the host.
+/// </summary>
+internal sealed partial class RetentionPurgeService(
+    IServiceScopeFactory scopes,
+    RetentionOptions options,
+    TimeProvider time,
+    ILogger<RetentionPurgeService> logger) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (!options.Enabled)
+        {
+            return;
+        }
+
+        using PeriodicTimer timer = new(options.Validated().Interval, time);
+        do
+        {
+            try
+            {
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                RetentionPurgeResult result = await scope.ServiceProvider.GetRequiredService<IRetentionPurge>().PurgeAsync(stoppingToken);
+                LogPurged(logger, result.PendingRegistrationsErased, result.EmailVerificationTokensDeleted, result.PasswordResetTokensDeleted, result.RefreshTokensDeleted, result.AuditRowsDeleted);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                LogPurgeFailed(logger, ex.GetType().Name);
+            }
+        }
+        while (await timer.WaitForNextTickAsync(stoppingToken));
+    }
+
+    [LoggerMessage(EventId = 5410, Level = LogLevel.Information, Message = "Retention purge: {Erased} pending registration(s) erased; deleted {Verification} verification link(s), {Reset} reset link(s), {Refresh} refresh token row(s), {Audit} audit row(s)")]
+    private static partial void LogPurged(ILogger logger, int erased, int verification, int reset, int refresh, int audit);
+
+    [LoggerMessage(EventId = 5411, Level = LogLevel.Warning, Message = "Retention purge failed ({ExceptionType}); it runs again at the next interval")]
+    private static partial void LogPurgeFailed(ILogger logger, string exceptionType);
 }
 
 /// <summary>

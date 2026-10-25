@@ -27,6 +27,8 @@ internal static partial class LogRedaction
         string result = AuthorizationValue().Replace(text, "$1 " + Mask);
         result = SensitivePair().Replace(result, "$1=" + Mask);
         result = Jwt().Replace(result, Mask);
+        result = PasswordHash().Replace(result, Mask);
+        result = LongOpaqueValue().Replace(result, Mask);
         return result;
     }
 
@@ -39,6 +41,17 @@ internal static partial class LogRedaction
 
     [GeneratedRegex(@"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*")]
     private static partial Regex Jwt();
+
+    /// <summary>A PHC password hash (Argon2 and friends).</summary>
+    [GeneratedRegex(@"\$(argon2id|argon2i|argon2d|pbkdf2[A-Za-z0-9-]*|scrypt|bcrypt|2[aby])\$[^\s""',;]+")]
+    private static partial Regex PasswordHash();
+
+    /// <summary>
+    /// An opaque run of 40+ base64url or hex characters: our refresh, reset and verification tokens are 43, hashes
+    /// longer. GUIDs (36 with hyphens in fixed places) and trace ids (32 hex) stay readable.
+    /// </summary>
+    [GeneratedRegex(@"(?<![A-Za-z0-9_\-])[A-Za-z0-9_\-]{40,}(?![A-Za-z0-9_\-])")]
+    private static partial Regex LongOpaqueValue();
 }
 
 /// <summary>Applies <see cref="LogRedaction"/> to every property of every event, recursively.</summary>

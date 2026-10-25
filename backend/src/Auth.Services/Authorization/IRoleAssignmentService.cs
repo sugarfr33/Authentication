@@ -3,6 +3,7 @@ using Auth.Contracts;
 using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
+using Auth.Services.Audit;
 using Auth.Services.Common;
 using Auth.Services.Security;
 
@@ -33,7 +34,7 @@ public interface IRoleAssignmentService
 internal sealed class RoleAssignmentService(
     IRoleRepository roles,
     IRefreshTokenRepository refreshTokens,
-    IAuditLogRepository auditLog,
+    IAuditService audits,
     IUnitOfWork unitOfWork,
     ISessionLiveness liveness,
     IClock clock) : IRoleAssignmentService
@@ -50,7 +51,7 @@ internal sealed class RoleAssignmentService(
             }
 
             await refreshTokens.RevokeAllForUserAsync(userId, RefreshTokenRevokedReason.Admin, now, cancellationToken);
-            await auditLog.AddAsync(audit.Entry(AuditEventType.RoleRemoved, userId, now, "{\"role\":\"" + roleId.ToString("D") + "\"}"), cancellationToken);
+            await audits.StageAsync(AuditEvents.RoleRemoved(userId, roleId), audit, cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
@@ -71,8 +72,7 @@ internal sealed class RoleAssignmentService(
             }
 
             await refreshTokens.RevokeAllForRoleHoldersAsync(roleId, RefreshTokenRevokedReason.Admin, now, cancellationToken);
-            string detail = "{\"role\":\"" + roleId.ToString("D") + "\",\"permission\":\"" + permissionId.ToString("D") + "\"}";
-            await auditLog.AddAsync(audit.Entry(AuditEventType.RolePermissionRemoved, null, now, detail), cancellationToken);
+            await audits.StageAsync(AuditEvents.RolePermissionRemoved(roleId, permissionId), audit, cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }

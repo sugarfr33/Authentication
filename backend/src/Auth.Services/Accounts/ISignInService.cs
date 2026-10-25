@@ -5,6 +5,7 @@ using Auth.Contracts.Responses;
 using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
+using Auth.Services.Audit;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
 using Auth.Services.Security;
@@ -18,8 +19,7 @@ public sealed record SignedIn(AccessToken AccessToken, IssuedRefreshToken Refres
 /// <summary>Outcome of a refresh: <see cref="Session"/> is set only when the status is Rotated.</summary>
 /// <param name="Status">Rotated, Concurrent, ReuseDetected or Invalid.</param>
 /// <param name="Session">The new tokens and profile, when rotated.</param>
-/// <param name="AuditFailure">The exception type name when the best-effort audit row could not be written (the host logs it).</param>
-public sealed record RefreshOutcome(RotationStatus Status, SignedIn? Session, string? AuditFailure = null);
+public sealed record RefreshOutcome(RotationStatus Status, SignedIn? Session);
 
 /// <summary>Email and password sign-in, sign-out and the signed-in profile (T13).</summary>
 public interface ISignInService
@@ -75,7 +75,7 @@ internal sealed class SignInService(
     IUserRepository users,
     IRefreshTokenRepository refreshRows,
     IRoleRepository roles,
-    IAuditLogRepository auditLog,
+    IAuditService audits,
     IUnitOfWork unitOfWork,
     IAuthTimingGuard timingGuard,
     IPasswordHasher hasher,
@@ -83,6 +83,7 @@ internal sealed class SignInService(
     IRefreshTokenService refreshTokens,
     ITokenService tokens,
     TokenOptions tokenOptions,
+    RefreshTokenOptions refreshOptions,
     ISessionLiveness liveness,
     IClock clock) : ISignInService
 {
@@ -146,7 +147,8 @@ internal sealed class SignInService(
         Guid? userId = accessUserId ?? fromRefresh?.UserId;
         if (userId is not null)
         {
-            await AuditAsync(AuditEventType.Logout, userId.Value, "{\"revoked\":" + revoked.ToString(CultureInfo.InvariantCulture) + "}", audit, cancellationToken);
+            // Best effort: the sessions are already ended; a failed audit row must not turn that into an error.
+            await audits.TryWriteAsync(AuditEvents.Logout(userId.Value, revoked), audit, cancellationToken);
         }
 
         return revoked;
@@ -157,7 +159,7 @@ internal sealed class SignInService(
         ArgumentNullException.ThrowIfNull(audit);
         int revoked = await refreshTokens.RevokeAllAsync(userId, RefreshTokenRevokedReason.LogoutAll, cancellationToken);
         liveness.InvalidateUser(userId);
-        await AuditAsync(AuditEventType.LogoutAll, userId, "{\"revoked\":" + revoked.ToString(CultureInfo.InvariantCulture) + "}", audit, cancellationToken);
+        await audits.TryWriteAsync(AuditEvents.LogoutAll(userId, revoked), audit, cancellationToken);
         return revoked;
     }
 
@@ -215,20 +217,21 @@ internal sealed class SignInService(
                 if (rejection is not null)
                 {
                     await TryRevokeAsync(token.FamilyId, token.UserId, cancellationToken);
-                    string? auditFailure = await TryAuditAsync(AuditEventType.RefreshRejected, token.UserId, Reason(rejection), audit, cancellationToken);
-                    return new RefreshOutcome(RotationStatus.Invalid, null, auditFailure);
+                    await audits.TryWriteAsync(AuditEvents.RefreshRejected(token.UserId, rejection), audit, cancellationToken);
+                    return new RefreshOutcome(RotationStatus.Invalid, null);
                 }
 
-                string? refreshedAuditFailure = await TryAuditAsync(AuditEventType.TokenRefreshed, user.Id, null, audit, cancellationToken);
-                return new RefreshOutcome(RotationStatus.Rotated, new SignedIn(access, token, profile), refreshedAuditFailure);
+                await audits.TryWriteAsync(AuditEvents.TokenRefreshed(user.Id), audit, cancellationToken);
+                return new RefreshOutcome(RotationStatus.Rotated, new SignedIn(access, token, profile));
 
             case RotationStatus.ReuseDetected when rotation.Reuse is TokenReuseDetected reuse:
                 // Only a replay that actually revoked a live family is a theft signal. A token of a session that had
                 // already ended (logout, password change, revoked session) is just rejected.
-                string? reuseAuditFailure = reuse.RevokedCount > 0
-                    ? await TryAuditAsync(AuditEventType.TokenReuse, reuse.UserId, "{\"revoked\":" + reuse.RevokedCount.ToString(CultureInfo.InvariantCulture) + "}", audit, cancellationToken)
-                    : await TryAuditAsync(AuditEventType.RefreshRejected, reuse.UserId, Reason("ended_session_replayed"), audit, cancellationToken);
-                return new RefreshOutcome(RotationStatus.ReuseDetected, null, reuseAuditFailure);
+                await audits.TryWriteAsync(
+                    reuse.RevokedCount > 0 ? AuditEvents.TokenReuse(reuse.UserId, reuse.RevokedCount) : AuditEvents.RefreshRejected(reuse.UserId, "ended_session_replayed"),
+                    audit,
+                    cancellationToken);
+                return new RefreshOutcome(RotationStatus.ReuseDetected, null);
 
             default:
                 return new RefreshOutcome(rotation.Status, null);
@@ -269,23 +272,6 @@ internal sealed class SignInService(
         }
     }
 
-    /// <summary>Best-effort audit row: returns the exception type name when it could not be written (the host logs it).</summary>
-    private async Task<string?> TryAuditAsync(AuditEventType type, Guid userId, string? detail, AuditContext audit, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await AuditAsync(type, userId, detail, audit, cancellationToken);
-            return null;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            unitOfWork.ClearChanges();
-            return ex.GetType().Name;
-        }
-    }
-
-    private static string Reason(string reason) => "{\"reason\":\"" + reason + "\"}";
-
     public async Task<IReadOnlyList<SessionResponse>> ListSessionsAsync(Guid userId, Guid? currentSessionId, int max, CancellationToken cancellationToken)
     {
         IReadOnlyList<IRefreshSessionSummary> sessions = await refreshRows.GetActiveSessionsAsync(userId, clock.UtcNow, max, cancellationToken);
@@ -305,7 +291,7 @@ internal sealed class SignInService(
         liveness.Invalidate(familyId);
         if (revoked > 0)
         {
-            await AuditAsync(AuditEventType.SessionRevoked, userId, "{\"session\":\"" + familyId.ToString("D") + "\"}", audit, cancellationToken);
+            await audits.TryWriteAsync(AuditEvents.SessionRevoked(userId, familyId), audit, cancellationToken);
         }
 
         return true;
@@ -328,12 +314,10 @@ internal sealed class SignInService(
     {
         LockoutResult result = await lockout.RegisterFailureAsync(user?.Id ?? Guid.Empty, cancellationToken);
 
-        await auditLog.AddAsync(audit.Entry(AuditEventType.LoginFailed, user?.Id, now, "{\"reason\":\"" + reason + "\"}"), cancellationToken);
+        await audits.StageAsync(AuditEvents.LoginFailed(user?.Id, reason), audit, cancellationToken);
         if (result.LockedOut is AccountLockedOut locked)
         {
-            string detail = "{\"until\":\"" + locked.LockoutEndUtc.ToString("O", CultureInfo.InvariantCulture)
-                + "\",\"level\":" + locked.Level.ToString(CultureInfo.InvariantCulture) + "}";
-            await auditLog.AddAsync(audit.Entry(AuditEventType.Lockout, locked.UserId, now, detail), cancellationToken);
+            await audits.StageAsync(AuditEvents.Lockout(locked.UserId, locked.LockoutEndUtc, locked.Level), audit, cancellationToken);
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -343,6 +327,7 @@ internal sealed class SignInService(
     {
         // May clear the change tracker on a retry, so nothing is staged before it, and the user is read again after it.
         await lockout.ResetAsync(user.Id, cancellationToken);
+        await MakeRoomForSessionAsync(user.Id, audit, cancellationToken);
         string? newHash = rehashPassword is null ? null : await hasher.HashAsync(rehashPassword, cancellationToken);
         RefreshContext refreshContext = new(audit.IpAddress ?? string.Empty, audit.UserAgent ?? string.Empty);
 
@@ -367,6 +352,26 @@ internal sealed class SignInService(
     }
 
     /// <summary>
+    /// Session cap (T15 review): before a new family is issued, the least recently used live families beyond
+    /// MaxSessionsPerUser - 1 are revoked, each audited as SessionRevoked with reason session_cap. Done before the issue,
+    /// so a failure here fails the login without leaving a new session behind. Two logins at the same moment can
+    /// briefly leave one session over the cap; the next login trims it.
+    /// </summary>
+    private async Task MakeRoomForSessionAsync(Guid userId, AuditContext audit, CancellationToken cancellationToken)
+    {
+        int keep = refreshOptions.MaxSessionsPerUser - 1;
+        IReadOnlyList<IRefreshSessionSummary> live = await refreshRows.GetActiveSessionsAsync(userId, clock.UtcNow, refreshOptions.MaxSessionsPerUser + 100, cancellationToken);
+        foreach (IRefreshSessionSummary oldest in live.Skip(keep))
+        {
+            if (await refreshTokens.RevokeFamilyForUserAsync(oldest.FamilyId, userId, RefreshTokenRevokedReason.Admin, cancellationToken) > 0)
+            {
+                liveness.Invalidate(oldest.FamilyId);
+                await audits.TryWriteAsync(AuditEvents.SessionRevoked(userId, oldest.FamilyId, "session_cap"), audit, cancellationToken);
+            }
+        }
+    }
+
+    /// <summary>
     /// Stages the LoginSucceeded row (and, for a tracked user, last login and a rehash) and saves them in the same save
     /// that creates the new refresh family.
     /// </summary>
@@ -384,7 +389,7 @@ internal sealed class SignInService(
             }
         }
 
-        await auditLog.AddAsync(audit.Entry(AuditEventType.LoginSucceeded, userId, now), cancellationToken);
+        await audits.StageAsync(AuditEvents.LoginSucceeded(userId), audit, cancellationToken);
         return await refreshTokens.IssueAsync(userId, null, refreshContext, cancellationToken);
     }
 
@@ -410,16 +415,5 @@ internal sealed class SignInService(
     {
         string clean = new string([.. value.Where(c => !char.IsControl(c) && char.GetUnicodeCategory(c) != UnicodeCategory.Format && c is not ('<' or '>' or '&' or '"' or '\''))]).Trim();
         return clean.Length <= max ? clean : clean[..max];
-    }
-
-    /// <summary>
-    /// Writes a session audit row. The user id is kept only if the account still exists (AuditLog has a foreign key to
-    /// User): a token of a deleted account must still be able to sign out without a database error.
-    /// </summary>
-    private async Task AuditAsync(AuditEventType type, Guid userId, string? detail, AuditContext audit, CancellationToken cancellationToken)
-    {
-        Guid? existing = await users.GetByIdAsync(userId, cancellationToken) is null ? null : userId;
-        await auditLog.AddAsync(audit.Entry(type, existing, clock.UtcNow, detail), cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 }

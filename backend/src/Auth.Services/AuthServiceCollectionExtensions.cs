@@ -2,10 +2,12 @@ using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
 using Auth.Services.Accounts;
+using Auth.Services.Audit;
 using Auth.Services.Authorization;
 using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
+using Auth.Services.Retention;
 using Auth.Services.Security;
 using Auth.Services.Tokens;
 using Microsoft.Extensions.Configuration;
@@ -30,6 +32,8 @@ public static class AuthServiceCollectionExtensions
         services.AddDataAccess(connectionString);
         services.AddPasswordServices();
         services.AddScoped<ISystemHealth, SystemHealth>();
+        services.TryAddSingleton<IAuditFailureReporter, NoAuditFailureReporter>();
+        services.AddScoped<IAuditService, AuditService>();
         services.TryAddSingleton(new LockoutOptions());
         services.AddScoped<ILockoutService>(sp => new LockoutService(
             sp.GetRequiredService<IUserRepository>(),
@@ -43,6 +47,11 @@ public static class AuthServiceCollectionExtensions
         services.TryAddSingleton(new AuthorizationSeedOptions());
         services.AddScoped<IAuthorizationSeeder, AuthorizationSeeder>();
         services.AddScoped<IRoleAssignmentService, RoleAssignmentService>();
+        services.TryAddSingleton(new RetentionOptions());
+        services.AddScoped<IRetentionPurge>(sp => new RetentionPurge(
+            sp.GetRequiredService<IRetentionRepository>(),
+            sp.GetRequiredService<IClock>(),
+            sp.GetRequiredService<RetentionOptions>().Validated()));
 
         return services;
     }
@@ -62,7 +71,7 @@ public static class AuthServiceCollectionExtensions
             sp.GetRequiredService<IOneTimeTokenRepository<EmailVerificationToken>>(),
             sp.GetRequiredService<IRefreshTokenRepository>(),
             sp.GetRequiredService<IRoleRepository>(),
-            sp.GetRequiredService<IAuditLogRepository>(),
+            sp.GetRequiredService<IAuditService>(),
             sp.GetRequiredService<IUnitOfWork>(),
             sp.GetRequiredService<ITokenGenerator>(),
             sp.GetRequiredService<IEmailSender>(),

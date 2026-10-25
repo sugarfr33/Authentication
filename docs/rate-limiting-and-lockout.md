@@ -57,11 +57,18 @@ Persisted on the User row (`FailedLoginCount`, `LockoutEndUtc`, `LockoutLevel`):
 - `FailuresBeforeLockout` (5) consecutive failures lock the account for `BaseLockout * 2^(level-1)` (1, 2, 4, 8 ... min),
   capped at `MaxLockout` (1 h). The counter restarts after each lock; failures while locked are not counted.
 - `ResetAsync` (successful sign-in) clears the counter, the lock and the backoff level.
+- **Failure window (T17).** Failures add up only while they keep coming: when the last failure is older than
+  `FailureWindow` (15 min), the counter starts again from zero. Each counted failure sets `UpdatedUtc`, which is the
+  "last failure" time (no new column).
+- **Level decay (T17).** The backoff level is forgotten once `LevelDecayAfter` (24 h, at least `MaxLockout`) has passed
+  since the end of the last lock (`LockoutEndUtc` is kept after it expires), so the next lock starts at 1 minute again.
+- Both are tested with a fake clock, including mutation checks (disabling either fails its test).
 - Writes use the User RowVersion with a bounded retry, so concurrent failures are never lost (tested in parallel).
 - `RegisterFailureAsync` returns `AccountLockedOut` when this failure caused the lock: the hook T17 logs as Lockout.
 - Login (T13) answers a locked account exactly like a wrong password, after the same single Verify (see sign-in-and-sessions.md).
 
-Settings: section `Lockout` (`FailuresBeforeLockout`, `BaseLockout`, `MaxLockout`).
+Settings: section `Lockout` (`FailuresBeforeLockout`, `BaseLockout`, `MaxLockout`, `FailureWindow`, `LevelDecayAfter`).
+`FailureWindow` below 1 minute or `LevelDecayAfter` below `MaxLockout` stop the app at startup.
 
 ## Anti-enumeration (`IAuthTimingGuard`)
 
@@ -80,10 +87,12 @@ warning, instead of the process running out of memory.
 ## Known trade-offs and residual risks (T11 review)
 
 - **Targeted lockout (denial of a known victim's login).** Anyone who knows an email can drive that account into
-  lockout, and the per-account rate limit, by submitting wrong passwords. The lockout level does **not** decay over
-  time; only a successful sign-in resets it, so repeated attacks keep the backoff at its 1 h cap. This is the usual price
-  of per-account protection against online guessing. **Future mitigation:** let the real owner bypass or clear the lock,
-  e.g. an unlock link sent by email, or a trusted-device cookie that exempts known devices from the lock.
+  lockout, and the per-account rate limit, by submitting wrong passwords. Since T17 the level decays after a quiet day,
+  but an attacker who keeps going keeps the backoff at its 1 h cap. This is the usual price of per-account protection
+  against online guessing. **Unlock by email (deferred, T17):** the real owner can already clear a lock with "Forgot
+  password": a successful reset clears the counter, the lock and the level. A dedicated unlock link would need its own
+  token purpose (a schema change, or overloading the reset table) and, sent on every lock, would let anyone trigger
+  emails to a victim; it is deferred until there is a decision on both. A trusted-device cookie remains an option.
 - **Ambiguous email fields.** The account key mirrors System.Text.Json web-default binding: the property name matches
   case-insensitively (`email`, `Email`, `EMAIL`, ...) and the last value wins. A body whose email field is duplicated,
   non-string or empty is put in one shared constant bucket, so such tricks cannot escape the per-account limit. The
@@ -100,9 +109,7 @@ warning, instead of the process running out of memory.
   on a worker. The timing guard's dummy hash is created at startup (and otherwise on first need); a failure (e.g.
   busy) is not cached, so the next request simply tries again. A failed warm-up is logged as a warning and never
   stops the host.
-- **Lockout window and decay (audit LOW-4, for T17).** `FailedLoginCount` never decays with time and the lockout level
-  resets only on success. A failure window (reset the count after N quiet minutes) and level decay after a quiet period
-  are on the T17 list, together with the unlock-by-email-link mitigation.
+- **Lockout window and decay (audit LOW-4).** Done in T17 (see "Account lockout"); unlock-by-email deferred (above).
 - **Timing residuals for T13 (audit LOW-5).** (i) The dummy hash is now created at startup by a background warm-up,
   so the first unknown-account sign-in costs no extra Hash. (ii) `RegisterFailureAsync` writes to the database only
   for existing accounts; T13 should do an equivalent round trip for unknown accounts and keep the locked and

@@ -4,6 +4,18 @@ namespace Auth.Api.Hosting;
 internal static class HostingGuards
 {
     /// <summary>
+    /// Log sinks are added in code only (Program.cs), where each one is wrapped so exceptions reach it scrubbed. A sink
+    /// declared under Serilog:WriteTo (or a sub-logger) would bypass that, so it stops the app at startup.
+    /// </summary>
+    public static void EnsureNoConfiguredLogSinks(IConfiguration configuration)
+    {
+        if (configuration.GetSection("Serilog:WriteTo").Exists() || configuration.GetSection("Serilog:AuditTo").Exists())
+        {
+            throw new InvalidOperationException("Serilog:WriteTo is not supported: add log sinks in Program.cs, where they are wrapped by the exception scrubber.");
+        }
+    }
+
+    /// <summary>
     /// Host filtering only protects if AllowedHosts lists real host names. Outside Development an empty value or "*"
     /// stops the app at startup (set AllowedHosts, e.g. through the AllowedHosts environment variable).
     /// </summary>

@@ -15,6 +15,7 @@ using Auth.Services.Accounts;
 using Auth.Services.Authorization;
 using Auth.Services.ClientApplications;
 using Auth.Services.Passwords;
+using Auth.Services.Retention;
 using Auth.Services.Security;
 using Serilog;
 using Serilog.Events;
@@ -23,17 +24,28 @@ WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
 HostingGuards.EnsureAllowedHostsRestricted(builder.Configuration, builder.Environment);
 HostingGuards.EnsureBrowserProtectionSafe(builder.Configuration, builder.Environment);
+HostingGuards.EnsureNoConfiguredLogSinks(builder.Configuration);
 builder.WebHost.ConfigureKestrel(kestrel => kestrel.AddServerHeader = false);
 
 // Secrets (connection string, signing keys) come only from environment variables or User Secrets (Development);
 // appsettings files hold no secrets. See appsettings.Example.json.
-builder.Services.AddSerilog((services, logger) => logger
-    .ReadFrom.Configuration(builder.Configuration)
-    .ReadFrom.Services(services)
-    .MinimumLevel.Override("Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware", LogEventLevel.Fatal)
-    .Enrich.FromLogContext()
-    .Enrich.With<RedactionEnricher>()
-    .WriteTo.Console(formatProvider: CultureInfo.InvariantCulture));
+// Every sink is wrapped in ExceptionScrubbingSink (exceptions are redacted copies) and sees events only after the
+// RedactionEnricher: the console here, and any sink registered in DI. Sinks cannot come from configuration (guard above).
+builder.Services.AddSerilog((services, logger) =>
+{
+    logger
+        .ReadFrom.Configuration(builder.Configuration)
+        .MinimumLevel.Override("Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware", LogEventLevel.Fatal)
+        .Enrich.FromLogContext()
+        .Enrich.With<RedactionEnricher>();
+    logger.WriteTo.Sink(Serilog.Configuration.LoggerSinkConfiguration.Wrap(
+        sink => new ExceptionScrubbingSink(sink),
+        sinks => sinks.Console(formatProvider: CultureInfo.InvariantCulture)));
+    foreach (Serilog.Core.ILogEventSink sink in services.GetServices<Serilog.Core.ILogEventSink>())
+    {
+        logger.WriteTo.Sink(new ExceptionScrubbingSink(sink));
+    }
+});
 
 // Client-application origins must be https outside Development (http only for loopback).
 builder.Services.AddSingleton(new ClientApplicationOriginOptions { RequireHttps = !builder.Environment.IsDevelopment() });
@@ -43,6 +55,7 @@ builder.Services.AddSingleton(builder.Configuration.GetSection("PasswordHashing"
 builder.Services.AddSingleton(builder.Configuration.GetSection("Lockout").Get<LockoutOptions>() ?? new LockoutOptions());
 builder.Services.AddSingleton((builder.Configuration.GetSection("SessionLiveness").Get<SessionLivenessOptions>() ?? new SessionLivenessOptions()).Validated());
 builder.Services.AddSingleton(builder.Configuration.GetSection(AccountEmailOptions.SectionName).Get<AccountEmailOptions>() ?? new AccountEmailOptions());
+builder.Services.AddSingleton<Auth.Services.Audit.IAuditFailureReporter, AuditFailureLog>();
 builder.Services.AddAuthServices(builder.Configuration);
 
 // Account emails (T12): a local pickup folder in Development; elsewhere a real provider must replace the refusing sender.
@@ -81,6 +94,10 @@ builder.Services.AddAuthorization(AuthorizationPolicies.Configure);
 // Authorization data (T16): system permissions and roles are seeded at startup (idempotent).
 builder.Services.AddSingleton(builder.Configuration.GetSection(AuthorizationSeedOptions.SectionName).Get<AuthorizationSeedOptions>() ?? new AuthorizationSeedOptions());
 builder.Services.AddHostedService<AuthorizationSeedOnStartup>();
+
+// Retention purge (T17): off unless Retention:Enabled; see docs/audit-and-retention.md.
+builder.Services.AddSingleton((builder.Configuration.GetSection(RetentionOptions.SectionName).Get<RetentionOptions>() ?? new RetentionOptions()).Validated());
+builder.Services.AddHostedService<RetentionPurgeService>();
 
 // CSRF: antiforgery tokens bound to the user; the request token reaches script via the readable XSRF-TOKEN cookie.
 builder.Services.AddAntiforgery(options =>
