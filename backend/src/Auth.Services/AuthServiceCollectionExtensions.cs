@@ -50,6 +50,7 @@ public static class AuthServiceCollectionExtensions
             sp.GetRequiredService<IUnitOfWork>(),
             sp.GetRequiredService<IClientApplicationOriginProvider>(),
             sp.GetRequiredService<ISessionLiveness>(),
+            sp.GetRequiredService<ISessionEndedPublisher>(),
             new ClientApplicationValidator(sp.GetRequiredService<ClientApplicationOriginOptions>().RequireHttps, sp.GetRequiredService<TokenOptions>().DefaultAudience),
             sp.GetRequiredService<IClock>()));
         services.AddScoped<IClientSessionService, ClientSessionService>();
@@ -90,6 +91,7 @@ public static class AuthServiceCollectionExtensions
             sp.GetRequiredService<IRoleRepository>(),
             sp.GetRequiredService<IAuditService>(),
             sp.GetRequiredService<IUnitOfWork>(),
+            sp.GetRequiredService<ISessionEndedPublisher>(),
             sp.GetRequiredService<ITokenGenerator>(),
             sp.GetRequiredService<IEmailSender>(),
             sp.GetRequiredService<IClock>(),

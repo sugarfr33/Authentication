@@ -181,7 +181,7 @@ internal sealed class PasswordService(
                     return await ResetFailedAsync(owner.Id, failure, audit, cancellationToken);
                 }
 
-                await sessionsEnded.PublishAsync(new SessionEnded(owner.Id, null, null, SessionEndCause.PasswordChange), audit, cancellationToken);
+                await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.All, SessionEndCause.PasswordChange, owner.Id), audit, cancellationToken);
                 return await NotifyChangedAsync(owner.Email, cancellationToken);
             }
             catch (ConcurrencyConflictException) when (attempt < MaxAttempts)
@@ -228,7 +228,7 @@ internal sealed class PasswordService(
                 await audits.StageAsync(AuditEvents.PasswordChanged(current.Id), audit, cancellationToken);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
-                await sessionsEnded.PublishAsync(new SessionEnded(current.Id, null, null, SessionEndCause.PasswordChange), audit, cancellationToken);
+                await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.All, SessionEndCause.PasswordChange, current.Id), audit, cancellationToken);
                 return await NotifyChangedAsync(current.Email, cancellationToken);
             }
             catch (ConcurrencyConflictException) when (attempt < MaxAttempts)

@@ -13,6 +13,9 @@ public static class OAuthErrorCodes
     public const string UnsupportedGrantType = "unsupported_grant_type";
     public const string AccessDenied = "access_denied";
 
+    /// <summary>RFC 6749 4.1.2.1: the server could not complete the request (nothing that would leak why).</summary>
+    public const string ServerError = "server_error";
+
     /// <summary>Not RFC 6749: the redirect URI is not registered, so the error is shown on our domain (never redirected).</summary>
     public const string InvalidRedirectUri = "invalid_redirect_uri";
 

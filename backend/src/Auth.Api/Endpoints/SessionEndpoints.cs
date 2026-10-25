@@ -5,6 +5,7 @@ using Auth.Contracts;
 using Auth.Contracts.Requests;
 using Auth.Contracts.Responses;
 using Auth.Services.Accounts;
+using Auth.Services.Security;
 using Auth.Services.Tokens;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -126,6 +127,10 @@ internal sealed partial class SessionEndpoints : IEndpointModule
 
             await signIn.LogoutAsync(userId, sessionId, RefreshCookie(http), HttpAudit.From(http), cancellationToken);
         }
+        catch (SessionEndFailedException ex)
+        {
+            return SignOutNotStarted(logger, ex);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return SignOutAfterFailure(http, cookies, antiforgery, logger, ex);
@@ -210,6 +215,7 @@ internal sealed partial class SessionEndpoints : IEndpointModule
         ISignInService signIn,
         ICookieWriter cookies,
         IAntiforgery antiforgery,
+        ILogger<SessionEndpoints> logger,
         HttpContext http,
         CancellationToken cancellationToken)
     {
@@ -220,7 +226,17 @@ internal sealed partial class SessionEndpoints : IEndpointModule
         }
 
         // A malformed id, an unknown one and another user's session all get this same 404.
-        if (!Guid.TryParse(id, out Guid familyId) || !await signIn.RevokeSessionAsync(userId, familyId, HttpAudit.From(http), cancellationToken))
+        bool found;
+        try
+        {
+            found = Guid.TryParse(id, out Guid parsed) && await signIn.RevokeSessionAsync(userId, parsed, HttpAudit.From(http), cancellationToken);
+        }
+        catch (SessionEndFailedException ex)
+        {
+            return SignOutNotStarted(logger, ex);
+        }
+
+        if (!found || !Guid.TryParse(id, out Guid familyId))
         {
             return TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: "Session not found.");
         }
@@ -268,6 +284,19 @@ internal sealed partial class SessionEndpoints : IEndpointModule
         SignOut(http, cookies, antiforgery);
         return TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Signed out in this browser, but the session could not be ended on the server.");
     }
+
+    /// <summary>
+    /// Single logout failed BEFORE the browser session was touched (T20): the cookies stay, so the user can simply retry;
+    /// some application sessions may already have ended. Logged with the exception type only.
+    /// </summary>
+    private static ProblemHttpResult SignOutNotStarted(ILogger logger, SessionEndFailedException exception)
+    {
+        LogSignOutNotStarted(logger, exception.InnerException?.GetType().Name ?? exception.GetType().Name);
+        return TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError, title: "The session could not be ended; nothing changed in this browser. Retry.");
+    }
+
+    [LoggerMessage(EventId = 5301, Level = LogLevel.Warning, Message = "Single logout failed before the browser session was ended ({ExceptionType}); the request can be retried")]
+    private static partial void LogSignOutNotStarted(ILogger logger, string exceptionType);
 
     private static string? RefreshCookie(HttpContext http) =>
         http.Request.Cookies.TryGetValue(AuthCookieNames.Refresh, out string? value) && value is { Length: > 0 } ? value : null;

@@ -101,7 +101,12 @@ internal static class AuditEvents
         Auth.Services.Security.SessionEndCause.TokenReuse => "token_reuse",
         Auth.Services.Security.SessionEndCause.PasswordChange => "password_change",
         Auth.Services.Security.SessionEndCause.ApplicationLogout => "application_logout",
-        _ => "unknown",
+        Auth.Services.Security.SessionEndCause.AdminRevoked => "admin_revoked",
+        Auth.Services.Security.SessionEndCause.ApplicationDeactivated => "application_deactivated",
+        Auth.Services.Security.SessionEndCause.CodeReplay => "code_replay",
+        Auth.Services.Security.SessionEndCause.EmailVerified => "email_verified",
+        Auth.Services.Security.SessionEndCause.AccountDisabled => "account_disabled",
+        _ => throw new ArgumentOutOfRangeException(nameof(cause), cause, "Unmapped session end cause."),
     };
 
     public static AuditEvent AuthorizationCodeRejected(Guid? userId, Guid? applicationId, string reason) => applicationId is Guid app

@@ -135,6 +135,18 @@ internal sealed class BrowserProtectionMiddleware(
         // Shared-domain mode (T20): the SPA on a sibling subdomain must be able to read the request token, so it gets the
         // cookie Domain too. The HttpOnly antiforgery cookie it is checked against stays host-only on the API.
         string? domain = context.RequestServices.GetService<IOptions<AuthCookieOptions>>()?.Value.Domain;
+        if (domain is not null)
+        {
+            // Expire a host-only XSRF-TOKEN twin first (left over from host-only mode), so the SPA never reads a stale one.
+            context.Response.Cookies.Append(AuthCookieNames.Xsrf, string.Empty, new CookieOptions
+            {
+                Secure = true,
+                SameSite = SameSiteMode.Strict,
+                Path = "/",
+                Expires = DateTimeOffset.UnixEpoch,
+            });
+        }
+
         context.Response.Cookies.Append(AuthCookieNames.Xsrf, tokens.RequestToken!, new CookieOptions
         {
             HttpOnly = false,

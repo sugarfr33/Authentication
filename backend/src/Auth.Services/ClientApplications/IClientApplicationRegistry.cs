@@ -97,6 +97,7 @@ internal sealed class ClientApplicationRegistry(
     IUnitOfWork unitOfWork,
     IClientApplicationOriginProvider origins,
     ISessionLiveness liveness,
+    ISessionEndedPublisher sessionsEnded,
     ClientApplicationValidator validator,
     IClock clock) : IClientApplicationRegistry
 {
@@ -160,6 +161,8 @@ internal sealed class ClientApplicationRegistry(
         if (audienceChanged)
         {
             liveness.InvalidateAll();
+            await sessionsEnded.PublishAsync(
+                new SessionEnded(SessionEndScope.Application, SessionEndCause.ApplicationDeactivated, null, ClientApplicationId: application.Id), audit, cancellationToken);
         }
 
         return new ClientApplicationResult(ToResponse(application), Empty);
@@ -219,6 +222,7 @@ internal sealed class ClientApplicationRegistry(
 
         origins.Invalidate();
         liveness.InvalidateAll();
+        await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.Application, SessionEndCause.ApplicationDeactivated, null, ClientApplicationId: id), audit, cancellationToken);
         return true;
     }
 

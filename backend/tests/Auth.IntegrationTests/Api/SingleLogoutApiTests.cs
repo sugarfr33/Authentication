@@ -12,6 +12,7 @@ using Auth.Entities;
 using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
+using Auth.Services.Security;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -30,6 +31,7 @@ public sealed class SingleLogoutApiTests(ApiFixture api) : IAsyncLifetime
     private const string OAuthLogout = "/api/v1/oauth/logout";
 
     private readonly ShiftableClock clock = new();
+    private readonly FailingListener failing = new();
     private WebApplicationFactory<Program> app = null!;
 
     public Task InitializeAsync()
@@ -164,7 +166,7 @@ public sealed class SingleLogoutApiTests(ApiFixture api) : IAsyncLifetime
         };
 
         HttpResponseMessage prompt = await browser.GetAsync(LogoutUrl(spa.ClientId, uri, "st-1"));
-        HttpResponseMessage confirmed = await PostLogoutAsync(browser, new OAuthLogoutRequest(spa.ClientId, uri, "st-1"));
+        HttpResponseMessage confirmed = await PostLogoutAsync(browser, new OAuthLogoutRequest(spa.ClientId, uri, "st-1"), origin: spa.Origin);
 
         foreach (HttpResponseMessage response in new[] { prompt, confirmed })
         {
@@ -184,7 +186,7 @@ public sealed class SingleLogoutApiTests(ApiFixture api) : IAsyncLifetime
         OAuthTokenResponse theirs = await AppSessionAsync(browser, other);
 
         HttpResponseMessage prompt = await browser.GetAsync(LogoutUrl(spa.ClientId, spa.PostLogoutUri, "s 1"));
-        HttpResponseMessage confirmed = await PostLogoutAsync(browser, new OAuthLogoutRequest(spa.ClientId.ToUpperInvariant(), spa.PostLogoutUri, "s 1"));
+        HttpResponseMessage confirmed = await PostLogoutAsync(browser, new OAuthLogoutRequest(spa.ClientId.ToUpperInvariant(), spa.PostLogoutUri, "s 1"), origin: spa.Origin);
         OAuthLogoutResponse answer = (await confirmed.Content.ReadFromJsonAsync<OAuthLogoutResponse>())!;
 
         Assert.Equal(HttpStatusCode.OK, prompt.StatusCode);
@@ -222,11 +224,11 @@ public sealed class SingleLogoutApiTests(ApiFixture api) : IAsyncLifetime
         OAuthTokenResponse tokens = await AppSessionAsync(browser, spa);
         OAuthLogoutRequest request = new(spa.ClientId, spa.PostLogoutUri, null);
 
-        HttpResponseMessage noXsrf = await PostLogoutAsync(browser, request, sendXsrf: false);
+        HttpResponseMessage noXsrf = await PostLogoutAsync(browser, request, sendXsrf: false, origin: spa.Origin);
         HttpResponseMessage foreignOrigin = await PostLogoutAsync(browser, request, origin: "https://evil.example.test");
         using Browser bearer = new(app);
         await bearer.GetAsync(TestEndpoints.Prefix + "/ping");
-        HttpResponseMessage withAppToken = await PostLogoutAsync(bearer, request, authorization: "Bearer " + tokens.AccessToken);
+        HttpResponseMessage withAppToken = await PostLogoutAsync(bearer, request, origin: spa.Origin, authorization: "Bearer " + tokens.AccessToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, noXsrf.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, foreignOrigin.StatusCode);
@@ -247,7 +249,16 @@ public sealed class SingleLogoutApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal("example.test", issued.Last(c => c.Name == AuthCookieNames.Refresh)["domain"]);
         Assert.Equal("example.test", issued.Last(c => c.Name == AuthCookieNames.Xsrf)["domain"]);
         Assert.Null(issued.Last(c => c.Name == AuthCookieNames.Antiforgery)["domain"]);
-        Assert.DoesNotContain(issued, c => c.Name == AuthCookieNames.Access);
+        Assert.DoesNotContain(issued, c => c.Name == AuthCookieNames.Access && !c.IsExpired);
+
+        // T20 review M1: every write in shared mode also expires the host-only twin of the same name, BEFORE the Domain cookie.
+        IReadOnlyList<SetCookie> loginCookies = SetCookie.From(browser.History.Last(h => h.Response.RequestMessage!.RequestUri!.AbsolutePath == "/api/v1/auth/login").Response);
+        foreach ((string hostOnly, string withDomain) in new[] { (AuthCookieNames.Access, AuthCookieNames.AccessWithDomain), (AuthCookieNames.Refresh, AuthCookieNames.Refresh), (AuthCookieNames.Xsrf, AuthCookieNames.Xsrf) })
+        {
+            int expired = loginCookies.ToList().FindIndex(c => c.Name == hostOnly && c.IsExpired && c["domain"] is null);
+            int written = loginCookies.ToList().FindLastIndex(c => c.Name == withDomain && !c.IsExpired && c["domain"] == "example.test");
+            Assert.True(expired >= 0 && written > expired, hostOnly);
+        }
 
         HttpResponseMessage refresh = await browser.SendAsync(HttpMethod.Post, "/api/v1/auth/refresh");
         Assert.Equal(HttpStatusCode.NoContent, refresh.StatusCode);
@@ -287,6 +298,102 @@ public sealed class SingleLogoutApiTests(ApiFixture api) : IAsyncLifetime
         Assert.DoesNotContain(cleared, c => c.Name == AuthCookieNames.AccessWithDomain);
     }
 
+    /// <summary>T20 audit M1: a sibling application cannot end the user's sessions at another application.</summary>
+    [Fact]
+    public async Task The_logout_confirmation_only_comes_from_the_applications_own_origin_or_the_auth_UI()
+    {
+        Spa victim = await RegisterSpaAsync();
+        Spa sibling = await RegisterSpaAsync();
+        (_, Browser browser) = await SignedInAsync();
+        OAuthTokenResponse tokens = await AppSessionAsync(browser, victim);
+        OAuthLogoutRequest request = new(victim.ClientId, victim.PostLogoutUri, null);
+
+        HttpResponseMessage fromSibling = await PostLogoutAsync(browser, request, origin: sibling.Origin);
+        await RefreshAsync(victim, tokens.RefreshToken);
+        HttpResponseMessage fromAuthUi = await PostLogoutAsync(browser, request, origin: "https://" + ApiFixture.Host);
+
+        Assert.Equal(HttpStatusCode.BadRequest, fromSibling.StatusCode);
+        Assert.Equal("invalid_client", await ErrorAsync(fromSibling));
+        Assert.Equal(HttpStatusCode.OK, fromAuthUi.StatusCode);
+    }
+
+    /// <summary>
+    /// T20 review M2: the application cascade runs before the browser family is revoked, so a failing listener leaves the
+    /// browser signed in (cookies kept, session live) and the sign-out can simply be retried.
+    /// </summary>
+    [Fact]
+    public async Task A_failing_listener_leaves_the_browser_session_alive_and_the_logout_retryable()
+    {
+        Spa spa = await RegisterSpaAsync();
+        (_, Browser browser) = await SignedInAsync();
+        OAuthTokenResponse tokens = await AppSessionAsync(browser, spa);
+        failing.Fail = true;
+
+        HttpResponseMessage failed = await browser.SendAsync(HttpMethod.Post, "/api/v1/auth/logout");
+        HttpResponseMessage rpFailed = await PostLogoutAsync(browser, new OAuthLogoutRequest(spa.ClientId, null, null), origin: spa.Origin);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        Assert.DoesNotContain(SetCookie.From(failed), c => c.IsExpired);
+        Assert.Equal((HttpStatusCode.InternalServerError, "server_error"), (rpFailed.StatusCode, await ErrorAsync(rpFailed)));
+        Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync("/api/v1/auth/me")).StatusCode);
+
+        failing.Fail = false;
+        Assert.Equal(HttpStatusCode.NoContent, (await browser.SendAsync(HttpMethod.Post, "/api/v1/auth/logout")).StatusCode);
+        Assert.Equal("invalid_grant", await RefreshErrorAsync(spa, tokens.RefreshToken));
+    }
+
+    /// <summary>T20 audit M2: in shared mode a request carrying an auth cookie twice is refused, and the twins are expired.</summary>
+    [Fact]
+    public async Task Shared_domain_mode_refuses_duplicate_auth_cookies_and_expires_the_host_only_twins()
+    {
+        await app.DisposeAsync();
+        app = WithSettings(new() { ["AuthCookies:Domain"] = "example.test" });
+        (_, Browser browser) = await SignedInAsync();
+        string refresh = browser.CookieValue(AuthCookieNames.Refresh);
+
+        HttpResponseMessage tossed = await browser.SendAsync(HttpMethod.Post, "/api/v1/auth/refresh", configure: r =>
+        {
+            r.Headers.Remove("Cookie");
+            r.Headers.TryAddWithoutValidation("Cookie", AuthCookieNames.Refresh + "=attacker-value; " + AuthCookieNames.Refresh + "=" + refresh);
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, tossed.StatusCode);
+        Assert.Contains(SetCookie.From(tossed), c => c.Name == AuthCookieNames.Refresh && c.IsExpired && c["domain"] is null);
+        Assert.Contains(api.Logs.Texts, l => l.Contains("was sent more than once", StringComparison.Ordinal));
+        Assert.DoesNotContain(api.Logs.Texts, l => l.Contains("attacker-value", StringComparison.Ordinal));
+        Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync("/api/v1/auth/me")).StatusCode);
+    }
+
+    /// <summary>T20 review (arch M1): administrative and system endings publish SessionEnded too, with an explicit scope.</summary>
+    [Fact]
+    public async Task Deactivation_role_removal_and_code_replay_publish_SessionEnded_with_their_scope()
+    {
+        Spa spa = await RegisterSpaAsync();
+        (Guid userId, Browser browser) = await SignedInAsync();
+        string verifier = Base64Url(RandomNumberGenerator.GetBytes(48));
+        string code = await CodeAsync(browser, spa, verifier);
+        HttpResponseMessage first = await TokenAsync(spa, ("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", verifier));
+        HttpResponseMessage replay = await TokenAsync(spa, ("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", verifier));
+        Guid roleId = await QueryAsync(c => c.UserRole.Where(r => r.UserId == userId).Select(r => r.RoleId).FirstOrDefaultAsync());
+        await using (AsyncServiceScope scope = app.Services.CreateAsyncScope())
+        {
+            if (roleId != Guid.Empty)
+            {
+                await scope.ServiceProvider.GetRequiredService<Auth.Services.Authorization.IRoleAssignmentService>().RemoveUserRoleAsync(userId, roleId, AuditContext.None, CancellationToken.None);
+            }
+
+            await scope.ServiceProvider.GetRequiredService<IClientApplicationRegistry>().DeactivateAsync(spa.Id, AuditContext.None, CancellationToken.None);
+        }
+
+        Assert.Equal((HttpStatusCode.OK, HttpStatusCode.BadRequest), (first.StatusCode, replay.StatusCode));
+        Assert.Contains(failing.Seen, e => e is { Scope: SessionEndScope.Application, Cause: SessionEndCause.CodeReplay } && e.UserId == userId && e.ClientApplicationId == spa.Id);
+        Assert.Contains(failing.Seen, e => e is { Scope: SessionEndScope.Application, Cause: SessionEndCause.ApplicationDeactivated, UserId: null } && e.ClientApplicationId == spa.Id);
+        if (roleId != Guid.Empty)
+        {
+            Assert.Contains(failing.Seen, e => e is { Scope: SessionEndScope.All, Cause: SessionEndCause.AdminRevoked } && e.UserId == userId);
+        }
+    }
+
     [Theory]
     [InlineData("co.uk")]
     [InlineData(".example.test")]
@@ -322,7 +429,11 @@ public sealed class SingleLogoutApiTests(ApiFixture api) : IAsyncLifetime
             }
 
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
-            builder.ConfigureTestServices(services => services.AddSingleton<IClock>(clock));
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddSingleton<IClock>(clock);
+                services.AddSingleton<ISessionEndedListener>(failing);
+            });
         });
     }
 
@@ -342,14 +453,19 @@ public sealed class SingleLogoutApiTests(ApiFixture api) : IAsyncLifetime
     private static async Task<string> ErrorAsync(HttpResponseMessage response) =>
         JsonNode.Parse(await response.Content.ReadAsStringAsync())!["error"]!.GetValue<string>();
 
-    private async Task<OAuthTokenResponse> AppSessionAsync(Browser browser, Spa spa)
+    private static async Task<string> CodeAsync(Browser browser, Spa spa, string verifier)
     {
-        string verifier = Base64Url(RandomNumberGenerator.GetBytes(48));
         string challenge = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
         HttpResponseMessage authorize = await browser.GetAsync("/api/v1/oauth/authorize?client_id=" + spa.ClientId + "&redirect_uri=" + Uri.EscapeDataString(spa.RedirectUri)
             + "&response_type=code&code_challenge=" + challenge + "&code_challenge_method=S256&state=st");
         Assert.Equal(HttpStatusCode.Redirect, authorize.StatusCode);
-        string code = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(authorize.Headers.Location!.Query)["code"]!;
+        return Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(authorize.Headers.Location!.Query)["code"]!;
+    }
+
+    private async Task<OAuthTokenResponse> AppSessionAsync(Browser browser, Spa spa)
+    {
+        string verifier = Base64Url(RandomNumberGenerator.GetBytes(48));
+        string code = await CodeAsync(browser, spa, verifier);
         HttpResponseMessage exchange = await TokenAsync(spa, ("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", verifier));
         Assert.Equal(HttpStatusCode.OK, exchange.StatusCode);
         return (await exchange.Content.ReadFromJsonAsync<OAuthTokenResponse>())!;
@@ -450,6 +566,20 @@ public sealed class SingleLogoutApiTests(ApiFixture api) : IAsyncLifetime
     private static string Base64Url(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private sealed record Spa(Guid Id, string ClientId, string Origin, string RedirectUri, string PostLogoutUri);
+
+    /// <summary>Records every event; throws when <see cref="Fail"/> is set (registered after the single-logout listener).</summary>
+    private sealed class FailingListener : ISessionEndedListener
+    {
+        public bool Fail { get; set; }
+
+        public System.Collections.Concurrent.ConcurrentBag<SessionEnded> Seen { get; } = [];
+
+        public Task OnSessionEndedAsync(SessionEnded ended, AuditContext audit, CancellationToken cancellationToken)
+        {
+            Seen.Add(ended);
+            return Fail ? throw new InvalidOperationException("Simulated listener failure.") : Task.CompletedTask;
+        }
+    }
 
     private sealed class ShiftableClock : IClock
     {

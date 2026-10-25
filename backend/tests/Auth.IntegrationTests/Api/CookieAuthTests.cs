@@ -84,8 +84,8 @@ public sealed partial class CookieAuthTests(ApiFixture api)
 
         SetCookie access = Assert.Single(cookies, c => c.Name == AuthCookieNames.AccessWithDomain);
         Assert.Equal("example.test", access["domain"]);
-        Assert.DoesNotContain(cookies, c => c.Name == AuthCookieNames.Access);
-        Assert.Equal("example.test", Assert.Single(cookies, c => c.Name == AuthCookieNames.Refresh)["domain"]);
+        Assert.DoesNotContain(cookies, c => c.Name == AuthCookieNames.Access && !c.IsExpired);
+        Assert.Equal("example.test", Assert.Single(cookies, c => c.Name == AuthCookieNames.Refresh && !c.IsExpired)["domain"]);
         Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync(Me)).StatusCode);
     }
 

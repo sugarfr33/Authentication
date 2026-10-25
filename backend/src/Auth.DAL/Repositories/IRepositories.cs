@@ -119,6 +119,8 @@ public interface IRefreshTokenRepository
     /// <paramref name="clientApplicationId"/> only, or of every application when it is null (browser families are never
     /// touched). Returns the number revoked.
     /// </summary>
+    Task<Guid?> GetFamilyClientApplicationIdAsync(Guid familyId, Guid userId, CancellationToken cancellationToken);
+
     Task<int> RevokeApplicationFamiliesForUserAsync(Guid userId, Guid? clientApplicationId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
 
     /// <summary>

@@ -55,7 +55,7 @@ builder.Services.AddSingleton(new ClientApplicationOriginOptions { RequireHttps 
 builder.Services.AddSingleton(builder.Configuration.GetSection("PasswordHashing").Get<PasswordHashingLimits>() ?? new PasswordHashingLimits());
 builder.Services.AddSingleton((builder.Configuration.GetSection("Lockout").Get<LockoutOptions>() ?? new LockoutOptions()).Validated());
 builder.Services.AddSingleton((builder.Configuration.GetSection("RefreshTokens").Get<Auth.Services.Tokens.RefreshTokenOptions>() ?? new Auth.Services.Tokens.RefreshTokenOptions()).Validated());
-builder.Services.AddSingleton((builder.Configuration.GetSection("SessionLiveness").Get<SessionLivenessOptions>() ?? new SessionLivenessOptions()).Validated());
+builder.Services.AddSingleton((builder.Configuration.GetSection(SessionLivenessOptions.SectionName).Get<SessionLivenessOptions>() ?? new SessionLivenessOptions()).Validated());
 builder.Services.AddSingleton(builder.Configuration.GetSection(AccountEmailOptions.SectionName).Get<AccountEmailOptions>() ?? new AccountEmailOptions());
 builder.Services.AddSingleton<Auth.Services.Audit.IAuditFailureReporter, AuditFailureLog>();
 builder.Services.AddAuthServices(builder.Configuration);
@@ -158,6 +158,7 @@ app.UseCors();
 app.UseRateLimiter();
 app.UseMiddleware<AccountKeyMiddleware>();
 app.UseMiddleware<AccountRateLimitMiddleware>();
+app.UseMiddleware<DuplicateCookieGuardMiddleware>();
 app.UseAuthentication();
 app.UseMiddleware<BrowserProtectionMiddleware>();
 app.UseAuthorization();

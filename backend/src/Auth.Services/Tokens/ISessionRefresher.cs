@@ -69,6 +69,15 @@ internal sealed class SessionRefresher(
         if (user is not { IsActive: true, EmailVerified: true })
         {
             await refreshTokens.RevokeFamilyForUserAsync(session.FamilyId, session.UserId, RefreshTokenRevokedReason.Admin, cancellationToken);
+            await sessionsEnded.PublishAsync(
+                new Security.SessionEnded(
+                    application is null ? Security.SessionEndScope.Browser : Security.SessionEndScope.Application,
+                    Security.SessionEndCause.AccountDisabled,
+                    session.UserId,
+                    session.FamilyId,
+                    application?.Id),
+                audit,
+                cancellationToken);
             return new RefreshOutcome(RotationStatus.Invalid, null);
         }
 
@@ -115,7 +124,14 @@ internal sealed class SessionRefresher(
                 {
                     // A stolen browser family may have been used to start application sessions: single logout ends them.
                     await sessionsEnded.PublishAsync(
-                        new Security.SessionEnded(reuse.UserId, reuse.FamilyId, reuse.ClientApplicationId, Security.SessionEndCause.TokenReuse), audit, cancellationToken);
+                        new Security.SessionEnded(
+                            reuse.ClientApplicationId is null ? Security.SessionEndScope.Browser : Security.SessionEndScope.Application,
+                            Security.SessionEndCause.TokenReuse,
+                            reuse.UserId,
+                            reuse.FamilyId,
+                            reuse.ClientApplicationId),
+                        audit,
+                        cancellationToken);
                 }
 
                 return new RefreshOutcome(RotationStatus.ReuseDetected, null);

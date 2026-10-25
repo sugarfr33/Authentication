@@ -60,6 +60,45 @@ public class SessionStartCallSiteTests
             t => t.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly).Any(m => Calls(m, invalidate)));
     }
 
+    /// <summary>
+    /// T20 review (arch M4): every Auth.Services type that revokes refresh families (IRefreshTokenService.Revoke* or
+    /// IRefreshTokenRepository.Revoke*) also publishes SessionEnded, so listeners (single logout, a future back-channel)
+    /// never miss an ending. The exceptions are explicit, each with its reason.
+    /// </summary>
+    [Fact]
+    public void Every_type_that_revokes_sessions_publishes_SessionEnded_or_is_an_explicit_exception()
+    {
+        Dictionary<string, string> silentByDesign = new(StringComparer.Ordinal)
+        {
+            ["Auth.Services.Tokens.RefreshTokenService"] = "the revocation primitive; its reuse revocation is published by SessionRefresher",
+            ["Auth.Services.Tokens.SessionCap"] = "cap eviction is a consequence of starting a new session, not an ending the user asked for",
+            ["Auth.Services.Security.SingleLogoutListener"] = "it is the listener reacting to SessionEnded",
+        };
+        Assembly services = typeof(Auth.Services.AssemblyMarker).Assembly;
+        Type refreshService = typeof(Auth.Services.Tokens.IRefreshTokenService);
+        Type refreshRepository = typeof(Auth.DAL.Repositories.IRefreshTokenRepository);
+        MethodInfo publish = typeof(Auth.Services.Security.ISessionEndedPublisher).GetMethod(nameof(Auth.Services.Security.ISessionEndedPublisher.PublishAsync))!;
+
+        string[] revokers = [.. services.GetTypes()
+            .Where(t => AllMethods(t).Any(m => CallsAny(m, called => (called.DeclaringType == refreshService || called.DeclaringType == refreshRepository)
+                && called.Name.StartsWith("Revoke", StringComparison.Ordinal))))
+            .Select(t => OuterMost(t).FullName!)
+            .Distinct()
+            .Order(StringComparer.Ordinal)];
+        string[] publishers = [.. services.GetTypes()
+            .Where(t => AllMethods(t).Any(m => Calls(m, publish)))
+            .Select(t => OuterMost(t).FullName!)
+            .Distinct()];
+
+        Assert.Contains("Auth.Services.Accounts.SignInService", revokers);
+        string[] unpublished = [.. revokers.Where(r => !publishers.Contains(r) && !silentByDesign.ContainsKey(r))];
+        Assert.True(unpublished.Length == 0, "Revoke without SessionEnded: " + string.Join(", ", unpublished));
+        Assert.All(silentByDesign.Keys, k => Assert.Contains(k, revokers));
+    }
+
+    private static MethodInfo[] AllMethods(Type type) =>
+        type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+
     private static Type OuterMost(Type type)
     {
         while (type.DeclaringType is Type outer)
@@ -70,7 +109,11 @@ public class SessionStartCallSiteTests
         return type;
     }
 
-    private static bool Calls(MethodInfo method, MethodInfo target)
+    private static bool Calls(MethodInfo method, MethodInfo target) =>
+        CallsAny(method, called => called.Name == target.Name && called.DeclaringType == target.DeclaringType
+            && called.GetParameters().Select(p => p.ParameterType).SequenceEqual(target.GetParameters().Select(p => p.ParameterType)));
+
+    private static bool CallsAny(MethodInfo method, Func<MethodBase, bool> match)
     {
         byte[]? il = method.GetMethodBody()?.GetILAsByteArray();
         if (il is null)
@@ -84,7 +127,7 @@ public class SessionStartCallSiteTests
             short value = il[position] == 0xFE ? (short)(0xFE00 | il[position + 1]) : il[position];
             OpCode opCode = OpCodesByValue[value];
             position += opCode.Size;
-            if ((opCode == OpCodes.Call || opCode == OpCodes.Callvirt) && Resolves(method.Module, BitConverter.ToInt32(il, position), target))
+            if ((opCode == OpCodes.Call || opCode == OpCodes.Callvirt) && Resolves(method.Module, BitConverter.ToInt32(il, position), match))
             {
                 return true;
             }
@@ -95,12 +138,11 @@ public class SessionStartCallSiteTests
         return false;
     }
 
-    private static bool Resolves(Module module, int token, MethodInfo target)
+    private static bool Resolves(Module module, int token, Func<MethodBase, bool> match)
     {
         try
         {
-            return module.ResolveMethod(token) is MethodInfo called && called.Name == target.Name && called.DeclaringType == target.DeclaringType
-                && called.GetParameters().Select(p => p.ParameterType).SequenceEqual(target.GetParameters().Select(p => p.ParameterType));
+            return module.ResolveMethod(token) is MethodInfo called && match(called);
         }
         catch (ArgumentException)
         {

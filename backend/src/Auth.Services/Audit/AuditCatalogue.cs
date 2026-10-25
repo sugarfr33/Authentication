@@ -85,7 +85,8 @@ public static class AuditCatalogue
         "inactive_user", "invalid_request",
 
         // Session end causes (SessionEndCause, T20)
-        "logout", "logout_all", "session_revoked", "token_reuse", "password_change", "application_logout",
+        "logout", "logout_all", "session_revoked", "token_reuse", "password_change", "application_logout", "admin_revoked",
+        "application_deactivated", "code_replay", "email_verified",
     };
 
     /// <summary>Event names (as stored in AuditLog.EventType) with <see cref="AuditVolume.High"/>.</summary>

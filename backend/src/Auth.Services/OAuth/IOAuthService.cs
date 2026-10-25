@@ -314,9 +314,8 @@ internal sealed partial class OAuthService(
             return target;
         }
 
-        int revoked = await refreshRows.RevokeApplicationFamiliesForUserAsync(userId, client.Id, RefreshTokenRevokedReason.Logout, clock.UtcNow, cancellationToken);
-        await sessionsEnded.PublishAsync(new SessionEnded(userId, null, client.Id, SessionEndCause.ApplicationLogout), audit, cancellationToken);
-        await audits.TryWriteAsync(AuditEvents.SingleLogout(userId, client.Id, SessionEndCause.ApplicationLogout, revoked), audit, cancellationToken);
+        // The single-logout listener owns application-session endings and their audit: it revokes and audits.
+        await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.Application, SessionEndCause.ApplicationLogout, userId, ClientApplicationId: client.Id), audit, cancellationToken);
         return target;
     }
 
@@ -383,12 +382,16 @@ internal sealed partial class OAuthService(
         {
             await refreshRows.RevokeFamilyAsync(family, RefreshTokenRevokedReason.Reuse, now, cancellationToken);
             liveness.Invalidate(family);
+            await sessionsEnded.PublishAsync(
+                new SessionEnded(SessionEndScope.Application, SessionEndCause.CodeReplay, code.UserId, family, code.ClientApplicationId), AuditContext.None, cancellationToken);
             return;
         }
 
         if (await refreshRows.RevokeFamiliesStartedSinceAsync(code.UserId, code.ClientApplicationId, code.CreatedUtc, RefreshTokenRevokedReason.Reuse, now, cancellationToken) > 0)
         {
             liveness.InvalidateUser(code.UserId);
+            await sessionsEnded.PublishAsync(
+                new SessionEnded(SessionEndScope.Application, SessionEndCause.CodeReplay, code.UserId, null, code.ClientApplicationId), AuditContext.None, cancellationToken);
         }
     }
 

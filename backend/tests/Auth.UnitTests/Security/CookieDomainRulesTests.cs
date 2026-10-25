@@ -23,6 +23,12 @@ public class CookieDomainRulesTests
     [InlineData("-bad.test", "https://auth.-bad.test", false)]
     [InlineData("example.test:443", "https://auth.example.test", false)]
     [InlineData("example.test", null, false)]
+    [InlineData("herokuapp.com", "https://myapp.herokuapp.com", false)]
+    [InlineData("myapp.herokuapp.com", "https://auth.myapp.herokuapp.com", false)]
+    [InlineData("github.io", "https://org.github.io", false)]
+    [InlineData("azurewebsites.net", "https://auth.azurewebsites.net", false)]
+    [InlineData("gouv.fr", "https://auth.gouv.fr", false)]
+    [InlineData("xn--bcher-kva.example", "https://auth.bücher.example", true)]
     public void Only_a_safe_parent_of_the_https_auth_host_is_allowed(string domain, string? issuer, bool allowed) =>
         Assert.Equal(allowed, CookieDomainRules.IsAllowed(domain, issuer));
 }

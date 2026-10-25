@@ -119,8 +119,15 @@ internal sealed class SignInService(
         }
 
         // Re-login replaces the browser's previous session instead of leaving it alive with no cookie pointing at it.
+        // The same user signing in again keeps their application sessions (deliberately silent); ANOTHER user taking
+        // over this browser is a sign-out of the previous one, so their application sessions end too.
         if (await refreshTokens.FindSessionAsync(presentedRefreshToken, cancellationToken) is RefreshSession previous)
         {
+            if (previous.UserId != user!.Id && previous.ClientApplicationId is null)
+            {
+                await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.Browser, SessionEndCause.Logout, previous.UserId, previous.FamilyId), audit, cancellationToken);
+            }
+
             await refreshTokens.RevokeFamilyForUserAsync(previous.FamilyId, previous.UserId, RefreshTokenRevokedReason.Logout, cancellationToken);
         }
 
@@ -130,6 +137,18 @@ internal sealed class SignInService(
     public async Task<int> LogoutAsync(Guid? accessUserId, Guid? accessSessionId, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(audit);
+
+        // The refresh cookie still ends the session after the access cookie has expired and been dropped.
+        RefreshSession? fromRefresh = await refreshTokens.FindSessionAsync(presentedRefreshToken, cancellationToken);
+
+        // Single logout (T20) FIRST: the user's application sessions end before the browser family is revoked, so if a
+        // listener fails (SessionEndFailedException) the browser session is still there and the sign-out can be retried.
+        foreach (Guid ended in new[] { accessUserId, fromRefresh?.UserId }.OfType<Guid>().Distinct())
+        {
+            await sessionsEnded.PublishAsync(
+                new SessionEnded(SessionEndScope.Browser, SessionEndCause.Logout, ended, ended == accessUserId ? accessSessionId : fromRefresh?.FamilyId), audit, cancellationToken);
+        }
+
         int revoked = 0;
         if (accessUserId is Guid owner && accessSessionId is Guid sid)
         {
@@ -137,8 +156,6 @@ internal sealed class SignInService(
             liveness.Invalidate(sid);
         }
 
-        // The refresh cookie still ends the session after the access cookie has expired and been dropped.
-        RefreshSession? fromRefresh = await refreshTokens.FindSessionAsync(presentedRefreshToken, cancellationToken);
         if (fromRefresh is not null && (fromRefresh.FamilyId != accessSessionId || fromRefresh.UserId != accessUserId))
         {
             revoked += await refreshTokens.RevokeFamilyForUserAsync(fromRefresh.FamilyId, fromRefresh.UserId, RefreshTokenRevokedReason.Logout, cancellationToken);
@@ -152,13 +169,6 @@ internal sealed class SignInService(
             await audits.TryWriteAsync(AuditEvents.Logout(userId.Value, revoked), audit, cancellationToken);
         }
 
-        // Single logout (T20): the user's application sessions end with the browser session. A failure here propagates
-        // (the endpoint then says the sign-out is incomplete on the server).
-        foreach (Guid ended in new[] { accessUserId, fromRefresh?.UserId }.OfType<Guid>().Distinct())
-        {
-            await sessionsEnded.PublishAsync(new SessionEnded(ended, ended == accessUserId ? accessSessionId : fromRefresh?.FamilyId, null, SessionEndCause.Logout), audit, cancellationToken);
-        }
-
         return revoked;
     }
 
@@ -168,7 +178,7 @@ internal sealed class SignInService(
         int revoked = await refreshTokens.RevokeAllAsync(userId, RefreshTokenRevokedReason.LogoutAll, cancellationToken);
         liveness.InvalidateUser(userId);
         await audits.TryWriteAsync(AuditEvents.LogoutAll(userId, revoked), audit, cancellationToken);
-        await sessionsEnded.PublishAsync(new SessionEnded(userId, null, null, SessionEndCause.LogoutAll), audit, cancellationToken);
+        await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.All, SessionEndCause.LogoutAll, userId), audit, cancellationToken);
         return revoked;
     }
 
@@ -197,15 +207,26 @@ internal sealed class SignInService(
             return false;
         }
 
-        // Whether it is a browser or an application session decides whether single logout applies.
-        IRefreshSessionSummary? live = (await refreshRows.GetActiveSessionsAsync(userId, clock.UtcNow, 1000, cancellationToken))
-            .FirstOrDefault(s => s.FamilyId == familyId);
+        // A browser session ends the user's application sessions first (retryable, as for logout); an application
+        // session ends alone.
+        Guid? application = await refreshRows.GetFamilyClientApplicationIdAsync(familyId, userId, cancellationToken);
+        SessionEnded ended = application is null
+            ? new SessionEnded(SessionEndScope.Browser, SessionEndCause.SessionRevoked, userId, familyId)
+            : new SessionEnded(SessionEndScope.Application, SessionEndCause.SessionRevoked, userId, familyId, application);
+        if (ended.Scope == SessionEndScope.Browser)
+        {
+            await sessionsEnded.PublishAsync(ended, audit, cancellationToken);
+        }
+
         int revoked = await refreshTokens.RevokeFamilyForUserAsync(familyId, userId, RefreshTokenRevokedReason.Logout, cancellationToken);
         liveness.Invalidate(familyId);
         if (revoked > 0)
         {
             await audits.TryWriteAsync(AuditEvents.SessionRevoked(userId, familyId), audit, cancellationToken);
-            await sessionsEnded.PublishAsync(new SessionEnded(userId, familyId, live?.ClientApplicationId, SessionEndCause.SessionRevoked), audit, cancellationToken);
+            if (ended.Scope == SessionEndScope.Application)
+            {
+                await sessionsEnded.PublishAsync(ended, audit, cancellationToken);
+            }
         }
 
         return true;

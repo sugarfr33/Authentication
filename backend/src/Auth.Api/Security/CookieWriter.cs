@@ -26,6 +26,9 @@ public interface ICookieWriter
     /// signed out completely.
     /// </summary>
     void ClearAuthCookies(HttpResponse response);
+
+    /// <summary>Shared-domain mode: expires the host-only access, refresh and XSRF-TOKEN cookies (no-op in host-only mode).</summary>
+    void ExpireHostOnlyTwins(HttpResponse response);
 }
 
 internal sealed class CookieWriter(IOptions<AuthCookieOptions> options, IClock clock) : ICookieWriter
@@ -38,6 +41,7 @@ internal sealed class CookieWriter(IOptions<AuthCookieOptions> options, IClock c
     {
         ArgumentNullException.ThrowIfNull(response);
         ArgumentNullException.ThrowIfNull(token);
+        ExpireHostOnlyTwin(response, AuthCookieNames.Access, AccessCookie(TimeSpan.Zero));
         response.Cookies.Append(AccessCookieName, token.Jwt, AccessCookie(Remaining(token.ExpiresUtc)));
     }
 
@@ -45,23 +49,42 @@ internal sealed class CookieWriter(IOptions<AuthCookieOptions> options, IClock c
     {
         ArgumentNullException.ThrowIfNull(response);
         ArgumentNullException.ThrowIfNull(token);
+        ExpireHostOnlyTwin(response, AuthCookieNames.Refresh, RefreshCookie(TimeSpan.Zero));
         response.Cookies.Append(AuthCookieNames.Refresh, token.Token, RefreshCookie(Remaining(token.ExpiresUtc)));
     }
 
     public void ClearAuthCookies(HttpResponse response)
     {
         ArgumentNullException.ThrowIfNull(response);
+        ExpireHostOnlyTwin(response, AuthCookieNames.Access, AccessCookie(TimeSpan.Zero));
+        ExpireHostOnlyTwin(response, AuthCookieNames.Refresh, RefreshCookie(TimeSpan.Zero));
         response.Cookies.Append(AccessCookieName, string.Empty, Expired(AccessCookie(TimeSpan.Zero)));
         response.Cookies.Append(AuthCookieNames.Refresh, string.Empty, Expired(RefreshCookie(TimeSpan.Zero)));
-        if (settings.Domain is not null)
+    }
+
+    public void ExpireHostOnlyTwins(HttpResponse response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ExpireHostOnlyTwin(response, AuthCookieNames.Access, AccessCookie(TimeSpan.Zero));
+        ExpireHostOnlyTwin(response, AuthCookieNames.Refresh, RefreshCookie(TimeSpan.Zero));
+        ExpireHostOnlyTwin(response, AuthCookieNames.Xsrf, new CookieOptions { Secure = true, SameSite = SameSiteMode.Strict, Path = "/" });
+    }
+
+    /// <summary>
+    /// Shared-domain mode only (T20 review M1): every time a cookie is written with the Domain, the host-only cookie of
+    /// the same name (left over from host-only mode) is expired first, so the browser never sends two cookies of one name
+    /// (a stale refresh token sent first would trigger reuse detection). Written BEFORE the Domain cookie.
+    /// </summary>
+    private void ExpireHostOnlyTwin(HttpResponse response, string name, CookieOptions template)
+    {
+        if (settings.Domain is null)
         {
-            CookieOptions hostOnlyAccess = Expired(AccessCookie(TimeSpan.Zero));
-            hostOnlyAccess.Domain = null;
-            CookieOptions hostOnlyRefresh = Expired(RefreshCookie(TimeSpan.Zero));
-            hostOnlyRefresh.Domain = null;
-            response.Cookies.Append(AuthCookieNames.Access, string.Empty, hostOnlyAccess);
-            response.Cookies.Append(AuthCookieNames.Refresh, string.Empty, hostOnlyRefresh);
+            return;
         }
+
+        CookieOptions hostOnly = Expired(template);
+        hostOnly.Domain = null;
+        response.Cookies.Append(name, string.Empty, hostOnly);
     }
 
     private CookieOptions AccessCookie(TimeSpan maxAge) => new()

@@ -37,6 +37,7 @@ internal sealed class RoleAssignmentService(
     IAuditService audits,
     IUnitOfWork unitOfWork,
     ISessionLiveness liveness,
+    ISessionEndedPublisher sessionsEnded,
     IClock clock) : IRoleAssignmentService
 {
     public async Task<bool> RemoveUserRoleAsync(Guid userId, Guid roleId, AuditContext audit, CancellationToken cancellationToken)
@@ -57,6 +58,7 @@ internal sealed class RoleAssignmentService(
         }
 
         liveness.InvalidateUser(userId);
+        await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.All, SessionEndCause.AdminRevoked, userId), audit, cancellationToken);
         return true;
     }
 
@@ -78,6 +80,7 @@ internal sealed class RoleAssignmentService(
         }
 
         liveness.InvalidateAll();
+        await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.All, SessionEndCause.AdminRevoked, null, RoleId: roleId), audit, cancellationToken);
         return true;
     }
 }

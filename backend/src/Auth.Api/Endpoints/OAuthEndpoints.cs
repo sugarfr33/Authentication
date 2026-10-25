@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Auth.Api.Http;
 using Auth.Api.RateLimiting;
+using Auth.Api.Security;
 using Auth.Contracts;
 using Auth.Contracts.Requests;
 using Auth.Contracts.Responses;
@@ -8,8 +9,10 @@ using Auth.Services.Accounts;
 using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.OAuth;
+using Auth.Services.Security;
 using Auth.Services.Tokens;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 
 namespace Auth.Api.Endpoints;
@@ -22,7 +25,7 @@ namespace Auth.Api.Endpoints;
 /// Origin matched.
 /// Every answer is no-store and no-referrer. Codes appear only in a Location header, never in a body or a log.
 /// </summary>
-internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
+internal sealed partial class OAuthEndpoints(OAuthOptions options) : IEndpointModule
 {
     public const string AuthorizePath = "/api/v1/oauth/authorize";
     public const string TokenPath = "/api/v1/oauth/token";
@@ -80,7 +83,14 @@ internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
             : Error(StatusCodes.Status400BadRequest, OAuthErrorCodes.InvalidClient);
     }
 
-    private static async Task<IResult> LogoutAsync([FromBody] OAuthLogoutRequest request, HttpContext http, IOAuthService oauth, CancellationToken cancellationToken)
+    private static async Task<IResult> LogoutAsync(
+        [FromBody] OAuthLogoutRequest request,
+        HttpContext http,
+        IOAuthService oauth,
+        IClientApplicationOriginProvider clients,
+        IOptions<BrowserProtectionOptions> browserOptions,
+        ILogger<OAuthEndpoints> logger,
+        CancellationToken cancellationToken)
     {
         NoStore(http.Response);
         if (!Guid.TryParse(http.User.FindFirst(AuthClaimTypes.Subject)?.Value, out Guid userId))
@@ -88,11 +98,46 @@ internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
             return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Authentication required.");
         }
 
-        LogoutTarget target = await oauth.LogoutAsync(userId, request.ClientId, request.PostLogoutRedirectUri, request.State, HttpAudit.From(http), cancellationToken);
+        // Bound to the caller (T20 audit M1): only that application's own page, or our auth UI (this origin or a
+        // configured trusted origin), may end its sessions. A sibling application cannot log the user out of others.
+        string? origin = http.Request.Headers.Origin;
+        if (await clients.MatchOriginAsync(request.ClientId, origin, cancellationToken) is null && !IsAuthUiOrigin(http, origin, browserOptions.Value))
+        {
+            return Error(StatusCodes.Status400BadRequest, OAuthErrorCodes.InvalidClient);
+        }
+
+        LogoutTarget target;
+        try
+        {
+            target = await oauth.LogoutAsync(userId, request.ClientId, request.PostLogoutRedirectUri, request.State, HttpAudit.From(http), cancellationToken);
+        }
+        catch (SessionEndFailedException ex)
+        {
+            // Nothing about the browser session changed; the application's sessions may still be live. Retryable.
+            LogLogoutFailed(logger, ex.InnerException?.GetType().Name ?? ex.GetType().Name);
+            return Error(StatusCodes.Status500InternalServerError, OAuthErrorCodes.ServerError);
+        }
+
         return target.Client is ClientApplicationView client
             ? Results.Json(new OAuthLogoutResponse(client.ClientId, target.RedirectTo))
             : Error(StatusCodes.Status400BadRequest, OAuthErrorCodes.InvalidClient);
     }
+
+    /// <summary>Our own auth UI: the API's own origin or one of BrowserProtection:TrustedOrigins.</summary>
+    private static bool IsAuthUiOrigin(HttpContext http, string? origin, BrowserProtectionOptions options)
+    {
+        if (!OriginNormalizer.TryNormalize(origin, out string normalized))
+        {
+            return false;
+        }
+
+        string self = (http.Request.Scheme + "://" + http.Request.Host.Value).ToLowerInvariant();
+        return normalized == self
+            || options.TrustedOrigins.Any(t => OriginNormalizer.TryNormalize(t, out string trusted) && trusted == normalized);
+    }
+
+    [LoggerMessage(EventId = 5320, Level = LogLevel.Warning, Message = "RP-initiated logout could not be completed ({ExceptionType}); nothing was changed for the browser session")]
+    private static partial void LogLogoutFailed(ILogger logger, string exceptionType);
 
     private async Task<IResult> AuthorizeAsync(HttpContext http, IOAuthService oauth, CancellationToken cancellationToken)
     {

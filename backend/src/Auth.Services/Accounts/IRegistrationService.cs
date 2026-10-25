@@ -8,6 +8,7 @@ using Auth.Entities;
 using Auth.Services.Audit;
 using Auth.Services.Common;
 using Auth.Services.Passwords;
+using Auth.Services.Security;
 using Auth.Services.Tokens;
 
 namespace Auth.Services.Accounts;
@@ -52,6 +53,7 @@ internal sealed class RegistrationService(
     IRoleRepository roles,
     IAuditService audits,
     IUnitOfWork unitOfWork,
+    ISessionEndedPublisher sessionsEnded,
     ITokenGenerator generator,
     IEmailSender emailSender,
     IClock clock,
@@ -115,7 +117,14 @@ internal sealed class RegistrationService(
             try
             {
                 (Guid? userId, string? failure) = await VerifyOnceAsync(hash, audit, cancellationToken);
-                return failure is null ? Result.Success() : await AuditVerifyFailureAsync(userId, failure, audit, cancellationToken);
+                if (failure is not null)
+                {
+                    return await AuditVerifyFailureAsync(userId, failure, audit, cancellationToken);
+                }
+
+                // The pending password took effect and every family of the user was revoked in the transaction.
+                await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.All, SessionEndCause.EmailVerified, userId), audit, cancellationToken);
+                return Result.Success();
             }
             catch (ConcurrencyConflictException) when (attempt < MaxVerifyAttempts)
             {

@@ -8,6 +8,8 @@ namespace Auth.Services.Security;
 /// <summary>Settings for the live-session check on access tokens (configuration section <c>SessionLiveness</c>).</summary>
 public sealed class SessionLivenessOptions
 {
+    public const string SectionName = "SessionLiveness";
+
     /// <summary>How long a lookup result is reused. 0 to 30 seconds; 0 disables the cache.</summary>
     public TimeSpan CacheDuration { get; set; } = TimeSpan.FromSeconds(5);
 
