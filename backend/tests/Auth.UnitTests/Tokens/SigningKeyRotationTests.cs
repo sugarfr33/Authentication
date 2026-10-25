@@ -54,6 +54,30 @@ public sealed class SigningKeyRotationTests : IDisposable
         await harness.AddKeyAsync("k2", KeyHarness.Start + Overlap);
     }
 
+    /// <summary>
+    /// T20 (T07/T09 review): a key that is only published (future-dated, nothing signs yet) may already be cached by
+    /// resource servers, so a further key needs the full overlap too; it is no longer a bootstrap.
+    /// </summary>
+    [Fact]
+    public async Task A_published_future_key_requires_the_overlap_for_the_next_key()
+    {
+        await harness.AddKeyAsync("k1", KeyHarness.Start);
+        await harness.AddKeyAsync("k2", KeyHarness.Start + Overlap + Overlap);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => harness.AddKeyAsync("k3", KeyHarness.Start + Overlap - TimeSpan.FromSeconds(1)));
+        await harness.AddKeyAsync("k3", KeyHarness.Start + Overlap);
+    }
+
+    [Fact]
+    public async Task With_only_a_future_dated_key_published_a_new_key_cannot_start_now()
+    {
+        await harness.AddKeyAsync("k1", KeyHarness.Start + Overlap);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => harness.AddKeyAsync("k2", KeyHarness.Start));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => harness.AddKeyAsync("k2", KeyHarness.Start - TimeSpan.FromMinutes(1)));
+    }
+
     [Fact]
     public async Task New_key_is_in_the_JWKS_before_it_activates_while_the_old_key_keeps_signing()
     {

@@ -36,10 +36,12 @@ internal sealed class SigningKeyRotation(
 
         DateTime now = clock.UtcNow;
         IReadOnlyList<SigningKey> publishable = await repository.GetPublishableAsync(cancellationToken);
-        bool bootstrap = SigningKeySchedule.CurrentSigningKey(publishable, now) is null;
+        // Bootstrap only when NO key is published at all (T20, from the T07/T09 review): a published key, even one dated
+        // in the future, may already be cached by resource servers, so any new key needs the full overlap too.
+        bool bootstrap = SigningKeySchedule.Published(publishable, now).Count == 0;
         if (bootstrap && activateAtUtc < now)
         {
-            // Nothing signs yet, so there is nothing to overlap with: the first key may start now (an earlier time means now).
+            // Nothing is published, so there is nothing to overlap with: the first key may start now (an earlier time means now).
             activateAtUtc = now;
         }
 
