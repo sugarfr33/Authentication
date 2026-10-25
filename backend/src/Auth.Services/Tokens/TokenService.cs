@@ -9,9 +9,6 @@ namespace Auth.Services.Tokens;
 
 internal sealed class TokenService(SigningKeyProvider keys, IClock clock, TokenOptions options) : ITokenService
 {
-    /// <summary>RFC 9068 access-token type; validation accepts only this, so ID tokens or other JWTs cannot be replayed as access tokens.</summary>
-    public const string AccessTokenType = "at+jwt";
-
     private readonly JsonWebTokenHandler handler = new() { MapInboundClaims = false, SetDefaultTimesOnTokenCreation = false };
 
     public async Task<AccessToken> CreateAccessTokenAsync(AccessTokenRequest request, CancellationToken cancellationToken)
@@ -49,7 +46,7 @@ internal sealed class TokenService(SigningKeyProvider keys, IClock clock, TokenO
             IssuedAt = now,
             NotBefore = now,
             Expires = expires,
-            TokenType = AccessTokenType,
+            TokenType = AuthTokenTypes.AccessToken,
             Claims = claims,
             SigningCredentials = new SigningCredentials(ToSecurityKey(key.Kid, key.PrivateKey), ToSecurityAlgorithm(key.Algorithm)),
         };
@@ -77,7 +74,7 @@ internal sealed class TokenService(SigningKeyProvider keys, IClock clock, TokenO
             ClockSkew = options.ClockSkew,
             RequireSignedTokens = true,
             ValidateIssuerSigningKey = true,
-            ValidTypes = [AccessTokenType],
+            ValidTypes = [AuthTokenTypes.AccessToken],
 
             // Only the algorithms of the published keys (normally just the active key's ES256): no "none", no HMAC.
             ValidAlgorithms = candidates.Select(c => c.Algorithm).Distinct(StringComparer.Ordinal).ToList(),

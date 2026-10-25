@@ -29,7 +29,9 @@ public static class CentralAuthServiceCollectionExtensions
 
         builder.Services.TryAddSingleton(TimeProvider.System);
         builder.Services.TryAddSingleton<JwksCacheRegistry>();
-        builder.Services.AddHttpClient(CentralAuthDefaults.JwksHttpClientName);
+        // Never follow a redirect: an open redirect on the issuer host must not hand the client an attacker's JWKS.
+        builder.Services.AddHttpClient(CentralAuthDefaults.JwksHttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IPostConfigureOptions<CentralAuthOptions>, CentralAuthPostConfigure>());
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<CentralAuthOptions>, CentralAuthOptionsValidator>());
         builder.Services.AddOptions<CentralAuthOptions>(scheme).ValidateOnStart();

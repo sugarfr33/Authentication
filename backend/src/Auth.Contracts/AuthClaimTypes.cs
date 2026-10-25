@@ -14,3 +14,10 @@ public static class AuthClaimTypes
 
     public const string ClientId = "client_id";
 }
+
+/// <summary>JWT header <c>typ</c> values issued by central auth; resource servers accept only these (T22).</summary>
+public static class AuthTokenTypes
+{
+    /// <summary>RFC 9068 access token. Validation accepts only this, so ID tokens or other JWTs cannot be replayed as access tokens.</summary>
+    public const string AccessToken = "at+jwt";
+}

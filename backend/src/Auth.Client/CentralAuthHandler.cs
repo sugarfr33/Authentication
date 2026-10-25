@@ -16,8 +16,8 @@ namespace Auth.Client;
 
 /// <summary>
 /// Optional live-session check (docs/t22-client-extension.md section 7). When the host registers an implementation, it
-/// is called after a token validated; false, or an exception, means 401 (fail closed). Without one, a token stays valid
-/// until it expires.
+/// is called after a token validated; false, or an exception (its own timeout included), means 401 (fail closed).
+/// Without one, a token stays valid until it expires.
 /// </summary>
 public interface ICentralAuthSessionValidator
 {
@@ -30,9 +30,10 @@ public interface ICentralAuthSessionValidator
 
 /// <summary>
 /// Validates a central-auth access token (Bearer header, or the access cookie in cookie mode) against the cached JWKS
-/// with the server's rules: signature by kid with exactly that key's algorithm (ES256 or RS256), <c>typ</c> at+jwt,
-/// issuer, audience, lifetime, then the <c>client_id</c> rule. Every failure is a bare 401 with
-/// <c>WWW-Authenticate: Bearer error="invalid_token"</c>; the reason is logged at Debug, never the token.
+/// with the server's rules: signature by kid with exactly that key's algorithm (ES256 or RS256), <c>typ</c>
+/// <see cref="AuthTokenTypes.AccessToken"/>, issuer, audience, lifetime, then the <c>client_id</c> rule. Every failure is
+/// a bare 401 with <c>WWW-Authenticate: Bearer error="invalid_token"</c>; the reason is logged at Debug, never the token.
+/// Every setting comes from the scheme's options snapshot held by its JWKS cache (a change needs a restart).
 /// </summary>
 internal sealed partial class CentralAuthHandler(
     IOptionsMonitor<CentralAuthOptions> options,
@@ -41,9 +42,6 @@ internal sealed partial class CentralAuthHandler(
     JwksCacheRegistry caches,
     TimeProvider time) : AuthenticationHandler<CentralAuthOptions>(options, logger, encoder)
 {
-    /// <summary>RFC 9068 access-token type, as central auth issues it.</summary>
-    public const string AccessTokenType = "at+jwt";
-
     /// <summary>A real access token is a few hundred bytes; refuse to parse anything absurdly large.</summary>
     public const int MaxTokenLength = 8192;
 
@@ -53,7 +51,9 @@ internal sealed partial class CentralAuthHandler(
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        (string? token, bool fromCookie, string? refusal) = ReadToken();
+        JwksCache cache = caches.For(Scheme.Name, Options);
+        CentralAuthOptions settings = cache.Options;
+        (string? token, bool fromCookie, string? refusal) = ReadToken(settings);
         if (refusal is not null)
         {
             return Refuse(refusal);
@@ -64,9 +64,9 @@ internal sealed partial class CentralAuthHandler(
             return AuthenticateResult.NoResult();
         }
 
-        if (fromCookie && !HasXsrfProof())
+        if (fromCookie && CookieRequestRefusal(settings) is string csrf)
         {
-            return Refuse("xsrf");
+            return Refuse(csrf);
         }
 
         if (token.Length > MaxTokenLength)
@@ -89,10 +89,16 @@ internal sealed partial class CentralAuthHandler(
             return Refuse("encrypted");
         }
 
+        // No critical header extension is understood here, so any "crit" makes the token unacceptable (RFC 7515 4.1.11).
+        if (unverified.TryGetHeaderValue("crit", out object? _))
+        {
+            return Refuse("crit");
+        }
+
         JwksKeys keys;
         try
         {
-            keys = await caches.For(Scheme.Name, Options).GetKeysAsync(unverified.Kid, Context.RequestAborted).ConfigureAwait(false);
+            keys = await cache.GetKeysAsync(unverified.Kid, Context.RequestAborted).ConfigureAwait(false);
         }
         catch (JwksUnavailableException)
         {
@@ -101,16 +107,16 @@ internal sealed partial class CentralAuthHandler(
             return AuthenticateResult.Fail(Invalid);
         }
 
-        TokenValidationResult result = await TokenHandler.ValidateTokenAsync(token, Parameters(keys)).ConfigureAwait(false);
+        TokenValidationResult result = await TokenHandler.ValidateTokenAsync(token, Parameters(settings, keys)).ConfigureAwait(false);
         if (!result.IsValid || result.ClaimsIdentity is not ClaimsIdentity identity)
         {
             return Refuse(result.Exception?.GetType().Name ?? "invalid");
         }
 
-        string? clientId = identity.FindFirst(AuthClaimTypes.ClientId)?.Value;
-        if (!string.Equals(clientId, Options.ClientId, StringComparison.Ordinal))
+        List<Claim> clientIds = [.. identity.FindAll(AuthClaimTypes.ClientId)];
+        if (clientIds.Count > 1 || !string.Equals(clientIds.SingleOrDefault()?.Value, settings.ClientId, StringComparison.Ordinal))
         {
-            return Refuse(Options.ClientId is null ? "client_token_at_browser_api" : "client_id_mismatch");
+            return Refuse(settings.ClientId is null ? "client_token_at_browser_api" : "client_id_mismatch");
         }
 
         if (!Guid.TryParse(identity.FindFirst(AuthClaimTypes.Subject)?.Value, out Guid userId))
@@ -129,8 +135,9 @@ internal sealed partial class CentralAuthHandler(
                     return Refuse("session_ended");
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (!(ex is OperationCanceledException && Context.RequestAborted.IsCancellationRequested))
             {
+                // Includes the hook's own timeout (OperationCanceledException while the request is still alive).
                 LogSessionCheckFailed(Logger, ex.GetType().Name);
                 return AuthenticateResult.Fail(Invalid);
             }
@@ -149,9 +156,9 @@ internal sealed partial class CentralAuthHandler(
             result.Failure is null ? "Bearer" : "Bearer error=\"" + OAuthErrorCodes.InvalidToken + "\"");
     }
 
-    private (string? Token, bool FromCookie, string? Refusal) ReadToken()
+    private (string? Token, bool FromCookie, string? Refusal) ReadToken(CentralAuthOptions settings)
     {
-        if (Options.AcceptBearer && Request.Headers.Authorization is { Count: > 0 } authorization)
+        if (settings.AcceptBearer && Request.Headers.Authorization is { Count: > 0 } authorization)
         {
             if (authorization.Count > 1)
             {
@@ -169,38 +176,57 @@ internal sealed partial class CentralAuthHandler(
             return (null, false, null);
         }
 
-        return Options.AcceptCookie && Request.Cookies.TryGetValue(Options.CookieName, out string? cookie) && !string.IsNullOrEmpty(cookie)
+        return settings.AcceptCookie && Request.Cookies.TryGetValue(settings.CookieName, out string? cookie) && !string.IsNullOrEmpty(cookie)
             ? (cookie, true, null)
             : (null, false, null);
     }
 
-    /// <summary>Double submit for cookie-authenticated unsafe requests: the X-XSRF-TOKEN header equals the XSRF-TOKEN cookie.</summary>
-    private bool HasXsrfProof()
+    /// <summary>
+    /// CSRF rules for cookie-authenticated unsafe requests (docs section 6); null when the request passes. Sec-Fetch-Site
+    /// must not be cross-site, Origin must be present and in AllowedOrigins, and the X-XSRF-TOKEN header must equal the
+    /// XSRF-TOKEN cookie. Safe methods pass.
+    /// </summary>
+    private string? CookieRequestRefusal(CentralAuthOptions settings)
     {
         if (HttpMethods.IsGet(Request.Method) || HttpMethods.IsHead(Request.Method) || HttpMethods.IsOptions(Request.Method) || HttpMethods.IsTrace(Request.Method))
         {
-            return true;
+            return null;
+        }
+
+        if (string.Equals(Request.Headers["Sec-Fetch-Site"].ToString(), "cross-site", StringComparison.OrdinalIgnoreCase))
+        {
+            return "cross_site";
+        }
+
+        string? origin = OriginRules.Normalize(Request.Headers.Origin.ToString(), settings.RequireHttpsMetadata);
+        if (origin is null || !settings.AllowedOrigins.Any(o => string.Equals(OriginRules.Normalize(o, settings.RequireHttpsMetadata), origin, StringComparison.Ordinal)))
+        {
+            return "origin";
         }
 
         string header = Request.Headers[AuthCookieNames.XsrfHeader].ToString();
         return header.Length > 0
             && Request.Cookies.TryGetValue(AuthCookieNames.Xsrf, out string? cookie)
-            && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(header), Encoding.UTF8.GetBytes(cookie ?? string.Empty));
+            && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(header), Encoding.UTF8.GetBytes(cookie ?? string.Empty))
+            ? null
+            : "xsrf";
     }
 
-    private TokenValidationParameters Parameters(JwksKeys keys) => new()
+    private TokenValidationParameters Parameters(CentralAuthOptions settings, JwksKeys keys) => new()
     {
         ValidateIssuer = true,
-        ValidIssuer = Options.Issuer,
+        ValidIssuer = settings.Issuer,
         ValidateAudience = true,
-        ValidAudience = Options.Audience,
+        ValidAudience = settings.Audience,
         ValidateLifetime = true,
         RequireExpirationTime = true,
-        ClockSkew = Options.ClockSkew,
-        LifetimeValidator = (notBefore, expires, _, _) => LifetimeIsValid(notBefore, expires),
+        ClockSkew = settings.ClockSkew,
+        LifetimeValidator = (notBefore, expires, _, _) => LifetimeIsValid(settings.ClockSkew, notBefore, expires),
         RequireSignedTokens = true,
         ValidateIssuerSigningKey = true,
-        ValidTypes = [AccessTokenType],
+        ValidTypes = [AuthTokenTypes.AccessToken],
+
+        // Central auth signs with ES256 by default and can publish RS256 keys (SigningKeyAlgorithm); nothing else.
         ValidAlgorithms = [SecurityAlgorithms.EcdsaSha256, SecurityAlgorithms.RsaSha256],
 
         // The key must match the token's kid AND the token's alg must be that key's own algorithm.
@@ -212,12 +238,12 @@ internal sealed partial class CentralAuthHandler(
     };
 
     /// <summary>exp is required; both bounds against the injected clock (the JWKS cache uses the same one), with the skew.</summary>
-    private bool LifetimeIsValid(DateTime? notBefore, DateTime? expires)
+    private bool LifetimeIsValid(TimeSpan skew, DateTime? notBefore, DateTime? expires)
     {
         DateTime now = time.GetUtcNow().UtcDateTime;
         return expires is DateTime exp
-            && now - Options.ClockSkew < exp.ToUniversalTime()
-            && (notBefore is not DateTime nbf || (nbf.ToUniversalTime() <= exp.ToUniversalTime() && nbf.ToUniversalTime() <= now + Options.ClockSkew));
+            && now - skew < exp.ToUniversalTime()
+            && (notBefore is not DateTime nbf || (nbf.ToUniversalTime() <= exp.ToUniversalTime() && nbf.ToUniversalTime() <= now + skew));
     }
 
     private AuthenticateResult Refuse(string reason)

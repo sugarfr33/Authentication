@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Auth.Client;
 using Auth.Contracts;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 
 namespace Auth.SampleApi;
@@ -24,14 +25,24 @@ public sealed class SampleApiProgram
     {
         WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
         builder.Services.AddCentralAuth(builder.Configuration.GetSection("CentralAuth"));
+        // Default deny: an endpoint without its own rule still needs a valid token (/health opts out explicitly).
         builder.Services.AddAuthorizationBuilder()
-            .AddPolicy("Reader", policy => policy.RequireAssertion(context =>
+            .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
+            .AddPolicy("Reader", policy => policy.RequireAuthenticatedUser().RequireAssertion(context =>
             {
                 string? clientId = context.User.FindFirst(AuthClaimTypes.ClientId)?.Value;
-                return clientId is not null && context.User.IsInRole("app:" + clientId + ":" + ReaderRole);
+                return clientId is not null && context.User.IsInRole(AuthRoles.ApplicationRole(clientId, ReaderRole));
             }));
 
+        // No CORS on purpose: this sample is called server to server or from its own origin. Add a CORS policy listing
+        // exact origins if a browser app on another origin must call it.
         WebApplication app = builder.Build();
+        if (!app.Environment.IsDevelopment())
+        {
+            app.UseHsts();
+            app.UseHttpsRedirection();
+        }
+
         app.UseAuthentication();
         app.UseAuthorization();
 
@@ -43,7 +54,8 @@ public sealed class SampleApiProgram
             [.. user.FindAll(AuthClaimTypes.Permission).Select(c => c.Value)]))).RequireAuthorization();
         app.MapGet("/api/reports", (IOptionsMonitor<CentralAuthOptions> options) =>
             Results.Ok(new { client = options.Get(CentralAuthDefaults.AuthenticationScheme).ClientId, reports = Array.Empty<string>() })).RequireAuthorization("Reader");
-        app.MapPost("/api/notes", () => Results.NoContent()).RequireAuthorization();
+        // No rule of its own: the fallback policy (authenticated user) protects it.
+        app.MapPost("/api/notes", () => Results.NoContent());
         return app;
     }
 }

@@ -103,7 +103,7 @@ internal sealed class ClientSessionService(
 /// <summary>Rules for role names (T18 review: global roles must never look like application roles).</summary>
 public static class RoleNames
 {
-    public const string ApplicationPrefix = "app:";
+    public const string ApplicationPrefix = AuthRoles.ApplicationPrefix;
 
     /// <summary>
     /// True for names a GLOBAL role may not have: they start with <c>app:</c>, the claim prefix of application roles.
@@ -113,5 +113,5 @@ public static class RoleNames
         name.TrimStart().StartsWith(ApplicationPrefix, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The claim value of an application-scoped role: <c>app:{clientId}:{name}</c>.</summary>
-    public static string AppRole(string clientId, string roleName) => ApplicationPrefix + clientId + ":" + roleName;
+    public static string AppRole(string clientId, string roleName) => AuthRoles.ApplicationRole(clientId, roleName);
 }

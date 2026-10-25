@@ -22,6 +22,12 @@ public static class AuthRoles
 
     /// <summary>Default role of every verified account; no administrative permission.</summary>
     public const string User = "User";
+
+    /// <summary>Claim prefix of application-scoped roles (T18): <c>app:{clientId}:{name}</c>. Never the start of a global role.</summary>
+    public const string ApplicationPrefix = "app:";
+
+    /// <summary>The <c>role</c> claim value of an application-scoped role: <c>app:{clientId}:{name}</c>.</summary>
+    public static string ApplicationRole(string clientId, string roleName) => ApplicationPrefix + clientId + ":" + roleName;
 }
 
 /// <summary>

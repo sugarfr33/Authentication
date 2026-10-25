@@ -13,7 +13,7 @@ public class LayerDependencyTests
     private static readonly Assembly Dal = typeof(Auth.DAL.AssemblyMarker).Assembly;
     private static readonly Assembly Entities = typeof(Auth.Entities.AssemblyMarker).Assembly;
     private static readonly Assembly Contracts = typeof(Auth.Contracts.AssemblyMarker).Assembly;
-    private static readonly Assembly Client = typeof(Auth.Client.CentralAuthOptions).Assembly;
+    private static readonly Assembly Client = typeof(Auth.Client.AssemblyMarker).Assembly;
     private static readonly Assembly SampleApi = typeof(Auth.SampleApi.SampleApiProgram).Assembly;
 
     public static TheoryData<string, string[]> ForbiddenDependencies => new()

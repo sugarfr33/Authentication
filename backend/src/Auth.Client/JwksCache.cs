@@ -36,10 +36,16 @@ internal sealed class JwksUnavailableException : Exception
 }
 
 /// <summary>
-/// The JWKS cache of one scheme (docs/t22-client-extension.md section 5). Filled on first use, refreshed when older than
-/// JwksRefreshInterval, and refreshed for an unknown kid at most once per JwksMinRefreshInterval (one fetch at a time;
-/// concurrent callers share it). Never a fetch per request. If a refresh fails, the last good set is kept until
-/// JwksMaxStaleness; with no usable set at all, callers get <see cref="JwksUnavailableException"/> (fail closed).
+/// The JWKS cache of one scheme (docs/t22-client-extension.md section 5), with the scheme's options snapshot taken at
+/// first use (a change needs a restart).
+/// <list type="bullet">
+/// <item>First use, an unknown kid, or keys older than JwksMaxStaleness: the caller waits for one fetch (single flight),
+/// rate limited to one unplanned fetch per JwksMinRefreshInterval.</item>
+/// <item>Keys older than JwksRefreshInterval but usable: served at once while ONE background refresh runs
+/// (stale-while-revalidate), so callers never queue behind a slow fetch.</item>
+/// <item>After a failed refresh the last good set is kept until JwksMaxStaleness (with a rate-limited warning), then
+/// callers get <see cref="JwksUnavailableException"/> (fail closed).</item>
+/// </list>
 /// </summary>
 internal sealed partial class JwksCache(CentralAuthOptions options, IHttpClientFactory httpClients, TimeProvider time, ILogger logger) : IDisposable
 {
@@ -50,24 +56,41 @@ internal sealed partial class JwksCache(CentralAuthOptions options, IHttpClientF
     private readonly SemaphoreSlim gate = new(1, 1);
     private Snapshot? current;
     private DateTimeOffset? lastAttempt;
+    private DateTimeOffset? lastStaleWarning;
+    private bool lastFetchFailed;
+    private int backgroundRunning;
+
+    /// <summary>The options this cache (and the handler using it) works with: the scheme's snapshot at first use.</summary>
+    public CentralAuthOptions Options => options;
+
+    /// <summary>The running background refresh, if any (tests await it).</summary>
+    internal Task? BackgroundRefresh { get; private set; }
 
     /// <summary>The keys to validate a token with <paramref name="kid"/> (null: whatever is current).</summary>
     public async Task<JwksKeys> GetKeysAsync(string? kid, CancellationToken cancellationToken)
     {
-        if (Usable(Volatile.Read(ref current), kid, time.GetUtcNow()) is JwksKeys ready)
+        Snapshot? snapshot = Volatile.Read(ref current);
+        DateTimeOffset now = time.GetUtcNow();
+        if (snapshot is not null && (kid is null || snapshot.Keys.Contains(kid)) && now - snapshot.FetchedUtc < options.JwksMaxStaleness)
         {
-            return ready;
+            if (now - snapshot.FetchedUtc >= options.JwksRefreshInterval)
+            {
+                StartBackgroundRefresh(now);
+                WarnIfStale(snapshot, now);
+            }
+
+            return snapshot.Keys;
         }
 
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            Snapshot? snapshot = current;
-            DateTimeOffset now = time.GetUtcNow();
-            if (Usable(snapshot, kid, now) is JwksKeys refreshed)
+            snapshot = current;
+            now = time.GetUtcNow();
+            if (snapshot is not null && (kid is null || snapshot.Keys.Contains(kid)) && now - snapshot.FetchedUtc < options.JwksRefreshInterval)
             {
                 // Another caller refreshed while this one waited.
-                return refreshed;
+                return snapshot.Keys;
             }
 
             // Unplanned fetches (an unknown kid, or a retry after a failure) are rate limited for the whole cache.
@@ -76,19 +99,7 @@ internal sealed partial class JwksCache(CentralAuthOptions options, IHttpClientF
                 return Fallback(snapshot, now, null);
             }
 
-            lastAttempt = now;
-            try
-            {
-                JwksKeys keys = await FetchAsync().ConfigureAwait(false);
-                Volatile.Write(ref current, new Snapshot(keys, now));
-                LogRefreshed(logger, keys.Count);
-                return keys;
-            }
-            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or InvalidDataException or ArgumentException or FormatException)
-            {
-                LogFetchFailed(logger, ex.GetType().Name);
-                return Fallback(snapshot, now, ex);
-            }
+            return await FetchUnderGateAsync(snapshot, now).ConfigureAwait(false) ?? Fallback(snapshot, now, null);
         }
         finally
         {
@@ -98,7 +109,7 @@ internal sealed partial class JwksCache(CentralAuthOptions options, IHttpClientF
 
     public void Dispose() => gate.Dispose();
 
-    /// <summary>Keeps only well-formed signing keys of the two algorithms central auth uses. Throws when none is usable.</summary>
+    /// <summary>Keeps only well-formed signing keys of the two algorithms central auth signs with. Throws when none is usable.</summary>
     internal static JwksKeys Parse(string json)
     {
         JsonWebKeySet set = new(json);
@@ -136,15 +147,81 @@ internal sealed partial class JwksCache(CentralAuthOptions options, IHttpClientF
         };
     }
 
-    private JwksKeys? Usable(Snapshot? snapshot, string? kid, DateTimeOffset now) =>
-        snapshot is not null && now - snapshot.FetchedUtc < options.JwksRefreshInterval && (kid is null || snapshot.Keys.Contains(kid))
-            ? snapshot.Keys
-            : null;
+    /// <summary>One fetch (the gate is held): the new keys, or null after a failure (logged).</summary>
+    private async Task<JwksKeys?> FetchUnderGateAsync(Snapshot? snapshot, DateTimeOffset now)
+    {
+        lastAttempt = now;
+        try
+        {
+            JwksKeys keys = await FetchAsync().ConfigureAwait(false);
+            Volatile.Write(ref current, new Snapshot(keys, time.GetUtcNow()));
+            lastFetchFailed = false;
+            LogRefreshed(logger, keys.Count);
+            return keys;
+        }
+#pragma warning disable CA1031 // Any fetch failure (network, redirect, timeout, bad document, odd URI) is a failed fetch: 401, never 500.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            lastFetchFailed = true;
+            LogFetchFailed(logger, ex.GetType().Name);
+            if (snapshot is not null)
+            {
+                WarnIfStale(snapshot, now);
+            }
 
-    /// <summary>
-    /// No fetch now: the last good set while it is not too old (for an unknown kid, validation then fails), else fail
-    /// closed.
-    /// </summary>
+            return null;
+        }
+    }
+
+    /// <summary>Starts one background refresh unless one runs or the last attempt is too recent.</summary>
+    private void StartBackgroundRefresh(DateTimeOffset now)
+    {
+        if ((lastAttempt is DateTimeOffset last && now - last < options.JwksMinRefreshInterval) || Interlocked.CompareExchange(ref backgroundRunning, 1, 0) != 0)
+        {
+            return;
+        }
+
+        BackgroundRefresh = Task.Run(async () =>
+        {
+            try
+            {
+                await gate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    DateTimeOffset at = time.GetUtcNow();
+                    Snapshot? snapshot = current;
+                    bool due = snapshot is null || at - snapshot.FetchedUtc >= options.JwksRefreshInterval;
+                    if (due && !(lastAttempt is DateTimeOffset previous && at - previous < options.JwksMinRefreshInterval))
+                    {
+                        await FetchUnderGateAsync(snapshot, at).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }
+            finally
+            {
+                Volatile.Write(ref backgroundRunning, 0);
+            }
+        });
+    }
+
+    /// <summary>A Warning when keys are served after a failed refresh, at most once per JwksMinRefreshInterval.</summary>
+    private void WarnIfStale(Snapshot snapshot, DateTimeOffset now)
+    {
+        if (!lastFetchFailed || (lastStaleWarning is DateTimeOffset last && now - last < options.JwksMinRefreshInterval))
+        {
+            return;
+        }
+
+        lastStaleWarning = now;
+        LogStaleKeys(logger, (int)(now - snapshot.FetchedUtc).TotalMinutes);
+    }
+
+    /// <summary>No fetch now (or it failed): the last good set while it is not too old (for an unknown kid, validation then fails), else fail closed.</summary>
     private JwksKeys Fallback(Snapshot? snapshot, DateTimeOffset now, Exception? cause)
     {
         if (snapshot is not null && now - snapshot.FetchedUtc < options.JwksMaxStaleness)
@@ -158,6 +235,7 @@ internal sealed partial class JwksCache(CentralAuthOptions options, IHttpClientF
 
     /// <summary>
     /// One fetch with its own timeout (not the request's token, so one aborted request does not spoil the shared fetch).
+    /// Redirects are never followed (the primary handler has them off), so any 3xx fails here.
     /// </summary>
     private async Task<JwksKeys> FetchAsync()
     {
@@ -193,13 +271,16 @@ internal sealed partial class JwksCache(CentralAuthOptions options, IHttpClientF
     [LoggerMessage(EventId = 7201, Level = LogLevel.Information, Message = "Central-auth JWKS loaded ({KeyCount} usable keys)")]
     private static partial void LogRefreshed(ILogger logger, int keyCount);
 
-    [LoggerMessage(EventId = 7202, Level = LogLevel.Warning, Message = "Central-auth JWKS fetch failed ({ExceptionType}); keeping the last good keys while they are not too old")]
+    [LoggerMessage(EventId = 7202, Level = LogLevel.Warning, Message = "Central-auth JWKS fetch failed ({ExceptionType})")]
     private static partial void LogFetchFailed(ILogger logger, string exceptionType);
+
+    [LoggerMessage(EventId = 7203, Level = LogLevel.Warning, Message = "Serving stale central-auth signing keys ({AgeMinutes} min old) because the JWKS cannot be refreshed; they are refused after JwksMaxStaleness")]
+    private static partial void LogStaleKeys(ILogger logger, int ageMinutes);
 
     private sealed record Snapshot(JwksKeys Keys, DateTimeOffset FetchedUtc);
 }
 
-/// <summary>One <see cref="JwksCache"/> per authentication scheme, created with that scheme's options on first use.</summary>
+/// <summary>One <see cref="JwksCache"/> per authentication scheme, created with that scheme's options snapshot on first use.</summary>
 internal sealed class JwksCacheRegistry(IHttpClientFactory httpClients, TimeProvider time, ILoggerFactory loggers) : IDisposable
 {
     private readonly ConcurrentDictionary<string, Lazy<JwksCache>> caches = new(StringComparer.Ordinal);

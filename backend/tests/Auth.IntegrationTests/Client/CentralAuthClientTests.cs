@@ -32,7 +32,9 @@ public sealed class CentralAuthClientTests(ApiFixture api) : IAsyncLifetime
 {
     private const string ClientId = "active-app";
     private const string AppAudience = "api://" + ClientId;
-    private const string Reader = "app:" + ClientId + ":" + SampleApiProgram.ReaderRole;
+    private const string AppOrigin = "https://app.example.test";
+    private static readonly string[] CriticalExp = ["exp"];
+    private static readonly string Reader = AuthRoles.ApplicationRole(ClientId, SampleApiProgram.ReaderRole);
 
     private readonly SharedClock clock = new();
     private readonly List<IAsyncDisposable> hosts = [];
@@ -59,6 +61,7 @@ public sealed class CentralAuthClientTests(ApiFixture api) : IAsyncLifetime
         HttpResponseMessage me = await GetAsync(sample, "/api/me", token);
         HttpResponseMessage reports = await GetAsync(sample, "/api/reports", token);
         HttpResponseMessage forbidden = await GetAsync(sample, "/api/reports", withoutRole);
+        HttpResponseMessage fallbackDenies = await SendAsync(sample, HttpMethod.Post, "/api/notes");
 
         Assert.Equal(HttpStatusCode.OK, anonymous.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, noToken.StatusCode);
@@ -69,6 +72,10 @@ public sealed class CentralAuthClientTests(ApiFixture api) : IAsyncLifetime
         Assert.Contains(Reader, body.Roles);
         Assert.Equal(HttpStatusCode.OK, reports.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, fallbackDenies.StatusCode);
+
+        // One shared constant: what the server writes is exactly what the client accepts.
+        Assert.Equal(AuthTokenTypes.AccessToken, new JsonWebToken(token).Typ);
     }
 
     [Fact]
@@ -90,6 +97,8 @@ public sealed class CentralAuthClientTests(ApiFixture api) : IAsyncLifetime
             ["wrong audience"] = Sign(Real(real), SecurityAlgorithms.EcdsaSha256, d => d.Audience = "api://insecure-app"),
             ["wrong issuer"] = Sign(Real(real), SecurityAlgorithms.EcdsaSha256, d => d.Issuer = "https://evil.example.test"),
             ["wrong client_id"] = Sign(Real(real), SecurityAlgorithms.EcdsaSha256, d => d.Claims![AuthClaimTypes.ClientId] = "insecure-app"),
+            ["two client_id values"] = Sign(Real(real), SecurityAlgorithms.EcdsaSha256, d => d.Claims![AuthClaimTypes.ClientId] = new[] { ClientId, ClientId }),
+            ["crit header"] = Sign(Real(real), SecurityAlgorithms.EcdsaSha256, d => d.AdditionalHeaderClaims = new Dictionary<string, object> { ["crit"] = CriticalExp }),
             ["no client_id (browser token)"] = Sign(Real(real), SecurityAlgorithms.EcdsaSha256, d => d.Claims!.Remove(AuthClaimTypes.ClientId)),
             ["wrong typ"] = Sign(Real(real), SecurityAlgorithms.EcdsaSha256, d => d.TokenType = "JWT"),
             ["no subject"] = Sign(Real(real), SecurityAlgorithms.EcdsaSha256, d => d.Claims!.Remove(AuthClaimTypes.Subject)),
@@ -195,14 +204,18 @@ public sealed class CentralAuthClientTests(ApiFixture api) : IAsyncLifetime
         HttpClient sample = Sample(new JwksSource(api.Factory.Server.CreateHandler()), o =>
         {
             (o.Audience, o.ClientId, o.AcceptCookie) = (ApiFixture.Issuer, null, true);
+            o.AllowedOrigins.Add(AppOrigin);
         });
         string browser = await MintAsync(api.Factory, ApiFixture.Issuer, null, []);
         string app = await MintAsync(api.Factory, AppAudience, ClientId, []);
 
         HttpResponseMessage me = await SendAsync(sample, HttpMethod.Get, "/api/me", cookie: browser);
-        HttpResponseMessage postWithoutXsrf = await SendAsync(sample, HttpMethod.Post, "/api/notes", cookie: browser);
-        HttpResponseMessage postWrongXsrf = await SendAsync(sample, HttpMethod.Post, "/api/notes", cookie: browser, xsrf: ("a", "b"));
-        HttpResponseMessage postWithXsrf = await SendAsync(sample, HttpMethod.Post, "/api/notes", cookie: browser, xsrf: ("same", "same"));
+        HttpResponseMessage postWithoutXsrf = await SendAsync(sample, HttpMethod.Post, "/api/notes", cookie: browser, origin: AppOrigin);
+        HttpResponseMessage postWrongXsrf = await SendAsync(sample, HttpMethod.Post, "/api/notes", cookie: browser, xsrf: ("a", "b"), origin: AppOrigin);
+        HttpResponseMessage postWithXsrf = await SendAsync(sample, HttpMethod.Post, "/api/notes", cookie: browser, xsrf: ("same", "same"), origin: AppOrigin);
+        HttpResponseMessage postNoOrigin = await SendAsync(sample, HttpMethod.Post, "/api/notes", cookie: browser, xsrf: ("same", "same"));
+        HttpResponseMessage postOtherOrigin = await SendAsync(sample, HttpMethod.Post, "/api/notes", cookie: browser, xsrf: ("same", "same"), origin: "https://evil.example.test");
+        HttpResponseMessage postCrossSite = await SendAsync(sample, HttpMethod.Post, "/api/notes", cookie: browser, xsrf: ("same", "same"), origin: AppOrigin, fetchSite: "cross-site");
         HttpResponseMessage bearerWins = await SendAsync(sample, HttpMethod.Get, "/api/me", cookie: browser, bearer: "not.a.token");
         HttpResponseMessage appTokenInCookie = await SendAsync(sample, HttpMethod.Get, "/api/me", cookie: app);
         HttpResponseMessage browserBearer = await SendAsync(sample, HttpMethod.Get, "/api/me", bearer: browser);
@@ -211,6 +224,9 @@ public sealed class CentralAuthClientTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized, postWithoutXsrf.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, postWrongXsrf.StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, postWithXsrf.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, postNoOrigin.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, postOtherOrigin.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, postCrossSite.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, bearerWins.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, appTokenInCookie.StatusCode);
         Assert.Equal(HttpStatusCode.OK, browserBearer.StatusCode);
@@ -229,11 +245,14 @@ public sealed class CentralAuthClientTests(ApiFixture api) : IAsyncLifetime
         HttpResponseMessage ended = await GetAsync(sample, "/api/me", token);
         hook.Answer = null;
         HttpResponseMessage broken = await GetAsync(sample, "/api/me", token);
+        hook.TimesOut = true;
+        HttpResponseMessage timedOut = await GetAsync(sample, "/api/me", token);
 
         Assert.Equal(HttpStatusCode.OK, live.StatusCode);
         Assert.Equal((ApiFixture.UserId, (Guid?)session), hook.Seen);
         Assert.Equal(HttpStatusCode.Unauthorized, ended.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, broken.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, timedOut.StatusCode);
     }
 
     [Fact]
@@ -298,9 +317,20 @@ public sealed class CentralAuthClientTests(ApiFixture api) : IAsyncLifetime
     private static Task<HttpResponseMessage> GetAsync(HttpClient client, string path, string token) =>
         SendAsync(client, HttpMethod.Get, path, bearer: token);
 
-    private static Task<HttpResponseMessage> SendAsync(HttpClient client, HttpMethod method, string path, string? bearer = null, string? cookie = null, (string Header, string Cookie)? xsrf = null)
+    private static Task<HttpResponseMessage> SendAsync(
+        HttpClient client, HttpMethod method, string path, string? bearer = null, string? cookie = null, (string Header, string Cookie)? xsrf = null, string? origin = null, string? fetchSite = null)
     {
         HttpRequestMessage request = new(method, path);
+        if (origin is not null)
+        {
+            request.Headers.Add("Origin", origin);
+        }
+
+        if (fetchSite is not null)
+        {
+            request.Headers.Add("Sec-Fetch-Site", fetchSite);
+        }
+
         if (bearer is not null)
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
@@ -365,11 +395,18 @@ public sealed class CentralAuthClientTests(ApiFixture api) : IAsyncLifetime
     {
         public bool? Answer { get; set; } = true;
 
+        public bool TimesOut { get; set; }
+
         public (Guid UserId, Guid? SessionId) Seen { get; private set; }
 
         public Task<bool> IsLiveAsync(Guid userId, Guid? sessionId, ClaimsPrincipal principal, CancellationToken cancellationToken)
         {
             Seen = (userId, sessionId);
+            if (TimesOut)
+            {
+                throw new OperationCanceledException("the hook's own timeout");
+            }
+
             return Answer is bool answer ? Task.FromResult(answer) : throw new InvalidOperationException("session store down");
         }
     }
