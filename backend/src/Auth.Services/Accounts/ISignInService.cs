@@ -228,7 +228,7 @@ internal sealed class SignInService(
     {
         // May clear the change tracker on a retry, so nothing is staged before it, and the user is read again after it.
         await lockout.ResetAsync(user.Id, cancellationToken);
-        await sessionCap.MakeRoomAsync(user.Id, audit, cancellationToken);
+        await sessionCap.MakeRoomAsync(user.Id, null, audit, stageAudit: false, cancellationToken);
         string? newHash = rehashPassword is null ? null : await hasher.HashAsync(rehashPassword, cancellationToken);
         RefreshContext refreshContext = new(audit.IpAddress ?? string.Empty, audit.UserAgent ?? string.Empty);
 

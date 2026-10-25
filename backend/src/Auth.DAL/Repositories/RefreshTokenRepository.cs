@@ -77,7 +77,7 @@ internal sealed class RefreshTokenRepository(AuthDbContext context) : IRefreshTo
             List<LiveToken> live = await context.RefreshToken.AsNoTracking()
                 .Where(t => t.UserId == userId && t.RevokedUtc == null && t.ExpiresUtc > utcNow)
                 .OrderByDescending(t => t.CreatedUtc)
-                .Select(t => new LiveToken(t.FamilyId, t.CreatedUtc, t.IpAddress, t.UserAgent))
+                .Select(t => new LiveToken(t.FamilyId, t.CreatedUtc, t.IpAddress, t.UserAgent, t.ClientApplicationId))
                 .Take(max * 4)
                 .ToListAsync(cancellationToken);
             List<LiveToken> latest = live.GroupBy(t => t.FamilyId).Select(g => g.First()).Take(max).ToList();
@@ -89,7 +89,7 @@ internal sealed class RefreshTokenRepository(AuthDbContext context) : IRefreshTo
                 .Select(g => new { FamilyId = g.Key, CreatedUtc = g.Min(t => t.CreatedUtc) })
                 .ToDictionaryAsync(g => g.FamilyId, g => g.CreatedUtc, cancellationToken);
 
-            return latest.Select(IRefreshSessionSummary (t) => new RefreshSessionSummary(t.FamilyId, started[t.FamilyId], t.CreatedUtc, t.IpAddress, t.UserAgent)).ToList();
+            return latest.Select(IRefreshSessionSummary (t) => new RefreshSessionSummary(t.FamilyId, started[t.FamilyId], t.CreatedUtc, t.IpAddress, t.UserAgent, t.ClientApplicationId)).ToList();
         });
 
     public Task<bool> IsSessionLiveAsync(Guid familyId, Guid userId, DateTime utcNow, CancellationToken cancellationToken) =>
@@ -106,7 +106,7 @@ internal sealed class RefreshTokenRepository(AuthDbContext context) : IRefreshTo
             .Where(t => t.FamilyId == familyId)
             .MinAsync(t => (DateTime?)t.CreatedUtc, cancellationToken));
 
-    private sealed record LiveToken(Guid FamilyId, DateTime CreatedUtc, string IpAddress, string UserAgent);
+    private sealed record LiveToken(Guid FamilyId, DateTime CreatedUtc, string IpAddress, string UserAgent, Guid? ClientApplicationId);
 
-    private sealed record RefreshSessionSummary(Guid FamilyId, DateTime CreatedUtc, DateTime LastUsedUtc, string IpAddress, string UserAgent) : IRefreshSessionSummary;
+    private sealed record RefreshSessionSummary(Guid FamilyId, DateTime CreatedUtc, DateTime LastUsedUtc, string IpAddress, string UserAgent, Guid? ClientApplicationId) : IRefreshSessionSummary;
 }

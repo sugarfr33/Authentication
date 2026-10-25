@@ -62,7 +62,8 @@ internal sealed class ClientSessionService(
             return Result.Failure<SignedIn>(AuthError.Forbidden);
         }
 
-        await sessionCap.MakeRoomAsync(user.Id, audit, cancellationToken);
+        // Staged: saved with the new family, inside the exchange's transaction.
+        await sessionCap.MakeRoomAsync(user.Id, application.Id, audit, stageAudit: true, cancellationToken);
         IssuedRefreshToken refresh;
         try
         {

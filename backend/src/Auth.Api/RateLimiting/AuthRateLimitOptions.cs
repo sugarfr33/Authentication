@@ -73,9 +73,10 @@ public sealed class AuthRateLimitOptions
         [AuthRateLimitKind.ChangePassword] = Policy(10, TimeSpan.FromMinutes(15), null, TimeSpan.Zero),
         [AuthRateLimitKind.Sessions] = Policy(60, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
 
-        // T19: per IP, and /token also per client_id (the "account" key), high enough that one IP cannot starve a client.
+        // T19: per IP; /token also per client AND IP (the "account" key, ClientRateLimit), never one bucket shared by
+        // every caller of an application.
         [AuthRateLimitKind.OAuthAuthorize] = Policy(60, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
-        [AuthRateLimitKind.OAuthToken] = Policy(30, TimeSpan.FromMinutes(1), 600, TimeSpan.FromMinutes(1)),
+        [AuthRateLimitKind.OAuthToken] = Policy(30, TimeSpan.FromMinutes(1), 30, TimeSpan.FromMinutes(1)),
     };
 
     /// <summary>

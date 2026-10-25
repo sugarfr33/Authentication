@@ -20,17 +20,33 @@ public class SessionStartCallSiteTests
     public void Only_the_OAuth_service_starts_client_application_sessions()
     {
         MethodInfo start = typeof(IClientSessionService).GetMethod(nameof(IClientSessionService.StartAsync))!;
-        Assembly[] scanned = [typeof(Auth.Services.AssemblyMarker).Assembly, typeof(Auth.Api.AssemblyMarker).Assembly];
 
-        string[] callers = [.. scanned
+        Assert.Equal(["Auth.Services.OAuth.OAuthService"], CallersOf(start));
+    }
+
+    /// <summary>
+    /// T19 fix review: the IssueAsync overload with a chosen family id could add a token to a live family if misused, so
+    /// only the application-session start (which passes the id the exchange recorded on the code) may call it.
+    /// </summary>
+    [Fact]
+    public void Only_the_client_session_start_issues_a_family_with_a_chosen_id()
+    {
+        MethodInfo issueWithFamily = typeof(Auth.Services.Tokens.IRefreshTokenService).GetMethods()
+            .Single(m => m.Name == nameof(Auth.Services.Tokens.IRefreshTokenService.IssueAsync) && m.GetParameters().Any(p => p.ParameterType == typeof(Guid) && p.Name == "familyId"));
+
+        Assert.Equal(["Auth.Services.ClientApplications.ClientSessionService"], CallersOf(issueWithFamily));
+    }
+
+    private static string[] CallersOf(MethodInfo target)
+    {
+        Assembly[] scanned = [typeof(Auth.Services.AssemblyMarker).Assembly, typeof(Auth.Api.AssemblyMarker).Assembly];
+        return [.. scanned
             .SelectMany(a => a.GetTypes())
             .SelectMany(t => t.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
-                .Where(m => Calls(m, start))
+                .Where(m => Calls(m, target))
                 .Select(_ => OuterMost(t).FullName!))
             .Distinct()
             .Order(StringComparer.Ordinal)];
-
-        Assert.Equal(["Auth.Services.OAuth.OAuthService"], callers);
     }
 
     [Fact]
@@ -83,7 +99,8 @@ public class SessionStartCallSiteTests
     {
         try
         {
-            return module.ResolveMethod(token) is MethodInfo called && called.Name == target.Name && called.DeclaringType == target.DeclaringType;
+            return module.ResolveMethod(token) is MethodInfo called && called.Name == target.Name && called.DeclaringType == target.DeclaringType
+                && called.GetParameters().Select(p => p.ParameterType).SequenceEqual(target.GetParameters().Select(p => p.ParameterType));
         }
         catch (ArgumentException)
         {

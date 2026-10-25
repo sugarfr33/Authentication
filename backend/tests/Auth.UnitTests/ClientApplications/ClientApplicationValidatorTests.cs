@@ -95,6 +95,19 @@ public class ClientApplicationValidatorTests
     public void Bad_client_ids_are_refused(string clientId) =>
         Assert.True(Production.Validate(Request(clientId: clientId)).Errors.ContainsKey("clientId"));
 
+    /// <summary>T19 recheck L-C: the pattern is anchored with \z, and the stored id never keeps a trailing newline (it is trimmed first).</summary>
+    [Theory]
+    [InlineData("orders-spa\n")]
+    [InlineData("orders-spa\r\n")]
+    public void A_newline_suffix_never_reaches_the_stored_client_id(string clientId) =>
+        Assert.Equal("orders-spa", Production.Validate(Request(clientId: clientId)).Valid!.ClientId);
+
+    [Theory]
+    [InlineData("orders\nspa")]
+    [InlineData("orders\u2028spa")]
+    public void An_embedded_line_break_is_refused(string clientId) =>
+        Assert.True(Production.Validate(Request(clientId: clientId)).Errors.ContainsKey("clientId"));
+
     [Theory]
     [InlineData("API://Orders/", "api://orders")]
     [InlineData("https://Orders.Example.com:443/v1/", "https://orders.example.com/v1")]

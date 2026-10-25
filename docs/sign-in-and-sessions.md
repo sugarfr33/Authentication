@@ -137,7 +137,8 @@ cookies, like logout. A revoked session cannot refresh (tested through `/refresh
 - **Cap on live sessions per user (done in T17).** `RefreshTokens:MaxSessionsPerUser` (default 20, 1 to 1000; the
   `RefreshTokens` section is bound and validated at startup).
   Before a login, or an OAuth code exchange (T19), issues a new family, the least recently used live families beyond
-  19 are revoked, counting browser and application sessions together (`ISessionCap`) (reason `Admin`,
+  19 are revoked, counting browser and application sessions together (`ISessionCap`; the starting client's own
+  families, or the browser's for a login, go first) (reason `Admin`,
   audited `SessionRevoked` with reason `session_cap`, cache invalidated on this instance). Done before the new session
   exists, so a failure fails the login cleanly. Two simultaneous logins can leave one family over the cap until the
   next login (tested: the 4th login with a cap of 3 ends the oldest; the list shows the 3 newest).

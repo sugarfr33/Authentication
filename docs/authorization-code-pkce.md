@@ -104,12 +104,15 @@ The reason goes to the audit log only. Nothing in the error body says which chec
   replaces the token check. `/authorize` is a GET with side effects, covered by PKCE (section 6).
 - **Rate limits:** kinds `OAuthAuthorize` (per IP) and `OAuthToken` (per IP and per client).
   - **Built:** `OAuthAuthorize` allows 60 per minute per IP.
-  - `OAuthToken` allows 30 per minute per IP and 600 per minute per client. The per-client limit is high on purpose,
-    so that one IP cannot starve every user of an application.
-  - The per-client limit is applied **by the endpoint, after the Origin matched the client's own registered origin**,
-    and keyed on the canonical client id in lower case. A request that only names a client in its body, from anywhere
-    else, counts against its IP only, so nobody can exhaust another application's bucket; letter-case variants of a
-    client id share one bucket (T19 audit M1, tested).
+  - `OAuthToken` allows 30 per minute per IP, and 30 per minute **per client and IP** (`ClientRateLimit`).
+  - There is deliberately **no bucket shared by every caller of an application** (T19 recheck M-A). Outside a browser
+    `Origin` is just a header, and an application's origin is public, so a shared per-client bucket could be drained
+    from many addresses to answer 429 to every real user. Per client and IP, a script with many addresses spends only
+    its own buckets; each address stays limited (tested with rotating forwarded addresses). Mass abuse from many
+    addresses is a job for the edge (WAF, CDN), not for a per-application budget here.
+  - The per-client rule is applied **by the endpoint, after the Origin matched the client's own registered origin**,
+    keyed on the canonical client id in lower case (letter-case variants share one bucket) plus the caller's address
+    (IPv6 per /64). A request that only names a client from another origin counts against its IP only.
   - An architecture-style test maps the real OAuth routes and checks that every anonymous one has a rate-limit kind.
 - **Per-IP limits need the real client IP.** Behind a reverse proxy, `ForwardedHeaders:KnownProxies` must be set (the
   `ProxyMisconfigurationDetector` warns otherwise); without it every user shares the proxy's bucket, and one office
@@ -123,6 +126,11 @@ The reason goes to the audit log only. Nothing in the error body says which chec
   the 30 s cache elsewhere). Its `/token` calls are then refused by the general origin check (403) before the exchange
   (tested: never tokens). The client and redirect-URI checks of `/authorize` use the same cached read model; the
   exchange itself re-reads the application from the database.
+- **Built: the 30 s cache window for redirect URIs.** On other instances, `/authorize` can keep issuing codes for a
+  redirect URI that was just removed (or for an application just deactivated) for up to
+  `ClientApplicationOriginOptions.CacheDuration` (30 s); this instance drops the cache at once. Such a code is useless:
+  the exchange re-reads the application and requires the code's redirect URI to be **still registered** (reason
+  `redirect_mismatch`, T19 recheck L-A, tested), and the application to be active.
 
 ## 3. Where codes are stored (decided: table `auth.AuthorizationCode`)
 
@@ -166,10 +174,12 @@ the per-client limit:
    1. the **burn**, one conditional UPDATE: `UsedUtc = now, FamilyId = @family WHERE Id = @id AND UsedUtc IS NULL`;
    2. the checks, in order, the first failure winning: not expired; the stored `ClientApplicationId` is the requested
       `client_id`'s; the application is active; client authentication (`IClientAuthenticator`: none for public
-      clients); `RedirectUri` **ordinal-equal** to the posted one; `BASE64URL(SHA256(ASCII(code_verifier)))` equal to
+      clients); `RedirectUri` **ordinal-equal** to the posted one and still in the application's registered list; `BASE64URL(SHA256(ASCII(code_verifier)))` equal to
       the stored challenge (`CryptographicOperations.FixedTimeEquals`);
    3. `IClientSessionService.StartAsync(userId, clientId, family, ...)`: the user must be active and verified, the
-      per-user session cap is applied, and the family is created **with that id**. It is the only caller of
+      per-user session cap is applied (its `SessionRevoked` rows are **staged** and saved with the new family, in the
+      transaction), and the family is created **with that id** (the `IssueAsync` overload taking a family id has one
+      caller, checked by an architecture test). It is the only caller of
       `StartAsync` (T18 criterion; an architecture test scans the IL of Auth.Services and Auth.Api for call sites);
    4. commit. A failed check commits the burn alone. An unexpected exception rolls everything back: the code stays
       redeemable until it expires, and nothing half-done remains.
@@ -260,8 +270,10 @@ cookie.
     legitimate refresh (the XSS trade-off below).
   - Each application's tokens are limited to its own audience and its own `app:` roles.
   - Sessions per user are capped (`RefreshTokens:MaxSessionsPerUser`, 20), counted across browser and application
-    sessions alike (`ISessionCap`, used by sign-in and by the code exchange; tested), and deactivating the application
-    kills every family (T18).
+    sessions alike (`ISessionCap`, used by sign-in and by the code exchange; tested). At the cap, the **same client's**
+    least recently used families go first, then the least recently used of the others, so one application (even one
+    with injected script) cannot evict the user's browser or other-application sessions while it still has its own
+    (T19 recheck L-B, tested). Deactivating the application kills every family (T18).
 - **Lifetimes:** access 15 min; refresh sliding 14 days and absolute 30 days, as for browser sessions. A shorter
   absolute cap for application families would be one option in `RefreshTokenOptions`. It is not proposed now.
 - **XSS trade-off (accepted, documented):**

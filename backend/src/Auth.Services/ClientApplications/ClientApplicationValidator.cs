@@ -162,6 +162,6 @@ internal sealed partial class ClientApplicationValidator(bool requireHttps, stri
     private static bool HasForbiddenCharacters(string value) =>
         value.Any(c => char.IsWhiteSpace(c) || char.IsControl(c) || c is '*' or '\\');
 
-    [GeneratedRegex("^[a-z0-9][a-z0-9._-]{2,99}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[a-z0-9][a-z0-9._-]{2,99}\z", RegexOptions.CultureInvariant)]
     private static partial Regex ClientIdPattern();
 }

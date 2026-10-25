@@ -34,7 +34,7 @@ public class OAuthExchangeTests
     private readonly FakeAudit audits = new();
     private readonly FakeUnitOfWork unitOfWork = new();
     private readonly Stub<IRefreshTokenRepository> refreshRows;
-    private readonly ClientApplication application = new() { Id = Guid.NewGuid(), ClientId = "spa", IsActive = true };
+    private readonly ClientApplication application = new() { Id = Guid.NewGuid(), ClientId = "spa", IsActive = true, RedirectUri = "[\"" + RedirectUri + "\"]" };
     private readonly OAuthService service;
     private readonly TokenGenerator generator = new();
 
@@ -101,6 +101,19 @@ public class OAuthExchangeTests
         Assert.Equal(1, unitOfWork.Committed);
         Assert.Null(sessions.StartedFamily);
         Assert.Contains(audits.Written, e => e.Type == AuditEventType.AuthorizationCodeRejected && AuditDetail.Render(e)!.Contains("pkce_mismatch", StringComparison.Ordinal));
+    }
+
+    /// <summary>T19 recheck L-A: the redirect URI on the code must still be registered.</summary>
+    [Fact]
+    public async Task A_redirect_uri_no_longer_registered_is_refused()
+    {
+        application.RedirectUri = "[\"https://spa.example.test/other\"]";
+
+        TokenGrantResult result = await ExchangeAsync(Verifier);
+
+        Assert.Equal(OAuthErrorCodes.InvalidGrant, result.Error);
+        Assert.Null(sessions.StartedFamily);
+        Assert.Contains(audits.Written, e => e.Type == AuditEventType.AuthorizationCodeRejected && AuditDetail.Render(e)!.Contains("redirect_mismatch", StringComparison.Ordinal));
     }
 
     [Fact]

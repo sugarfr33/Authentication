@@ -81,6 +81,9 @@ public interface IRefreshSessionSummary
     string IpAddress { get; }
 
     string UserAgent { get; }
+
+    /// <summary>The client application of the family; null for a browser session.</summary>
+    Guid? ClientApplicationId { get; }
 }
 
 public interface IRefreshTokenRepository

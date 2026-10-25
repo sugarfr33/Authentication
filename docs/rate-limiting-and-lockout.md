@@ -35,7 +35,7 @@ logout-all and /me are not rate limited (they need the antiforgery token, and lo
 | ChangePassword | `/api/v1/auth/change-password` | 10 / 15 min | - (signed in; wrong current passwords count toward lockout) |
 | Sessions | `/api/v1/auth/sessions` and `/api/v1/auth/sessions/{id}` (prefix) | 60 / 1 min | - (signed in) |
 | OAuthAuthorize | `/api/v1/oauth/authorize` | 60 / 1 min | - |
-| OAuthToken | `/api/v1/oauth/token` | 30 / 1 min | 600 / 1 min per client, counted by the endpoint only after the Origin matched that client (canonical id, any letter case) |
+| OAuthToken | `/api/v1/oauth/token` | 30 / 1 min | 30 / 1 min per client AND caller IP, counted by the endpoint only after the Origin matched that client (canonical id, any letter case); no bucket is shared by all callers of an application |
 
 All values can be changed under `RateLimiting:Policies:<Kind>:PerIp|PerAccount:PermitLimit|Window`. Other paths are not
 limited. OPTIONS (preflight) is never counted. A rejection is **429** ProblemDetails with `Retry-After` (seconds until

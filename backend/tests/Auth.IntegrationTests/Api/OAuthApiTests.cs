@@ -393,6 +393,97 @@ public sealed class OAuthApiTests(ApiFixture api) : IAsyncLifetime
     }
 
     /// <summary>
+    /// T19 recheck M-A: Origin can be forged outside a browser and an application's origin is public, so the per-client
+    /// bucket is per client AND caller IP. A script with many addresses spends only its own buckets, a real user at
+    /// another address is unaffected, and one address is still limited.
+    /// </summary>
+    [Fact]
+    public async Task A_forged_origin_from_many_addresses_cannot_drain_a_real_users_bucket()
+    {
+        await app.DisposeAsync();
+        app = WithSettings(new Dictionary<string, string?>
+        {
+            ["OAuth:LoginUrl"] = LoginUrl,
+            ["ForwardedHeaders:KnownProxies:0"] = ApiFixture.TestRemoteIp,
+            ["RateLimiting:Policies:OAuthToken:PerIp:PermitLimit"] = "1000",
+            ["RateLimiting:Policies:OAuthToken:PerAccount:PermitLimit"] = "3",
+        });
+        Spa victim = await RegisterSpaAsync();
+        static FormUrlEncodedContent Grant(string clientId) => Form(("grant_type", "authorization_code"), ("client_id", clientId));
+
+        List<HttpStatusCode> script = [];
+        for (int address = 1; address <= 6; address++)
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                script.Add((await TokenAsync(victim.Origin, Grant(victim.ClientId), "198.51.100." + address)).StatusCode);
+            }
+        }
+
+        HttpStatusCode realUser = (await TokenAsync(victim.Origin, Grant(victim.ClientId), "203.0.113.50")).StatusCode;
+        HttpStatusCode scriptAgain = (await TokenAsync(victim.Origin, Grant(victim.ClientId), "198.51.100.1")).StatusCode;
+
+        Assert.All(script, s => Assert.Equal(HttpStatusCode.BadRequest, s));
+        Assert.Equal(HttpStatusCode.BadRequest, realUser);
+        Assert.Equal(HttpStatusCode.TooManyRequests, scriptAgain);
+    }
+
+    /// <summary>T19 recheck L-A: a redirect URI removed after a code was issued is refused at the exchange.</summary>
+    [Fact]
+    public async Task A_code_for_a_redirect_uri_removed_after_issue_cannot_be_exchanged()
+    {
+        Spa spa = await RegisterSpaAsync();
+        (Guid userId, Browser browser) = await SignedInAsync();
+        Pkce pkce = Pkce.Create();
+        string code = await CodeAsync(browser, spa, pkce);
+        await using (AsyncServiceScope scope = app.Services.CreateAsyncScope())
+        {
+            ClientApplicationResult updated = await scope.ServiceProvider.GetRequiredService<IClientApplicationRegistry>().UpdateAsync(
+                spa.Id,
+                new ClientApplicationRequest(spa.ClientId, "Spa " + spa.ClientId, spa.Audience, [spa.Origin], [spa.SecondRedirectUri], []),
+                AuditContext.None,
+                CancellationToken.None);
+            Assert.True(updated.IsSuccess);
+        }
+
+        HttpResponseMessage exchange = await TokenAsync(spa.Origin, Form(("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", pkce.Verifier)));
+
+        Assert.Equal("invalid_grant", await ErrorAsync(exchange));
+        Assert.Contains(await RejectionsAsync(spa), r => r.UserId == userId && r.Detail!.Contains("redirect_mismatch", StringComparison.Ordinal));
+    }
+
+    /// <summary>T19 recheck L-B: at the cap, an application evicts its own oldest session first, not the browser session.</summary>
+    [Fact]
+    public async Task At_the_session_cap_an_application_evicts_its_own_sessions_first()
+    {
+        await app.DisposeAsync();
+        app = WithSettings(new Dictionary<string, string?>
+        {
+            ["OAuth:LoginUrl"] = LoginUrl,
+            ["RefreshTokens:MaxSessionsPerUser"] = "2",
+            ["RateLimiting:Policies:Login:PerIp:PermitLimit"] = "1000",
+            ["RateLimiting:Policies:OAuthToken:PerIp:PermitLimit"] = "1000",
+        });
+        Spa spa = await RegisterSpaAsync();
+        (Guid userId, Browser browser) = await SignedInAsync();
+        Pkce first = Pkce.Create();
+        Pkce second = Pkce.Create();
+        string code1 = await CodeAsync(browser, spa, first);
+        string code2 = await CodeAsync(browser, spa, second);
+
+        OAuthTokenResponse older = (await (await TokenAsync(spa.Origin, Form(("grant_type", "authorization_code"), ("code", code1), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", first.Verifier)))).Content.ReadFromJsonAsync<OAuthTokenResponse>())!;
+        clock.Shift(TimeSpan.FromSeconds(1));
+        HttpResponseMessage newer = await TokenAsync(spa.Origin, Form(("grant_type", "authorization_code"), ("code", code2), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", second.Verifier)));
+
+        Assert.Equal(HttpStatusCode.OK, newer.StatusCode);
+        Guid olderFamily = Guid.Parse(new JsonWebToken(older.AccessToken).GetClaim(AuthClaimTypes.SessionId).Value);
+        List<RefreshToken> rows = await QueryAsync(c => c.RefreshToken.AsNoTracking().Where(t => t.UserId == userId).ToListAsync());
+        Assert.All(rows.Where(t => t.FamilyId == olderFamily), t => Assert.NotNull(t.RevokedUtc));
+        Assert.Contains(rows, t => t.ClientApplicationId == null && t.RevokedUtc == null);
+        Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync("/api/v1/auth/me")).StatusCode);
+    }
+
+    /// <summary>
     /// T19 review and audit M2: the burn records the family in the same UPDATE and the family is created before the
     /// commit, so a replay racing the legitimate exchange always finds and revokes the session it started.
     /// </summary>
@@ -532,11 +623,17 @@ public sealed class OAuthApiTests(ApiFixture api) : IAsyncLifetime
         return Query(response.Headers.Location!)["code"];
     }
 
-    private async Task<HttpResponseMessage> TokenAsync(string origin, HttpContent content)
+    private async Task<HttpResponseMessage> TokenAsync(string origin, HttpContent content, string? forwardedFor = null)
     {
         using HttpClient client = api.CreateHttpsClient(app);
         using HttpRequestMessage request = new(HttpMethod.Post, Token) { Content = content };
         request.Headers.TryAddWithoutValidation("Origin", origin);
+        if (forwardedFor is not null)
+        {
+            // Honoured only when the test configures the fixture's peer address as a known proxy.
+            request.Headers.TryAddWithoutValidation("X-Forwarded-For", forwardedFor);
+        }
+
         HttpResponseMessage response = await client.SendAsync(request);
         await response.Content.LoadIntoBufferAsync();
         return response;
