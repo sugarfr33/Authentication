@@ -10,7 +10,8 @@ namespace Auth.Services.ClientApplications;
 /// The cached read model of one ACTIVE client application: canonical client id (as stored), normalized origins and
 /// exact redirect URIs. Origins that are not allowed (plain http outside Development) are left out.
 /// </summary>
-public sealed record ClientApplicationView(Guid Id, string ClientId, IReadOnlySet<string> Origins, IReadOnlyList<string> RedirectUris);
+public sealed record ClientApplicationView(
+    Guid Id, string ClientId, IReadOnlySet<string> Origins, IReadOnlyList<string> RedirectUris, IReadOnlyList<string> PostLogoutRedirectUris);
 
 /// <summary>
 /// Browser origins allowed to call the API with credentials (the AllowedOrigin entries of active client applications),
@@ -115,7 +116,8 @@ internal sealed class ClientApplicationOriginProvider(
                 }
 
                 origins.UnionWith(own);
-                applications[application.ClientId] = new ClientApplicationView(application.Id, application.ClientId, own, ClientApplicationLists.Read(application.RedirectUri));
+                applications[application.ClientId] = new ClientApplicationView(
+                    application.Id, application.ClientId, own, ClientApplicationLists.Read(application.RedirectUri), ClientApplicationLists.Read(application.PostLogoutRedirectUri));
             }
 
             Snapshot loaded = new(clock.UtcNow, origins, applications);

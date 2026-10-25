@@ -13,6 +13,7 @@ public enum AuthRateLimitKind
     Sessions,
     OAuthAuthorize,
     OAuthToken,
+    OAuthLogout,
 }
 
 /// <summary>A fixed-window limit: <see cref="PermitLimit"/> requests per <see cref="Window"/>.</summary>
@@ -51,6 +52,7 @@ public sealed class AuthRateLimitOptions
         ["/api/v1/auth/change-password"] = AuthRateLimitKind.ChangePassword,
         ["/api/v1/oauth/authorize"] = AuthRateLimitKind.OAuthAuthorize,
         ["/api/v1/oauth/token"] = AuthRateLimitKind.OAuthToken,
+        ["/api/v1/oauth/logout"] = AuthRateLimitKind.OAuthLogout,
     };
 
     /// <summary>
@@ -77,6 +79,7 @@ public sealed class AuthRateLimitOptions
         // every caller of an application.
         [AuthRateLimitKind.OAuthAuthorize] = Policy(60, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
         [AuthRateLimitKind.OAuthToken] = Policy(30, TimeSpan.FromMinutes(1), 30, TimeSpan.FromMinutes(1)),
+        [AuthRateLimitKind.OAuthLogout] = Policy(30, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
     };
 
     /// <summary>

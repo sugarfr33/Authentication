@@ -131,12 +131,17 @@ internal sealed class BrowserProtectionMiddleware(
     internal static void IssueTokens(HttpContext context, IAntiforgery antiforgery)
     {
         AntiforgeryTokenSet tokens = antiforgery.GetAndStoreTokens(context);
+
+        // Shared-domain mode (T20): the SPA on a sibling subdomain must be able to read the request token, so it gets the
+        // cookie Domain too. The HttpOnly antiforgery cookie it is checked against stays host-only on the API.
+        string? domain = context.RequestServices.GetService<IOptions<AuthCookieOptions>>()?.Value.Domain;
         context.Response.Cookies.Append(AuthCookieNames.Xsrf, tokens.RequestToken!, new CookieOptions
         {
             HttpOnly = false,
             Secure = true,
             SameSite = SameSiteMode.Strict,
             Path = "/",
+            Domain = domain,
             IsEssential = true,
         });
     }

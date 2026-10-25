@@ -20,7 +20,11 @@ public interface ICookieWriter
     /// <summary>HttpOnly, Secure, SameSite Strict, Path = the refresh endpoint, Max-Age = remaining refresh lifetime.</summary>
     void WriteRefreshToken(HttpResponse response, IssuedRefreshToken token);
 
-    /// <summary>Expires both cookies (logout) with the same name, path, domain and flags they were set with.</summary>
+    /// <summary>
+    /// Expires both cookies (logout) with the same name, path, domain and flags they were set with. In shared-domain mode
+    /// the host-only variants are expired as well, so a browser that still holds cookies from before a mode switch is
+    /// signed out completely.
+    /// </summary>
     void ClearAuthCookies(HttpResponse response);
 }
 
@@ -49,6 +53,15 @@ internal sealed class CookieWriter(IOptions<AuthCookieOptions> options, IClock c
         ArgumentNullException.ThrowIfNull(response);
         response.Cookies.Append(AccessCookieName, string.Empty, Expired(AccessCookie(TimeSpan.Zero)));
         response.Cookies.Append(AuthCookieNames.Refresh, string.Empty, Expired(RefreshCookie(TimeSpan.Zero)));
+        if (settings.Domain is not null)
+        {
+            CookieOptions hostOnlyAccess = Expired(AccessCookie(TimeSpan.Zero));
+            hostOnlyAccess.Domain = null;
+            CookieOptions hostOnlyRefresh = Expired(RefreshCookie(TimeSpan.Zero));
+            hostOnlyRefresh.Domain = null;
+            response.Cookies.Append(AuthCookieNames.Access, string.Empty, hostOnlyAccess);
+            response.Cookies.Append(AuthCookieNames.Refresh, string.Empty, hostOnlyRefresh);
+        }
     }
 
     private CookieOptions AccessCookie(TimeSpan maxAge) => new()

@@ -12,3 +12,11 @@ public sealed record OAuthTokenResponse(
 /// <summary>RFC 6749 error response of /oauth/authorize (on our domain) and /oauth/token: a code, no detail about which check failed.</summary>
 public sealed record OAuthErrorResponse(
     [property: JsonPropertyName("error")] string Error);
+
+/// <summary>
+/// RP-initiated logout (<c>/oauth/logout</c>): the application, and where the auth UI may send the browser afterwards
+/// (the registered post-logout URI with the state, built by the server), or null to stay on our domain.
+/// </summary>
+public sealed record OAuthLogoutResponse(
+    [property: JsonPropertyName("client_id")] string ClientId,
+    [property: JsonPropertyName("redirect_to")] string? RedirectTo);

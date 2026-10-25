@@ -71,6 +71,7 @@ internal sealed class PasswordService(
     ITokenGenerator generator,
     IEmailSender emailSender,
     IClock clock,
+    ISessionEndedPublisher sessionsEnded,
     AccountEmailOptions options) : IPasswordService
 {
     /// <summary>Longer input cannot be one of our tokens (43 characters); skip hashing and the lookup.</summary>
@@ -180,6 +181,7 @@ internal sealed class PasswordService(
                     return await ResetFailedAsync(owner.Id, failure, audit, cancellationToken);
                 }
 
+                await sessionsEnded.PublishAsync(new SessionEnded(owner.Id, null, null, SessionEndCause.PasswordChange), audit, cancellationToken);
                 return await NotifyChangedAsync(owner.Email, cancellationToken);
             }
             catch (ConcurrencyConflictException) when (attempt < MaxAttempts)
@@ -226,6 +228,7 @@ internal sealed class PasswordService(
                 await audits.StageAsync(AuditEvents.PasswordChanged(current.Id), audit, cancellationToken);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
+                await sessionsEnded.PublishAsync(new SessionEnded(current.Id, null, null, SessionEndCause.PasswordChange), audit, cancellationToken);
                 return await NotifyChangedAsync(current.Email, cancellationToken);
             }
             catch (ConcurrencyConflictException) when (attempt < MaxAttempts)

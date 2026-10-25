@@ -1,5 +1,8 @@
 # Cookie transport, CSRF and CORS (T10)
 
+Cookie modes (host-only and shared parent domain, `AuthCookies:Domain`) and their trade-offs: see
+single-logout-and-shared-domain.md (T20).
+
 ## Tokens travel only in cookies
 
 `ICookieWriter` (Auth.Api) is the only way tokens leave the API. Bodies, URLs and script-readable headers never carry

@@ -38,7 +38,8 @@ internal sealed class SessionRefresher(
     IAccessProfileBuilder profiles,
     ITokenService tokens,
     IAuditService audits,
-    IUnitOfWork unitOfWork) : ISessionRefresher
+    IUnitOfWork unitOfWork,
+    Security.ISessionEndedPublisher sessionsEnded) : ISessionRefresher
 {
     public async Task<RefreshOutcome> RefreshAsync(string? presentedRefreshToken, ClientApplication? application, RefreshContext context, AuditContext audit, CancellationToken cancellationToken)
     {
@@ -110,6 +111,13 @@ internal sealed class SessionRefresher(
                     reuse.RevokedCount > 0 ? AuditEvents.TokenReuse(reuse.UserId, reuse.RevokedCount) : AuditEvents.RefreshRejected(reuse.UserId, "ended_session_replayed", application?.Id),
                     audit,
                     cancellationToken);
+                if (reuse.RevokedCount > 0)
+                {
+                    // A stolen browser family may have been used to start application sessions: single logout ends them.
+                    await sessionsEnded.PublishAsync(
+                        new Security.SessionEnded(reuse.UserId, reuse.FamilyId, reuse.ClientApplicationId, Security.SessionEndCause.TokenReuse), audit, cancellationToken);
+                }
+
                 return new RefreshOutcome(RotationStatus.ReuseDetected, null);
 
             default:

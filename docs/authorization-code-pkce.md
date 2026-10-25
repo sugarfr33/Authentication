@@ -334,9 +334,8 @@ Logs:
 
 ## 11. Not now (noted for later tasks)
 
-- **Session-ended fan-out (T20):** single logout needs a hook when a session ends (revoke the family, notify the
-  client or validate `post_logout_redirect_uri`): an `ISessionEnded` event raised by the revocation paths, rather than
-  more code in each logout path. Part of the T20 dispatch.
+- **Session-ended fan-out:** done in T20 (`ISessionEndedPublisher`, single logout and `/oauth/logout`; see
+  single-logout-and-shared-domain.md). Back-channel notification of applications is still future work (schema).
 - **`iss` in authorization responses (RFC 9207):** protects clients that talk to several authorization servers
   against mix-up. Not needed while each application uses only this server; add it with T22's client library.
 - **Confidential clients and consent:** the seams exist (`IClientAuthenticator`, `IConsentDecision`); both are

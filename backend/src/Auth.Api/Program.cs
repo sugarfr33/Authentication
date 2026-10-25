@@ -89,7 +89,10 @@ builder.Services.AddHealthChecks().AddCheck<DatabaseReadinessCheck>("database", 
 // Cookie transport (T10): tokens only ever travel in HttpOnly, Secure cookies.
 builder.Services.AddOptions<AuthCookieOptions>()
     .Bind(builder.Configuration.GetSection(AuthCookieOptions.SectionName))
-    .Validate(options => options.IsValid(), "AuthCookies is invalid: AccessSameSite must be Lax or Strict, RefreshPath must start with /, Domain must be a bare host.")
+    .PostConfigure(options => options.Domain = string.IsNullOrWhiteSpace(options.Domain) ? null : options.Domain)
+    .Validate(
+        options => options.IsValid(builder.Configuration["Auth:Issuer"]),
+        "AuthCookies is invalid: AccessSameSite must be Lax or Strict, RefreshPath must start with /, and Domain (shared-domain mode) must be a lower-case registrable parent of the https Auth:Issuer host: no IP, port, scheme or leading dot, not a public suffix such as co.uk.")
     .ValidateOnStart();
 builder.Services.AddOptions<BrowserProtectionOptions>().Bind(builder.Configuration.GetSection(BrowserProtectionOptions.SectionName));
 builder.Services.AddSingleton<ICookieWriter, CookieWriter>();

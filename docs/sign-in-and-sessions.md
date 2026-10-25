@@ -76,6 +76,10 @@ Both logouts **always** clear the cookies: if the server-side part fails (databa
 expired, the XSRF token reissued, a warning logged (exception type only) and the answer is a 500 ProblemDetails saying
 the session may still be live on the server.
 
+**Single logout (T20):** ending a browser session (logout, logout-all, revoking a browser session, a detected
+refresh-token theft, a password change) also ends every application session of the user. See
+single-logout-and-shared-domain.md.
+
 ## Logout-all
 
 Needs a valid access cookie. Revokes every refresh family of the user (reason `LogoutAll`, one UPDATE), writes a

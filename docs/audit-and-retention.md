@@ -76,6 +76,7 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | AuthorizationCodeIssued | app (id) | normal |
 | AuthorizationCodeRedeemed | app (id), session (id) | normal |
 | AuthorizationCodeRejected | app (id, when known), reason | **high** |
+| SingleLogout | cause (logout, logout_all, session_revoked, token_reuse, password_change, application_logout), revoked (count), app (id, RP-initiated only) | normal |
 | Mfa*, SigningKeyRotated | reserved | |
 
 **TokenRefreshed decision:** it is kept, with no sampling. It writes about one row per 15 minutes per active session. It

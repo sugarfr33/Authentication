@@ -68,4 +68,10 @@ public enum AuditEventType
 
     /// <summary>An authorization code exchange or app refresh was refused. Holds the app id when known and a reason only.</summary>
     AuthorizationCodeRejected,
+
+    /// <summary>
+    /// Single logout (T20): application sessions ended because a browser session ended, or an application asked to end
+    /// the user's sessions with it. Holds the cause, the number of tokens revoked and the app id when one asked.
+    /// </summary>
+    SingleLogout,
 }

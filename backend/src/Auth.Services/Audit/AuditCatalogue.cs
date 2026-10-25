@@ -55,6 +55,7 @@ public static class AuditCatalogue
         [AuditEventType.AppUpdated] = new(["app", "active", "revoked"]),
         [AuditEventType.AppDeactivated] = new(["app", "revoked"]),
         [AuditEventType.AuthorizationCodeRejected] = new(["app", "reason"], AuditVolume.High),
+        [AuditEventType.SingleLogout] = new(["cause", "revoked", "app"]),
     };
 
     /// <summary>
@@ -82,6 +83,9 @@ public static class AuditCatalogue
         // OAuth code exchange (T19)
         "unknown_or_expired", "replayed", "client_mismatch", "redirect_mismatch", "pkce_mismatch", "inactive_client",
         "inactive_user", "invalid_request",
+
+        // Session end causes (SessionEndCause, T20)
+        "logout", "logout_all", "session_revoked", "token_reuse", "password_change", "application_logout",
     };
 
     /// <summary>Event names (as stored in AuditLog.EventType) with <see cref="AuditVolume.High"/>.</summary>

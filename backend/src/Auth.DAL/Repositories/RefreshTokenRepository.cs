@@ -49,6 +49,14 @@ internal sealed class RefreshTokenRepository(AuthDbContext context) : IRefreshTo
                 s => s.SetProperty(t => t.RevokedUtc, revokedUtc).SetProperty(t => t.RevokedReason, reason),
                 cancellationToken));
 
+    public Task<int> RevokeApplicationFamiliesForUserAsync(Guid userId, Guid? clientApplicationId, string reason, DateTime revokedUtc, CancellationToken cancellationToken) =>
+        SqlErrors.MapDeadlockAsync(() => context.RefreshToken
+            .Where(t => t.UserId == userId && t.RevokedUtc == null && t.ClientApplicationId != null
+                && (clientApplicationId == null || t.ClientApplicationId == clientApplicationId))
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(t => t.RevokedUtc, revokedUtc).SetProperty(t => t.RevokedReason, reason),
+                cancellationToken));
+
     public Task<int> RevokeFamiliesStartedSinceAsync(Guid userId, Guid clientApplicationId, DateTime sinceUtc, string reason, DateTime revokedUtc, CancellationToken cancellationToken) =>
         SqlErrors.MapDeadlockAsync(() => context.RefreshToken
             .Where(t => t.UserId == userId && t.ClientApplicationId == clientApplicationId && t.RevokedUtc == null

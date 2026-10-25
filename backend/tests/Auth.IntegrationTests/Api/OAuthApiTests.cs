@@ -322,7 +322,7 @@ public sealed class OAuthApiTests(ApiFixture api) : IAsyncLifetime
         (Guid userId, Browser browser) = await SignedInAsync();
         Pkce pkce = Pkce.Create();
         string code = await CodeAsync(browser, spa, pkce, state: "state-secret-77");
-        await TokenAsync(spa.Origin, Form(("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", "x" + pkce.Verifier[1..])));
+        await TokenAsync(spa.Origin, Form(("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", (pkce.Verifier[0] == 'x' ? "y" : "x") + pkce.Verifier[1..])));
         Pkce second = Pkce.Create();
         string code2 = await CodeAsync(browser, spa, second);
         OAuthTokenResponse tokens = (await (await TokenAsync(spa.Origin, Form(("grant_type", "authorization_code"), ("code", code2), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", second.Verifier)))).Content.ReadFromJsonAsync<OAuthTokenResponse>())!;

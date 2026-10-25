@@ -53,6 +53,8 @@ public static class AuthServiceCollectionExtensions
             new ClientApplicationValidator(sp.GetRequiredService<ClientApplicationOriginOptions>().RequireHttps, sp.GetRequiredService<TokenOptions>().DefaultAudience),
             sp.GetRequiredService<IClock>()));
         services.AddScoped<IClientSessionService, ClientSessionService>();
+        services.AddScoped<ISessionEndedListener, SingleLogoutListener>();
+        services.AddScoped<ISessionEndedPublisher, SessionEndedPublisher>();
         services.TryAddSingleton(new OAuthOptions().Validated(requireHttps: true));
         services.AddSingleton<IClientAuthenticator, PublicClientAuthenticator>();
         services.AddSingleton<IConsentDecision, FirstPartyAutoApproval>();

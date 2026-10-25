@@ -17,3 +17,12 @@ public sealed record TokenExchangeRequest(
     string RedirectUri,
     string ClientId,
     string CodeVerifier);
+
+/// <summary>
+/// RP-initiated logout confirmed by the signed-in user (<c>POST /oauth/logout</c>, JSON, same names as the query of
+/// <c>GET /oauth/logout</c>). Ends the user's sessions at that application only.
+/// </summary>
+public sealed record OAuthLogoutRequest(
+    [property: System.Text.Json.Serialization.JsonPropertyName("client_id")] string? ClientId,
+    [property: System.Text.Json.Serialization.JsonPropertyName("post_logout_redirect_uri")] string? PostLogoutRedirectUri,
+    [property: System.Text.Json.Serialization.JsonPropertyName("state")] string? State);

@@ -9,6 +9,7 @@ using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.OAuth;
 using Auth.Services.Tokens;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Primitives;
 
 namespace Auth.Api.Endpoints;
@@ -25,11 +26,13 @@ internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
 {
     public const string AuthorizePath = "/api/v1/oauth/authorize";
     public const string TokenPath = "/api/v1/oauth/token";
+    public const string LogoutPath = "/api/v1/oauth/logout";
 
     private const int MaxQueryLength = 4096;
 
     private static readonly string[] AuthorizeParameters = ["client_id", "redirect_uri", "response_type", "code_challenge", "code_challenge_method", "state", "scope"];
     private static readonly string[] TokenParameters = ["grant_type", "code", "redirect_uri", "client_id", "code_verifier", "refresh_token"];
+    private static readonly string[] LogoutParameters = ["client_id", "post_logout_redirect_uri", "state"];
 
     public void Map(IEndpointRouteBuilder api)
     {
@@ -45,6 +48,50 @@ internal sealed class OAuthEndpoints(OAuthOptions options) : IEndpointModule
             .DisableAntiforgery()
             .Produces<OAuthTokenResponse>()
             .Produces<OAuthErrorResponse>(StatusCodes.Status400BadRequest);
+
+        // RP-initiated logout (T20). GET only validates and describes (never changes state, never redirects): the auth UI
+        // shows a confirmation and POSTs. The POST needs the browser session cookie, the origin check and the
+        // antiforgery token like every state-changing request; a Bearer app token cannot reach it.
+        oauth.MapGet("/logout", LogoutPromptAsync)
+            .AllowAnonymous()
+            .Produces<OAuthLogoutResponse>()
+            .Produces<OAuthErrorResponse>(StatusCodes.Status400BadRequest);
+
+        oauth.MapPost("/logout", LogoutAsync)
+            .RequireAuthorization()
+            .Accepts<OAuthLogoutRequest>("application/json")
+            .Produces<OAuthLogoutResponse>()
+            .Produces<OAuthErrorResponse>(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status401Unauthorized);
+    }
+
+    private static async Task<IResult> LogoutPromptAsync(HttpContext http, IOAuthService oauth, CancellationToken cancellationToken)
+    {
+        NoStore(http.Response);
+        IQueryCollection query = http.Request.Query;
+        if ((http.Request.QueryString.Value?.Length ?? 0) > MaxQueryLength || HasDuplicates(query, LogoutParameters))
+        {
+            return Error(StatusCodes.Status400BadRequest, OAuthErrorCodes.InvalidRequest);
+        }
+
+        LogoutTarget target = await oauth.ResolveLogoutAsync(One(query, "client_id"), One(query, "post_logout_redirect_uri"), One(query, "state"), cancellationToken);
+        return target.Client is ClientApplicationView client
+            ? Results.Json(new OAuthLogoutResponse(client.ClientId, target.RedirectTo))
+            : Error(StatusCodes.Status400BadRequest, OAuthErrorCodes.InvalidClient);
+    }
+
+    private static async Task<IResult> LogoutAsync([FromBody] OAuthLogoutRequest request, HttpContext http, IOAuthService oauth, CancellationToken cancellationToken)
+    {
+        NoStore(http.Response);
+        if (!Guid.TryParse(http.User.FindFirst(AuthClaimTypes.Subject)?.Value, out Guid userId))
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Authentication required.");
+        }
+
+        LogoutTarget target = await oauth.LogoutAsync(userId, request.ClientId, request.PostLogoutRedirectUri, request.State, HttpAudit.From(http), cancellationToken);
+        return target.Client is ClientApplicationView client
+            ? Results.Json(new OAuthLogoutResponse(client.ClientId, target.RedirectTo))
+            : Error(StatusCodes.Status400BadRequest, OAuthErrorCodes.InvalidClient);
     }
 
     private async Task<IResult> AuthorizeAsync(HttpContext http, IOAuthService oauth, CancellationToken cancellationToken)

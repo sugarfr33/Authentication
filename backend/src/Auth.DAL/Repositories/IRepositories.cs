@@ -115,6 +115,13 @@ public interface IRefreshTokenRepository
     Task<int> RevokeAllForClientApplicationAsync(Guid clientApplicationId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Revokes every live token of the user's client-application families, in one UPDATE: those of
+    /// <paramref name="clientApplicationId"/> only, or of every application when it is null (browser families are never
+    /// touched). Returns the number revoked.
+    /// </summary>
+    Task<int> RevokeApplicationFamiliesForUserAsync(Guid userId, Guid? clientApplicationId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Revokes the live tokens of the user's families at the client application that STARTED at or after
     /// <paramref name="sinceUtc"/> (no token of the family is older), in one UPDATE. Replay fallback for an authorization
     /// code redeemed before its family id was recorded. Returns the number revoked.

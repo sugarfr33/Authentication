@@ -47,6 +47,14 @@ public sealed record TokenGrantResult(SignedIn? Session, string? Error)
 }
 
 /// <summary>
+/// RP-initiated logout (T20): <see cref="RedirectTo"/> is the registered post-logout URI (exact, ordinal) with the
+/// state added, or null when none was asked for or it is not registered: then the answer stays on our domain.
+/// </summary>
+/// <param name="Client">The active application, or null (unknown or inactive): an error on our domain, never a redirect.</param>
+/// <param name="RedirectTo">Where the auth UI may send the browser afterwards; built by the server, never taken as given.</param>
+public sealed record LogoutTarget(ClientApplicationView? Client, string? RedirectTo);
+
+/// <summary>
 /// Authorization Code with PKCE for registered public clients (T19, docs/authorization-code-pkce.md). First-party
 /// applications only: a signed-in user is auto-approved. Codes are 256-bit, stored as SHA-256 hashes, valid
 /// OAuth:CodeLifetime (60 s), redeemed at most once, and bound to the user, the client, the exact redirect URI and the
@@ -65,6 +73,16 @@ public interface IOAuthService
 
     /// <summary>grant_type=refresh_token for an application family.</summary>
     Task<TokenGrantResult> RefreshAsync(string? refreshToken, string? clientId, RefreshContext context, AuditContext audit, CancellationToken cancellationToken);
+
+    /// <summary>Validates an RP-initiated logout request; changes nothing (GET /oauth/logout).</summary>
+    Task<LogoutTarget> ResolveLogoutAsync(string? clientId, string? postLogoutRedirectUri, string? state, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Ends every session of <paramref name="userId"/> at the application (its refresh families; the browser session and
+    /// other applications stay), notifies the session-ended listeners and audits SingleLogout. Nothing for an unknown
+    /// or inactive client (POST /oauth/logout).
+    /// </summary>
+    Task<LogoutTarget> LogoutAsync(Guid userId, string? clientId, string? postLogoutRedirectUri, string? state, AuditContext audit, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -106,6 +124,7 @@ internal sealed partial class OAuthService(
     IAuditService audits,
     IUnitOfWork unitOfWork,
     ISessionLiveness liveness,
+    ISessionEndedPublisher sessionsEnded,
     OAuthOptions options,
     IClock clock) : IOAuthService
 {
@@ -267,6 +286,38 @@ internal sealed partial class OAuthService(
         return refreshed.Value is SignedIn session
             ? new TokenGrantResult(session, null)
             : TokenGrantResult.Fail(refreshed.Error == AuthError.InvalidClient ? OAuthErrorCodes.InvalidClient : OAuthErrorCodes.InvalidGrant);
+    }
+
+    public async Task<LogoutTarget> ResolveLogoutAsync(string? clientId, string? postLogoutRedirectUri, string? state, CancellationToken cancellationToken)
+    {
+        ClientApplicationView? client = await clients.FindActiveAsync(clientId, cancellationToken);
+        if (client is null)
+        {
+            return new LogoutTarget(null, null);
+        }
+
+        // Only an exact registered post-logout URI is ever a target (no normalisation, as for redirect URIs).
+        if (string.IsNullOrEmpty(postLogoutRedirectUri) || !client.PostLogoutRedirectUris.Contains(postLogoutRedirectUri, StringComparer.Ordinal))
+        {
+            return new LogoutTarget(client, null);
+        }
+
+        return new LogoutTarget(client, IsValidState(state) ? AppendQuery(postLogoutRedirectUri, ("state", state!)) : postLogoutRedirectUri);
+    }
+
+    public async Task<LogoutTarget> LogoutAsync(Guid userId, string? clientId, string? postLogoutRedirectUri, string? state, AuditContext audit, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(audit);
+        LogoutTarget target = await ResolveLogoutAsync(clientId, postLogoutRedirectUri, state, cancellationToken);
+        if (target.Client is not ClientApplicationView client)
+        {
+            return target;
+        }
+
+        int revoked = await refreshRows.RevokeApplicationFamiliesForUserAsync(userId, client.Id, RefreshTokenRevokedReason.Logout, clock.UtcNow, cancellationToken);
+        await sessionsEnded.PublishAsync(new SessionEnded(userId, null, client.Id, SessionEndCause.ApplicationLogout), audit, cancellationToken);
+        await audits.TryWriteAsync(AuditEvents.SingleLogout(userId, client.Id, SessionEndCause.ApplicationLogout, revoked), audit, cancellationToken);
+        return target;
     }
 
     /// <summary>BASE64URL(SHA-256(ASCII(verifier))) compared to the stored challenge in constant time.</summary>

@@ -41,6 +41,7 @@ public class AuditCoverageTests
         [AuditEventType.AuthorizationCodeRejected] = "Api.OAuthApiTests.Codes_verifiers_and_tokens_never_reach_logs_or_audit_rows",
         [AuditEventType.AppCreated] = "Services.ClientApplicationRegistryTests.Created_applications_are_audited_listed_and_their_ids_and_audiences_are_unique",
         [AuditEventType.AppUpdated] = "Services.ClientApplicationRegistryTests.The_CORS_list_follows_the_registry_at_once_on_this_instance",
+        [AuditEventType.SingleLogout] = "Api.SingleLogoutApiTests.Logout_ends_every_application_session_of_the_user",
         [AuditEventType.AppDeactivated] = "Services.ClientApplicationRegistryTests.Deactivation_ends_the_applications_sessions_and_it_cannot_get_new_tokens",
         [AuditEventType.RolePermissionRemoved] = "Services.RoleAssignmentServiceTests.Removing_a_permission_from_a_role_ends_the_sessions_of_every_holder_only",
     };

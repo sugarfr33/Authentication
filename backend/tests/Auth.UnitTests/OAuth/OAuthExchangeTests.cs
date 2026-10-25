@@ -59,6 +59,7 @@ public class OAuthExchangeTests
             audits,
             unitOfWork,
             Stubs.Create<ISessionLiveness>().Instance,
+            Stubs.Create<ISessionEndedPublisher>().Instance,
             new OAuthOptions(),
             new FixedClock());
         codes.Code = new AuthorizationCode

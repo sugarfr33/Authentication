@@ -85,6 +85,7 @@ internal sealed class SignInService(
     ISessionRefresher refresher,
     IAccessProfileBuilder profiles,
     ISessionLiveness liveness,
+    ISessionEndedPublisher sessionsEnded,
     IClock clock) : ISignInService
 {
     public async Task<Result<SignedIn>> LoginAsync(LoginRequest request, string? presentedRefreshToken, AuditContext audit, CancellationToken cancellationToken)
@@ -151,6 +152,13 @@ internal sealed class SignInService(
             await audits.TryWriteAsync(AuditEvents.Logout(userId.Value, revoked), audit, cancellationToken);
         }
 
+        // Single logout (T20): the user's application sessions end with the browser session. A failure here propagates
+        // (the endpoint then says the sign-out is incomplete on the server).
+        foreach (Guid ended in new[] { accessUserId, fromRefresh?.UserId }.OfType<Guid>().Distinct())
+        {
+            await sessionsEnded.PublishAsync(new SessionEnded(ended, ended == accessUserId ? accessSessionId : fromRefresh?.FamilyId, null, SessionEndCause.Logout), audit, cancellationToken);
+        }
+
         return revoked;
     }
 
@@ -160,6 +168,7 @@ internal sealed class SignInService(
         int revoked = await refreshTokens.RevokeAllAsync(userId, RefreshTokenRevokedReason.LogoutAll, cancellationToken);
         liveness.InvalidateUser(userId);
         await audits.TryWriteAsync(AuditEvents.LogoutAll(userId, revoked), audit, cancellationToken);
+        await sessionsEnded.PublishAsync(new SessionEnded(userId, null, null, SessionEndCause.LogoutAll), audit, cancellationToken);
         return revoked;
     }
 
@@ -188,11 +197,15 @@ internal sealed class SignInService(
             return false;
         }
 
+        // Whether it is a browser or an application session decides whether single logout applies.
+        IRefreshSessionSummary? live = (await refreshRows.GetActiveSessionsAsync(userId, clock.UtcNow, 1000, cancellationToken))
+            .FirstOrDefault(s => s.FamilyId == familyId);
         int revoked = await refreshTokens.RevokeFamilyForUserAsync(familyId, userId, RefreshTokenRevokedReason.Logout, cancellationToken);
         liveness.Invalidate(familyId);
         if (revoked > 0)
         {
             await audits.TryWriteAsync(AuditEvents.SessionRevoked(userId, familyId), audit, cancellationToken);
+            await sessionsEnded.PublishAsync(new SessionEnded(userId, familyId, live?.ClientApplicationId, SessionEndCause.SessionRevoked), audit, cancellationToken);
         }
 
         return true;

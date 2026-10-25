@@ -18,13 +18,14 @@ namespace Auth.UnitTests.OAuth;
 public class OAuthRateLimitMapTests
 {
     [Fact]
-    public async Task Every_anonymous_OAuth_endpoint_has_a_rate_limit_kind()
+    public async Task Every_OAuth_endpoint_declares_its_access_and_has_a_rate_limit_kind()
     {
         IReadOnlyList<RouteEndpoint> endpoints = await MappedAsync();
         AuthRateLimitOptions limits = new();
 
         Assert.NotEmpty(endpoints);
-        Assert.All(endpoints, e => Assert.NotNull(e.Metadata.GetMetadata<IAllowAnonymous>()));
+        Assert.All(endpoints, e => Assert.True(
+            e.Metadata.GetMetadata<IAllowAnonymous>() is not null || e.Metadata.GetOrderedMetadata<IAuthorizeData>().Count > 0, e.RoutePattern.RawText));
         Assert.All(endpoints, e => Assert.True(limits.Resolve(new PathString("/" + e.RoutePattern.RawText!.TrimStart('/'))) is not null, e.RoutePattern.RawText));
     }
 

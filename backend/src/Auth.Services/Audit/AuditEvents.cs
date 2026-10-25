@@ -87,6 +87,23 @@ internal static class AuditEvents
     public static AuditEvent AuthorizationCodeRedeemed(Guid userId, Guid applicationId, Guid session) =>
         new(AuditEventType.AuthorizationCodeRedeemed, userId, new AuditField("app", applicationId), new AuditField("session", session));
 
+    /// <summary>Single logout: application sessions ended; <paramref name="applicationId"/> when an application asked.</summary>
+    public static AuditEvent SingleLogout(Guid userId, Guid? applicationId, Auth.Services.Security.SessionEndCause cause, int revoked) => applicationId is Guid app
+        ? new(AuditEventType.SingleLogout, userId, new AuditField("cause", CauseWord(cause)), new AuditField("revoked", revoked), new AuditField("app", app))
+        : new(AuditEventType.SingleLogout, userId, new AuditField("cause", CauseWord(cause)), new AuditField("revoked", revoked));
+
+    /// <summary>The audit word of a cause: its name in lower-case snake_case (in the catalogue's word list).</summary>
+    internal static string CauseWord(Auth.Services.Security.SessionEndCause cause) => cause switch
+    {
+        Auth.Services.Security.SessionEndCause.Logout => "logout",
+        Auth.Services.Security.SessionEndCause.LogoutAll => "logout_all",
+        Auth.Services.Security.SessionEndCause.SessionRevoked => "session_revoked",
+        Auth.Services.Security.SessionEndCause.TokenReuse => "token_reuse",
+        Auth.Services.Security.SessionEndCause.PasswordChange => "password_change",
+        Auth.Services.Security.SessionEndCause.ApplicationLogout => "application_logout",
+        _ => "unknown",
+    };
+
     public static AuditEvent AuthorizationCodeRejected(Guid? userId, Guid? applicationId, string reason) => applicationId is Guid app
         ? new(AuditEventType.AuthorizationCodeRejected, userId, new AuditField("app", app), new AuditField("reason", reason))
         : new(AuditEventType.AuthorizationCodeRejected, userId, new AuditField("reason", reason));
