@@ -47,3 +47,24 @@ Add new packages only through the task that needs them, and add a line here when
 
 FluentValidation (T12; not added: hand-written validators do the job without a new dependency),
 NSubstitute (first unit tests), Testcontainers.MsSql (optional; local SQL Express is the default).
+
+## Frontend (npm, `frontend/package.json`, T23)
+
+Exact versions with a committed `package-lock.json`; `frontend/.npmrc` sets `ignore-scripts=true` and
+`save-exact=true`. None of the packages below has an install script, and `npm audit` reported 0
+vulnerabilities at install (2026-10-26). The four dev-only additions were approved by god on 2026-10-26.
+
+| Package | Version | Kind | Why |
+|---|---|---|---|
+| vue | 3.5.44 | runtime | UI framework (`<script setup>`, Composition API). |
+| vue-router | 5.4.0 | runtime | Client routing. |
+| pinia | 4.1.0 | runtime | Store for the non-sensitive user profile only. |
+| vite | 8.3.5 | dev | Dev server, `/api` proxy and production build. |
+| vitest | 5.0.5 | dev | Unit and component tests. |
+| @vitejs/plugin-vue | 6.0.10 | dev (approved) | Vite cannot compile `.vue` single-file components without it. |
+| typescript | 6.0.3 | dev (approved) | Strict typing. Not 7.x: vue-tsc relies on the JavaScript compiler API that 7.x (the native port) drops. |
+| vue-tsc | 3.3.13 | dev (approved) | Type-checks `.vue` files in `npm run build` (plain tsc cannot read them). |
+| jsdom | 30.1.3 | dev (approved) | Vitest DOM environment for component, accessibility and storage tests. |
+
+Not used: @vue/test-utils (tests mount with `createApp`), @types/node, Playwright, any UI, icon or
+validation library.

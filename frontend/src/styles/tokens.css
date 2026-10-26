@@ -1,0 +1,374 @@
+/*
+ * Central Auth design tokens. Three tiers:
+ *   1. primitive  (--p-*)  raw values; NEVER referenced by components or pages
+ *   2. semantic            purpose aliases (--color-text, --space-3 ...); dark mode is redefined here only
+ *   3. component           scoped to one kit component (--button-*, --input-*), built from semantic tokens
+ * Contrast of the semantic colour pairs is verified by tests/styles/contrast.spec.ts (light and dark).
+ * Breakpoints cannot be used inside @media as variables; the kit uses the em values documented here.
+ */
+
+/* ---------- 1. Primitive ---------- */
+:root {
+  /* neutral ramp (slate) */
+  --p-neutral-0: #ffffff;
+  --p-neutral-50: #f8fafc;
+  --p-neutral-100: #f1f5f9;
+  --p-neutral-200: #e2e8f0;
+  --p-neutral-300: #cbd5e1;
+  --p-neutral-400: #94a3b8;
+  --p-neutral-500: #64748b;
+  --p-neutral-600: #475569;
+  --p-neutral-700: #334155;
+  --p-neutral-800: #1e293b;
+  --p-neutral-900: #0f172a;
+  --p-neutral-950: #020617;
+
+  /* brand ramp (indigo) */
+  --p-brand-50: #eef2ff;
+  --p-brand-100: #e0e7ff;
+  --p-brand-200: #c7d2fe;
+  --p-brand-300: #a5b4fc;
+  --p-brand-400: #818cf8;
+  --p-brand-500: #6366f1;
+  --p-brand-600: #4f46e5;
+  --p-brand-700: #4338ca;
+  --p-brand-800: #3730a3;
+  --p-brand-900: #312e81;
+  --p-brand-950: #1e1b4b;
+
+  /* status ramps (only the shades in use) */
+  --p-red-50: #fef2f2;
+  --p-red-200: #fecaca;
+  --p-red-300: #fca5a5;
+  --p-red-400: #f87171;
+  --p-red-700: #b91c1c;
+  --p-red-800: #991b1b;
+  --p-red-950: #450a0a;
+  --p-green-50: #f0fdf4;
+  --p-green-200: #bbf7d0;
+  --p-green-300: #86efac;
+  --p-green-400: #4ade80;
+  --p-green-700: #15803d;
+  --p-green-800: #166534;
+  --p-green-950: #052e16;
+  --p-amber-50: #fffbeb;
+  --p-amber-200: #fde68a;
+  --p-amber-300: #fcd34d;
+  --p-amber-400: #fbbf24;
+  --p-amber-700: #b45309;
+  --p-amber-800: #92400e;
+  --p-amber-950: #451a03;
+
+  /* type */
+  --p-font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --p-font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+  --p-size-base: 1rem; /* modular scale, ratio about 1.25 */
+  --p-size-0: 0.75rem;
+  --p-size-1: 0.875rem;
+  --p-size-2: 1rem;
+  --p-size-3: 1.25rem;
+  --p-size-4: 1.5625rem;
+  --p-size-5: 1.953rem;
+  --p-size-6: 2.441rem;
+  --p-weight-regular: 400;
+  --p-weight-medium: 500;
+  --p-weight-semibold: 600;
+  --p-weight-bold: 700;
+  --p-leading-tight: 1.25;
+  --p-leading-normal: 1.5;
+
+  /* space: 4px (0.25rem) base */
+  --p-space-unit: 0.25rem;
+
+  /* shape and depth */
+  --p-radius-1: 0.25rem;
+  --p-radius-2: 0.375rem;
+  --p-radius-3: 0.5rem;
+  --p-radius-4: 0.75rem;
+  --p-radius-full: 999rem;
+  --p-hairline: 0.0625rem; /* 1px */
+  --p-thick: 0.125rem; /* 2px */
+  --p-shadow-1: 0 0.0625rem 0.125rem rgb(2 6 23 / 0.08), 0 0.0625rem 0.1875rem rgb(2 6 23 / 0.06);
+  --p-shadow-2: 0 0.25rem 0.75rem rgb(2 6 23 / 0.1), 0 0.125rem 0.25rem rgb(2 6 23 / 0.06);
+  --p-shadow-3: 0 1rem 2.5rem rgb(2 6 23 / 0.22), 0 0.25rem 0.75rem rgb(2 6 23 / 0.12);
+
+  /* motion */
+  --p-duration-1: 120ms;
+  --p-duration-2: 200ms;
+  --p-duration-3: 320ms;
+  --p-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --p-ease-exit: cubic-bezier(0.3, 0, 1, 1);
+}
+
+/* ---------- 2. Semantic: light (default) ---------- */
+:root {
+  color-scheme: light;
+
+  --color-bg: var(--p-neutral-50);
+  --color-surface: var(--p-neutral-0);
+  --color-surface-raised: var(--p-neutral-0);
+  --color-surface-sunken: var(--p-neutral-100);
+  --color-overlay: rgb(2 6 23 / 0.55);
+
+  --color-text: var(--p-neutral-900);
+  --color-text-muted: var(--p-neutral-600);
+  --color-text-disabled: var(--p-neutral-400);
+  --color-border: var(--p-neutral-200);
+  --color-border-strong: var(--p-neutral-500);
+
+  --color-primary: var(--p-brand-600);
+  --color-primary-hover: var(--p-brand-700);
+  --color-primary-active: var(--p-brand-800);
+  --color-on-primary: var(--p-neutral-0);
+  --color-primary-subtle: var(--p-brand-50);
+  --color-link: var(--p-brand-700);
+
+  --color-danger: var(--p-red-700);
+  --color-danger-hover: var(--p-red-800);
+  --color-on-danger: var(--p-neutral-0);
+  --color-danger-text: var(--p-red-700);
+  --color-danger-bg: var(--p-red-50);
+  --color-danger-border: var(--p-red-200);
+  --color-danger-on-bg: var(--p-red-800);
+
+  --color-success-text: var(--p-green-700);
+  --color-success-bg: var(--p-green-50);
+  --color-success-border: var(--p-green-200);
+  --color-success-on-bg: var(--p-green-800);
+
+  --color-warning-text: var(--p-amber-700);
+  --color-warning-bg: var(--p-amber-50);
+  --color-warning-border: var(--p-amber-200);
+  --color-warning-on-bg: var(--p-amber-800);
+
+  --color-info-bg: var(--p-brand-50);
+  --color-info-border: var(--p-brand-200);
+  --color-info-on-bg: var(--p-brand-800);
+
+  --color-focus-ring: var(--p-brand-600);
+  --shadow-raised: var(--p-shadow-1);
+  --shadow-overlay: var(--p-shadow-3);
+  --shadow-toast: var(--p-shadow-2);
+}
+
+/* ---------- 2. Semantic: dark (system preference, unless data-theme="light") ---------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --color-bg: var(--p-neutral-950);
+    --color-surface: var(--p-neutral-900);
+    --color-surface-raised: var(--p-neutral-800);
+    --color-surface-sunken: var(--p-neutral-950);
+    --color-overlay: rgb(2 6 23 / 0.72);
+
+    --color-text: var(--p-neutral-50);
+    --color-text-muted: var(--p-neutral-300);
+    --color-text-disabled: var(--p-neutral-500);
+    --color-border: var(--p-neutral-700);
+    --color-border-strong: var(--p-neutral-400);
+
+    --color-primary: var(--p-brand-300);
+    --color-primary-hover: var(--p-brand-200);
+    --color-primary-active: var(--p-brand-100);
+    --color-on-primary: var(--p-neutral-950);
+    --color-primary-subtle: var(--p-brand-950);
+    --color-link: var(--p-brand-300);
+
+    --color-danger: var(--p-red-300);
+    --color-danger-hover: var(--p-red-200);
+    --color-on-danger: var(--p-neutral-950);
+    --color-danger-text: var(--p-red-300);
+    --color-danger-bg: var(--p-red-950);
+    --color-danger-border: var(--p-red-800);
+    --color-danger-on-bg: var(--p-red-200);
+
+    --color-success-text: var(--p-green-300);
+    --color-success-bg: var(--p-green-950);
+    --color-success-border: var(--p-green-800);
+    --color-success-on-bg: var(--p-green-200);
+
+    --color-warning-text: var(--p-amber-300);
+    --color-warning-bg: var(--p-amber-950);
+    --color-warning-border: var(--p-amber-800);
+    --color-warning-on-bg: var(--p-amber-200);
+
+    --color-info-bg: var(--p-brand-950);
+    --color-info-border: var(--p-brand-800);
+    --color-info-on-bg: var(--p-brand-200);
+
+    --color-focus-ring: var(--p-brand-300);
+    --shadow-raised: none;
+    --shadow-overlay: var(--p-shadow-3);
+    --shadow-toast: var(--p-shadow-3);
+  }
+}
+
+/* ---------- 2. Semantic: dark (explicit override; must stay identical to the block above, tested) ---------- */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-bg: var(--p-neutral-950);
+  --color-surface: var(--p-neutral-900);
+  --color-surface-raised: var(--p-neutral-800);
+  --color-surface-sunken: var(--p-neutral-950);
+  --color-overlay: rgb(2 6 23 / 0.72);
+
+  --color-text: var(--p-neutral-50);
+  --color-text-muted: var(--p-neutral-300);
+  --color-text-disabled: var(--p-neutral-500);
+  --color-border: var(--p-neutral-700);
+  --color-border-strong: var(--p-neutral-400);
+
+  --color-primary: var(--p-brand-300);
+  --color-primary-hover: var(--p-brand-200);
+  --color-primary-active: var(--p-brand-100);
+  --color-on-primary: var(--p-neutral-950);
+  --color-primary-subtle: var(--p-brand-950);
+  --color-link: var(--p-brand-300);
+
+  --color-danger: var(--p-red-300);
+  --color-danger-hover: var(--p-red-200);
+  --color-on-danger: var(--p-neutral-950);
+  --color-danger-text: var(--p-red-300);
+  --color-danger-bg: var(--p-red-950);
+  --color-danger-border: var(--p-red-800);
+  --color-danger-on-bg: var(--p-red-200);
+
+  --color-success-text: var(--p-green-300);
+  --color-success-bg: var(--p-green-950);
+  --color-success-border: var(--p-green-800);
+  --color-success-on-bg: var(--p-green-200);
+
+  --color-warning-text: var(--p-amber-300);
+  --color-warning-bg: var(--p-amber-950);
+  --color-warning-border: var(--p-amber-800);
+  --color-warning-on-bg: var(--p-amber-200);
+
+  --color-info-bg: var(--p-brand-950);
+  --color-info-border: var(--p-brand-800);
+  --color-info-on-bg: var(--p-brand-200);
+
+  --color-focus-ring: var(--p-brand-300);
+  --shadow-raised: none;
+  --shadow-overlay: var(--p-shadow-3);
+  --shadow-toast: var(--p-shadow-3);
+}
+
+/* ---------- 2. Semantic: non-colour (theme independent) ---------- */
+:root {
+  --font-sans: var(--p-font-sans);
+  --font-mono: var(--p-font-mono);
+  --font-size-xs: var(--p-size-0);
+  --font-size-sm: var(--p-size-1);
+  --font-size-md: var(--p-size-2);
+  --font-size-lg: var(--p-size-3);
+  --font-size-xl: var(--p-size-4);
+  --font-size-2xl: var(--p-size-5);
+  --font-size-3xl: var(--p-size-6);
+  --font-weight-regular: var(--p-weight-regular);
+  --font-weight-medium: var(--p-weight-medium);
+  --font-weight-semibold: var(--p-weight-semibold);
+  --font-weight-bold: var(--p-weight-bold);
+  --line-height-tight: var(--p-leading-tight);
+  --line-height-normal: var(--p-leading-normal);
+
+  --space-0: 0;
+  --space-1: calc(var(--p-space-unit) * 1); /* 4px */
+  --space-2: calc(var(--p-space-unit) * 2); /* 8px */
+  --space-3: calc(var(--p-space-unit) * 3); /* 12px */
+  --space-4: calc(var(--p-space-unit) * 4); /* 16px */
+  --space-5: calc(var(--p-space-unit) * 5); /* 20px */
+  --space-6: calc(var(--p-space-unit) * 6); /* 24px */
+  --space-8: calc(var(--p-space-unit) * 8); /* 32px */
+  --space-10: calc(var(--p-space-unit) * 10); /* 40px */
+  --space-12: calc(var(--p-space-unit) * 12); /* 48px */
+  --space-16: calc(var(--p-space-unit) * 16); /* 64px */
+
+  --radius-sm: var(--p-radius-1);
+  --radius-md: var(--p-radius-2);
+  --radius-lg: var(--p-radius-3);
+  --radius-xl: var(--p-radius-4);
+  --radius-full: var(--p-radius-full);
+  --border-width: var(--p-hairline);
+  --border-width-thick: var(--p-thick);
+
+  --duration-fast: var(--p-duration-1);
+  --duration-base: var(--p-duration-2);
+  --duration-slow: var(--p-duration-3);
+  --ease-standard: var(--p-ease-standard);
+  --ease-exit: var(--p-ease-exit);
+
+  --focus-ring-width: var(--p-thick);
+  --focus-ring-offset: var(--p-thick);
+  --focus-ring: var(--focus-ring-width) solid var(--color-focus-ring);
+
+  /* minimum interactive target (WCAG 2.5.8 needs 24px; we use 44px for primary controls) */
+  --target-min: 1.5rem;
+  --target-comfortable: 2.75rem;
+
+  --z-base: 0;
+  --z-sticky: 100;
+  --z-dialog: 1000;
+  --z-toast: 1100;
+
+  /* breakpoints, for reference: sm 30em (480px), md 48em (768px), lg 64em (1024px) */
+  --breakpoint-sm: 30em;
+  --breakpoint-md: 48em;
+  --breakpoint-lg: 64em;
+
+  --content-max: 72rem;
+  --form-max: 28rem;
+  --dialog-max: 32rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+  }
+}
+
+/* ---------- 3. Component-scoped ---------- */
+:root {
+  --button-radius: var(--radius-md);
+  --button-height-sm: 2rem;
+  --button-height-md: var(--target-comfortable);
+  --button-height-lg: 3.25rem;
+  --button-padding-x-sm: var(--space-3);
+  --button-padding-x-md: var(--space-4);
+  --button-padding-x-lg: var(--space-6);
+  --button-font-weight: var(--font-weight-semibold);
+
+  --input-radius: var(--radius-md);
+  --input-height: var(--target-comfortable);
+  --input-padding-x: var(--space-3);
+  --input-border: var(--border-width) solid var(--color-border-strong);
+  --input-bg: var(--color-surface);
+
+  --card-radius: var(--radius-lg);
+  --card-padding: var(--space-6);
+  --card-border: var(--border-width) solid var(--color-border);
+
+  --alert-radius: var(--radius-md);
+  --alert-padding: var(--space-4);
+
+  --dialog-radius: var(--radius-xl);
+  --dialog-padding: var(--space-6);
+
+  --table-cell-padding-y: var(--space-3);
+  --table-cell-padding-x: var(--space-4);
+
+  --toast-radius: var(--radius-lg);
+  --toast-width: 24rem;
+
+  --spinner-size-sm: 1rem;
+  --spinner-size-md: 1.5rem;
+  --spinner-size-lg: 2.5rem;
+  --spinner-stroke: var(--border-width-thick);
+
+  --icon-size-sm: 1rem;
+  --icon-size-md: 1.25rem;
+  --icon-size-lg: 1.5rem;
+}
