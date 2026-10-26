@@ -41,7 +41,10 @@ internal sealed class AdminEndpoints : IEndpointModule
         admin.AddEndpointFilter(async (context, next) =>
         {
             context.HttpContext.Response.Headers.CacheControl = "no-store";
-            return await next(context);
+
+            // Runs after authorization. Every guard rail (self-lockout, privilege ceiling) needs the acting account, so a
+            // principal without a usable sub is refused instead of being treated as a trusted host caller.
+            return ActorId(context.HttpContext.User) is null ? AccessDenied() : await next(context);
         });
 
         // Accounts
@@ -253,14 +256,15 @@ internal sealed class AdminEndpoints : IEndpointModule
         DateTime unspecified => DateTime.SpecifyKind(unspecified, DateTimeKind.Utc),
     };
 
-    /// <summary>The request's audit context, naming the signed-in administrator as the actor.</summary>
-    internal static AuditContext ActorAudit(HttpContext http)
-    {
-        Guid? actor = (http.User.Identity as ClaimsIdentity)?.FindFirst(AuthClaimTypes.Subject)?.Value is string sub && Guid.TryParse(sub, out Guid id)
+    /// <summary>The signed-in account (the sub claim), or null when it is missing or not a GUID.</summary>
+    internal static Guid? ActorId(ClaimsPrincipal user) =>
+        (user.Identity as ClaimsIdentity)?.FindFirst(AuthClaimTypes.Subject)?.Value is string sub && Guid.TryParse(sub, out Guid id) && id != Guid.Empty
             ? id
             : null;
-        return HttpAudit.From(http) with { ActorId = actor };
-    }
+
+    /// <summary>The request's audit context, naming the signed-in administrator as the actor (never null here: the group filter refused it).</summary>
+    internal static AuditContext ActorAudit(HttpContext http) =>
+        HttpAudit.From(http) with { ActorId = ActorId(http.User) ?? throw new InvalidOperationException("The admin filter lets no request through without an actor.") };
 
     private static IResult Answer(RoleChangeOutcome outcome) => outcome switch
     {
@@ -269,6 +273,7 @@ internal sealed class AdminEndpoints : IEndpointModule
         RoleChangeOutcome.SelfLockout => SelfLockout(),
         RoleChangeOutcome.LastAdministrator => LastAdministrator(),
         RoleChangeOutcome.SystemRole => TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: "The Admin role always holds every permission."),
+        RoleChangeOutcome.PrivilegeCeiling => TypedResults.Problem(statusCode: StatusCodes.Status403Forbidden, title: "You can only give a role or permission that you hold yourself."),
         _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unmapped outcome."),
     };
 
@@ -279,12 +284,15 @@ internal sealed class AdminEndpoints : IEndpointModule
         AdminOutcome.SelfLockout => SelfLockout(),
         AdminOutcome.LastAdministrator => LastAdministrator(),
         AdminOutcome.Conflict => TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: "The account changed at the same time; nothing was changed. Retry."),
+        AdminOutcome.PrivilegeCeiling => TypedResults.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Only an administrator can change an administrator's account."),
         _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unmapped outcome."),
     };
 
     private static IResult Failure(ClientApplicationResult result) => result.Error == AuthError.NotFound
         ? NotFound()
         : TypedResults.ValidationProblem(result.Errors.ToDictionary(e => e.Key, e => e.Value));
+
+    private static ProblemHttpResult AccessDenied() => TypedResults.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Access denied.");
 
     private static ProblemHttpResult NotFound() => TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not found.");
 

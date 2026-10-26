@@ -29,6 +29,12 @@ public enum RoleChangeOutcome
 
     /// <summary>The Admin system role always holds every permission (the seeder restores them); refused.</summary>
     SystemRole,
+
+    /// <summary>
+    /// Privilege ceiling: a non-administrator may give only a role they hold, or grant only a permission they hold;
+    /// refused otherwise, so roles.manage cannot be used to escalate to Admin.
+    /// </summary>
+    PrivilegeCeiling,
 }
 
 /// <summary>
@@ -41,7 +47,10 @@ public enum RoleChangeOutcome
 /// - the Admin role is never removed from the last active, verified holder; the check and the delete run under a row
 ///   lock on the Admin role, so two administrators demoting each other at once cannot both succeed;
 /// - an administrator cannot take a role from their own account, nor a permission from a role they hold;
-/// - the Admin role's permissions cannot be removed (the seeder would restore them anyway).
+/// - the Admin role's permissions cannot be removed (the seeder would restore them anyway);
+/// - privilege ceiling: an actor who is not an administrator may assign only a role they hold themselves and grant only
+///   a permission they hold themselves (through a global role), and only an administrator may take the Admin role away.
+/// A null <see cref="AuditContext.ActorId"/> means a trusted host caller (seeding, tests); the admin API always sets it.
 /// </summary>
 public interface IRoleAssignmentService
 {
@@ -89,6 +98,11 @@ internal sealed class RoleAssignmentService(
             return RoleChangeOutcome.Unchanged;
         }
 
+        if (audit.ActorId is Guid actor && !await IsAdministratorAsync(actor, cancellationToken) && !await roles.UserHasRoleAsync(actor, roleId, cancellationToken))
+        {
+            return RoleChangeOutcome.PrivilegeCeiling;
+        }
+
         await roles.AddUserRoleAsync(new UserRole { UserId = userId, RoleId = roleId, AssignedUtc = clock.UtcNow }, cancellationToken);
         await audits.StageAsync(AuditEvents.RoleAssigned(userId, roleId, AdminSource), audit, cancellationToken);
         try
@@ -120,8 +134,17 @@ internal sealed class RoleAssignmentService(
             if (role is not null && IsAdminRole(role))
             {
                 // Serialises every "how many administrators are left" decision until this transaction ends.
+                // Only an active, verified holder counts as an administrator: removing the role from a stale
+                // (inactive or unverified) account never lowers the count, so it is allowed.
                 await roles.LockRoleAsync(roleId, cancellationToken);
-                if (await roles.UserHasRoleAsync(userId, roleId, cancellationToken)
+                if (audit.ActorId is Guid actor && !await roles.UserHasRoleAsync(actor, roleId, cancellationToken))
+                {
+                    // Only an administrator may demote an administrator (read under the lock, after any concurrent demotion).
+                    return RoleChangeOutcome.PrivilegeCeiling;
+                }
+
+                if (await users.GetByIdAsync(userId, cancellationToken) is { IsActive: true, EmailVerified: true }
+                    && await roles.UserHasRoleAsync(userId, roleId, cancellationToken)
                     && await roles.CountActiveVerifiedHoldersAsync(roleId, userId, cancellationToken) == 0)
                 {
                     return RoleChangeOutcome.LastAdministrator;
@@ -147,7 +170,8 @@ internal sealed class RoleAssignmentService(
     public async Task<RoleChangeOutcome> GrantRolePermissionAsync(Guid roleId, Guid permissionId, AuditContext audit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(audit);
-        if (await roles.GetByIdAsync(roleId, cancellationToken) is null || await roles.GetPermissionByIdAsync(permissionId, cancellationToken) is null)
+        Permission? permission = await roles.GetPermissionByIdAsync(permissionId, cancellationToken);
+        if (await roles.GetByIdAsync(roleId, cancellationToken) is null || permission is null)
         {
             return RoleChangeOutcome.NotFound;
         }
@@ -155,6 +179,13 @@ internal sealed class RoleAssignmentService(
         if (await roles.RoleHasPermissionAsync(roleId, permissionId, cancellationToken))
         {
             return RoleChangeOutcome.Unchanged;
+        }
+
+        if (audit.ActorId is Guid actor
+            && !await IsAdministratorAsync(actor, cancellationToken)
+            && !(await roles.GetPermissionCodesForUserAsync(actor, null, cancellationToken)).Contains(permission.Code, StringComparer.Ordinal))
+        {
+            return RoleChangeOutcome.PrivilegeCeiling;
         }
 
         await roles.AddRolePermissionAsync(new RolePermission { RoleId = roleId, PermissionId = permissionId }, cancellationToken);
@@ -204,6 +235,11 @@ internal sealed class RoleAssignmentService(
         await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.All, SessionEndCause.AdminRevoked, null, RoleId: roleId), audit, cancellationToken);
         return RoleChangeOutcome.Changed;
     }
+
+    /// <summary>Whether the user holds the global Admin role (read from the database, not from the token).</summary>
+    private async Task<bool> IsAdministratorAsync(Guid userId, CancellationToken cancellationToken) =>
+        await roles.GetGlobalRoleAsync(AuthRoles.Admin.ToUpperInvariant(), cancellationToken) is Role admin
+        && await roles.UserHasRoleAsync(userId, admin.Id, cancellationToken);
 
     internal static bool IsAdminRole(Role role) =>
         role.IsSystem && role.ClientApplicationId is null && string.Equals(role.NormalizedName, AuthRoles.Admin, StringComparison.OrdinalIgnoreCase);

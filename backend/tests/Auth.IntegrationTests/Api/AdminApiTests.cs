@@ -5,9 +5,14 @@ using Auth.Contracts;
 using Auth.Contracts.Requests;
 using Auth.DAL;
 using Auth.Entities;
+using Auth.Services.Admin;
+using Auth.Services.Authorization;
+using Auth.Services.Common;
 using Auth.Services.Passwords;
+using Auth.Services.Security;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,6 +57,7 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         ("GET", Admin + "/audit", AuthPolicies.AuditRead, null),
     ];
 
+    private readonly RecordingListener ended = new();
     private WebApplicationFactory<Program> app = null!;
 
     public async Task InitializeAsync()
@@ -201,6 +207,12 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized, (await target.GetAsync(Me)).StatusCode);
         AuditLog reset = Assert.Single(await RowsAsync(AuditEventType.MfaDisabled, targetId));
         Assert.Equal($"{{\"action\":\"reset\",\"actor\":\"{adminId}\"}}", reset.Detail);
+
+        // Not only the new stamp: every refresh family is revoked and single logout is published for the user.
+        List<RefreshToken> tokens = await RefreshTokensAsync(targetId);
+        Assert.NotEmpty(tokens);
+        Assert.All(tokens, t => Assert.NotNull(t.RevokedUtc));
+        Assert.Contains(ended.Seen, e => e.UserId == targetId && e.Scope == SessionEndScope.All && e.Cause == SessionEndCause.MfaReset);
         Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(admin, "POST", Admin + "/users/" + Guid.NewGuid() + "/mfa/reset", null)).StatusCode);
     }
 
@@ -226,11 +238,16 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Contains("clientId", problem, StringComparison.Ordinal);
         Assert.DoesNotContain("http://plain", problem, StringComparison.Ordinal);
 
-        Assert.Equal(HttpStatusCode.OK, (await SendAsync(admin, "PUT", Admin + "/apps/" + appId, request with { Name = "Renamed" })).StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(admin, "POST", Admin + "/apps/" + appId + "/deactivate", null)).StatusCode);
+        // An update that moves the origin takes effect at once: the old origin loses CORS, the new one gains it.
+        string moved = "https://moved-" + suffix + ".example.test";
+        ClientApplicationRequest update = request with { Name = "Renamed", AllowedOrigins = [moved], RedirectUris = [moved + "/callback"] };
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(admin, "PUT", Admin + "/apps/" + appId, update)).StatusCode);
         Assert.Equal(string.Empty, Cors(await ProbeCorsAsync(origin)));
+        Assert.Equal(moved, Cors(await ProbeCorsAsync(moved)));
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(admin, "POST", Admin + "/apps/" + appId + "/deactivate", null)).StatusCode);
+        Assert.Equal(string.Empty, Cors(await ProbeCorsAsync(moved)));
         Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(admin, "POST", Admin + "/apps/" + appId + "/activate", null)).StatusCode);
-        Assert.Equal(origin, Cors(await ProbeCorsAsync(origin)));
+        Assert.Equal(moved, Cors(await ProbeCorsAsync(moved)));
         Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(admin, "PUT", Admin + "/apps/" + Guid.NewGuid(), request)).StatusCode);
 
         List<AuditLog> rows = await AppRowsAsync(appId);
@@ -242,25 +259,29 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
     [Fact]
     public async Task The_last_active_administrator_cannot_be_demoted_or_deactivated()
     {
-        (Guid firstId, string firstEmail) = await SeedUserAsync([AuthRoles.Admin]);
-        (Guid secondId, string secondEmail) = await SeedUserAsync([AuthRoles.Admin]);
+        (Guid soleId, _) = await SeedUserAsync([AuthRoles.Admin]);
         Guid adminRole = await RoleIdAsync(AuthRoles.Admin);
-        using Browser first = await SignedInAsync(firstEmail);
-        await using AdminIsolation isolation = await IsolateAdminsAsync(firstId, secondId);
+        await using AdminIsolation isolation = await IsolateAdminsAsync(soleId);
 
-        // Two administrators: one may demote the other, then the remaining one is the last.
-        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(first, "DELETE", Admin + "/users/" + secondId + "/roles/" + adminRole, null)).StatusCode);
-        await AddRoleAsync(secondId, adminRole);
-        using Browser second = await SignedInAsync(secondEmail);
-        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(second, "POST", Admin + "/users/" + firstId + "/deactivate", null)).StatusCode);
+        // Over HTTP the actor must be an administrator too (privilege ceiling), so it always counts; the sole
+        // administrator can only be targeted by a host caller (null actor) or by a concurrent change (next tests).
+        Assert.Equal(RoleChangeOutcome.LastAdministrator, await InScopeAsync<IRoleAssignmentService, RoleChangeOutcome>(s => s.RemoveUserRoleAsync(soleId, adminRole, AuditContext.None, CancellationToken.None)));
+        Assert.Equal(AdminOutcome.LastAdministrator, await InScopeAsync<IUserAdministrationService, AdminOutcome>(s => s.DeactivateAsync(soleId, AuditContext.None, CancellationToken.None)));
+        Assert.True((await LoadUserAsync(soleId)).IsActive);
+        Assert.True(await HasRoleAsync(soleId, adminRole));
+    }
 
-        HttpResponseMessage demote = await SendAsync(await FreshAdminWithoutRoleAsync(), "DELETE", Admin + "/users/" + secondId + "/roles/" + adminRole, null);
-        Assert.Equal(HttpStatusCode.Conflict, demote.StatusCode);
-        Assert.Contains("At least one active administrator must remain.", await demote.Content.ReadAsStringAsync(), StringComparison.Ordinal);
-        HttpResponseMessage deactivate = await SendAsync(await FreshAdminWithoutRoleAsync(), "POST", Admin + "/users/" + secondId + "/deactivate", null);
-        Assert.Equal(HttpStatusCode.Conflict, deactivate.StatusCode);
-        Assert.True((await LoadUserAsync(secondId)).IsActive);
-        Assert.True(await HasRoleAsync(secondId, adminRole));
+    [Fact]
+    public async Task Removing_the_Admin_role_from_a_stale_account_is_not_refused_as_the_last_administrator()
+    {
+        (Guid staleId, _) = await SeedUserAsync([AuthRoles.Admin]);
+        Guid adminRole = await RoleIdAsync(AuthRoles.Admin);
+        await using AdminIsolation isolation = await IsolateAdminsAsync(staleId);
+        await UpdateUserAsync(staleId, u => u.IsActive = false);
+
+        // The stale account is not an active administrator, so removing its role does not lower the count.
+        Assert.Equal(RoleChangeOutcome.Changed, await InScopeAsync<IRoleAssignmentService, RoleChangeOutcome>(s => s.RemoveUserRoleAsync(staleId, adminRole, AuditContext.None, CancellationToken.None)));
+        Assert.False(await HasRoleAsync(staleId, adminRole));
     }
 
     [Fact]
@@ -277,9 +298,132 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
             SendAsync(first, "DELETE", Admin + "/users/" + secondId + "/roles/" + adminRole, null),
             SendAsync(second, "DELETE", Admin + "/users/" + firstId + "/roles/" + adminRole, null));
 
+        // The loser is refused whichever way the race goes: last administrator (409), no longer an administrator (403),
+        // or its session already ended (401).
         Assert.Single(answers, a => a.StatusCode == HttpStatusCode.NoContent);
-        Assert.Single(answers, a => a.StatusCode == HttpStatusCode.Conflict);
+        Assert.Single(answers, a => a.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized);
         Assert.Equal(1, (await HasRoleAsync(firstId, adminRole) ? 1 : 0) + (await HasRoleAsync(secondId, adminRole) ? 1 : 0));
+    }
+
+    [Fact]
+    public async Task Two_administrators_deactivating_each_other_at_once_leave_one_active_administrator()
+    {
+        (Guid firstId, string firstEmail) = await SeedUserAsync([AuthRoles.Admin]);
+        (Guid secondId, string secondEmail) = await SeedUserAsync([AuthRoles.Admin]);
+        using Browser first = await SignedInAsync(firstEmail);
+        using Browser second = await SignedInAsync(secondEmail);
+        await using AdminIsolation isolation = await IsolateAdminsAsync(firstId, secondId);
+
+        HttpResponseMessage[] answers = await Task.WhenAll(
+            SendAsync(first, "POST", Admin + "/users/" + secondId + "/deactivate", null),
+            SendAsync(second, "POST", Admin + "/users/" + firstId + "/deactivate", null));
+
+        Assert.Single(answers, a => a.StatusCode == HttpStatusCode.NoContent);
+        Assert.Single(answers, a => a.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.Unauthorized);
+        Assert.Equal(1, ((await LoadUserAsync(firstId)).IsActive ? 1 : 0) + ((await LoadUserAsync(secondId)).IsActive ? 1 : 0));
+    }
+
+    [Fact]
+    public async Task A_role_manager_who_is_not_an_administrator_can_only_give_rights_they_hold()
+    {
+        string managerRoleName = "Manager-" + Guid.NewGuid().ToString("N")[..8];
+        Guid managerRole = await CreateRoleAsync(managerRoleName, [AuthPermissions.RolesManage]);
+        (Guid managerId, string managerEmail) = await SeedUserAsync([managerRoleName]);
+        (Guid targetId, _) = await SeedUserAsync([AuthRoles.User]);
+        (Guid otherAdminId, string adminEmail) = await SeedUserAsync([AuthRoles.Admin]);
+        Guid adminRole = await RoleIdAsync(AuthRoles.Admin);
+        Guid writerRole = await RoleIdAsync(RoleFor(AuthPermissions.UsersWrite));
+        Guid otherRole = await CreateRoleAsync("Other-" + Guid.NewGuid().ToString("N")[..8], []);
+        Guid usersWrite = await PermissionIdAsync(AuthPermissions.UsersWrite);
+        Guid rolesManage = await PermissionIdAsync(AuthPermissions.RolesManage);
+        using Browser manager = await SignedInAsync(managerEmail);
+
+        foreach ((string method, string path, object? body) in new (string, string, object?)[]
+        {
+            ("POST", Admin + "/users/" + managerId + "/roles", new AdminRoleAssignmentRequest(adminRole)),
+            ("POST", Admin + "/users/" + targetId + "/roles", new AdminRoleAssignmentRequest(adminRole)),
+            ("POST", Admin + "/users/" + targetId + "/roles", new AdminRoleAssignmentRequest(writerRole)),
+            ("POST", Admin + "/roles/" + managerRole + "/permissions", new AdminPermissionGrantRequest(usersWrite)),
+            ("POST", Admin + "/roles/" + otherRole + "/permissions", new AdminPermissionGrantRequest(usersWrite)),
+            ("DELETE", Admin + "/users/" + otherAdminId + "/roles/" + adminRole, null),
+        })
+        {
+            HttpResponseMessage response = await SendAsync(manager, method, path, body);
+            Assert.True(response.StatusCode == HttpStatusCode.Forbidden, method + " " + path + " answered " + (int)response.StatusCode);
+        }
+
+        Assert.False(await HasRoleAsync(managerId, adminRole));
+        Assert.False(await HasRoleAsync(targetId, adminRole));
+        Assert.False(await HasRoleAsync(targetId, writerRole));
+        Assert.False(await RoleHasPermissionAsync(managerRole, usersWrite));
+        Assert.False(await RoleHasPermissionAsync(otherRole, usersWrite));
+        Assert.True(await HasRoleAsync(otherAdminId, adminRole));
+        Assert.Empty(await RowsAsync(AuditEventType.RoleAssigned, targetId));
+
+        // What the manager holds, they may pass on.
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(manager, "POST", Admin + "/users/" + targetId + "/roles", new AdminRoleAssignmentRequest(managerRole))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(manager, "POST", Admin + "/roles/" + otherRole + "/permissions", new AdminPermissionGrantRequest(rolesManage))).StatusCode);
+        Assert.True(await HasRoleAsync(targetId, managerRole));
+
+        // An administrator has no ceiling.
+        using Browser admin = await SignedInAsync(adminEmail);
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(admin, "POST", Admin + "/users/" + targetId + "/roles", new AdminRoleAssignmentRequest(writerRole))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(admin, "POST", Admin + "/roles/" + otherRole + "/permissions", new AdminPermissionGrantRequest(usersWrite))).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_user_writer_who_is_not_an_administrator_cannot_change_an_administrators_account()
+    {
+        (Guid adminId, _) = await SeedUserAsync([AuthRoles.Admin]);
+        await UpdateUserAsync(adminId, u =>
+        {
+            u.MfaEnabled = true;
+            u.MfaSecretEncrypted = [1, 2, 3, 4];
+        });
+        (Guid plainId, _) = await SeedUserAsync([AuthRoles.User]);
+        (_, string writerEmail) = await SeedUserAsync([RoleFor(AuthPermissions.UsersWrite)]);
+        using Browser writer = await SignedInAsync(writerEmail);
+
+        foreach (string action in new[] { "/deactivate", "/mfa/reset" })
+        {
+            HttpResponseMessage response = await SendAsync(writer, "POST", Admin + "/users/" + adminId + action, null);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.Contains("Only an administrator can change an administrator's account.", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+
+        User untouched = await LoadUserAsync(adminId);
+        Assert.True(untouched.IsActive);
+        Assert.True(untouched.MfaEnabled);
+        Assert.Empty(await RowsAsync(AuditEventType.UserDeactivated, adminId));
+
+        await UpdateUserAsync(adminId, u => u.IsActive = false);
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(writer, "POST", Admin + "/users/" + adminId + "/reactivate", null)).StatusCode);
+        Assert.False((await LoadUserAsync(adminId)).IsActive);
+
+        // Other accounts are fine.
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(writer, "POST", Admin + "/users/" + plainId + "/deactivate", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(writer, "POST", Admin + "/users/" + plainId + "/reactivate", null)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Reactivation_clears_the_lockout()
+    {
+        (_, string adminEmail) = await SeedUserAsync([AuthRoles.Admin]);
+        (Guid targetId, string targetEmail) = await SeedUserAsync([AuthRoles.User]);
+        using Browser admin = await SignedInAsync(adminEmail);
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(admin, "POST", Admin + "/users/" + targetId + "/deactivate", null)).StatusCode);
+        await UpdateUserAsync(targetId, u =>
+        {
+            u.FailedLoginCount = 7;
+            u.LockoutEndUtc = DateTime.UtcNow.AddHours(1);
+            u.LockoutLevel = 3;
+        });
+
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(admin, "POST", Admin + "/users/" + targetId + "/reactivate", null)).StatusCode);
+
+        User after = await LoadUserAsync(targetId);
+        Assert.Equal((0, null, 0), (after.FailedLoginCount, after.LockoutEndUtc, after.LockoutLevel));
+        Assert.Equal(HttpStatusCode.OK, (await TrySignInAsync(targetEmail)).StatusCode);
     }
 
     [Fact]
@@ -442,6 +586,7 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
             }
 
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
+            builder.ConfigureTestServices(services => services.AddSingleton<ISessionEndedListener>(ended));
         });
     }
 
@@ -482,15 +627,6 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         await browser.GetAsync(TestEndpoints.Prefix + "/ping");
         return await browser.SendAsync(HttpMethod.Post, Login, configure: r =>
             r.Content = new StringContent(JsonSerializer.Serialize(new Dictionary<string, string> { [AuthRequestFields.Email] = email, ["password"] = password }), Encoding.UTF8, "application/json"));
-    }
-
-    /// <summary>A signed-in holder of every admin permission through a custom role (not the Admin role), so it is not counted as an administrator.</summary>
-    private async Task<Browser> FreshAdminWithoutRoleAsync()
-    {
-        string name = "AllPerms-" + Guid.NewGuid().ToString("N")[..8];
-        await CreateRoleAsync(name, [.. AuthPermissions.All]);
-        (_, string email) = await SeedUserAsync([name]);
-        return await SignedInAsync(email);
     }
 
     /// <summary>
@@ -563,6 +699,19 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         return context.SaveChangesAsync();
     });
 
+    private Task<bool> RoleHasPermissionAsync(Guid roleId, Guid permissionId) =>
+        QueryAsync(context => context.RolePermission.AnyAsync(rp => rp.RoleId == roleId && rp.PermissionId == permissionId));
+
+    private Task<List<RefreshToken>> RefreshTokensAsync(Guid userId) =>
+        QueryAsync(context => context.RefreshToken.AsNoTracking().Where(t => t.UserId == userId).ToListAsync());
+
+    private async Task<T> InScopeAsync<TService, T>(Func<TService, Task<T>> action)
+        where TService : notnull
+    {
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        return await action(scope.ServiceProvider.GetRequiredService<TService>());
+    }
+
     private Task<bool> HasRoleAsync(Guid userId, Guid roleId) =>
         QueryAsync(context => context.UserRole.AnyAsync(ur => ur.UserId == userId && ur.RoleId == roleId));
 
@@ -625,5 +774,17 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
     {
         await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
         return await query(scope.ServiceProvider.GetRequiredService<AuthDbContext>());
+    }
+
+    /// <summary>Records every single-logout event the host publishes.</summary>
+    private sealed class RecordingListener : ISessionEndedListener
+    {
+        public System.Collections.Concurrent.ConcurrentBag<SessionEnded> Seen { get; } = [];
+
+        public Task OnSessionEndedAsync(SessionEnded ended, AuditContext audit, CancellationToken cancellationToken)
+        {
+            Seen.Add(ended);
+            return Task.CompletedTask;
+        }
     }
 }

@@ -108,6 +108,9 @@ never come from headers, the body or a client-readable cookie.
 - **Administration endpoints (T21b):** see docs/admin-api.md. Each one names a permission policy. Roles are given and
   taken away only through `IRoleAssignmentService` (audited as `RoleAssigned` and `RoleRemoved`), which also refuses
   self-lockout and removing the last active, verified administrator.
+- **Privilege ceiling (T21b FIX):** `roles.manage` and `users.write` are not admin-equivalent. A non-administrator
+  may give only the roles and permissions they hold themselves, and may not demote, deactivate, reactivate or reset the MFA
+  of an Admin holder (docs/admin-api.md, "Privilege ceiling").
 - **App-scoped roles (enforced since T18):** `role:Admin` checks the `role` claim. An application role named `Admin`
   can never satisfy it, for two reasons.
   - The API accepts only its default audience, and the registry refuses an application audience equal to it.

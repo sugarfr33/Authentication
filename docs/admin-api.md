@@ -24,6 +24,8 @@ The code is in `Auth.Api/Endpoints/AdminEndpoints.cs`, which calls these service
   - Bodies are capped at 16 KB (413) by AccountKeyMiddleware, which now also caps PUT.
 - **Rate limit.** Rate-limit kind `Admin` covers the prefix `/api/v1/admin`: 120 requests per minute per IP, for every
   method.
+  - The bucket is per client IP, not per administrator: administrators behind one NAT or proxy share it. Raise the
+    limit if several administrators work from one address.
   - Configure it under `RateLimiting:Policies:Admin:PerIp`.
   - Over the limit, the answer is 429.
 - **No caching.** Every answer carries `Cache-Control: no-store`.
@@ -32,6 +34,30 @@ The code is in `Auth.Api/Endpoints/AdminEndpoints.cs`, which calls these service
   - an MFA secret or recovery code;
   - a security stamp, row version or token.
 - **Audit rows name the actor.** Every change is audited with `"actor":"<admin user id>"`, taken from the `sub` claim.
+- **An actor is required.** A signed-in principal without a usable `sub` (missing, not a GUID, or empty) gets 403
+  "Access denied." on every admin endpoint. The services treat a null actor as a trusted host caller (seeding, tests), so
+  the admin API never passes one.
+
+## Privilege ceiling
+
+A permission alone does not let its holder make themselves or anyone else more powerful than they are. The checks read
+the actor's roles from the database, not from the token.
+
+- **roles.manage without the Admin role:**
+  - may assign only a role the actor holds themselves;
+  - may grant only a permission the actor holds themselves (through a global role);
+  - may not take the Admin role from anyone.
+  - So a delegated "role manager" cannot assign Admin to themselves, nor grant `users.write` to a role they hold.
+- **users.write without the Admin role:** may not deactivate, reactivate or reset the MFA of an account that holds the
+  Admin role.
+- An administrator has no ceiling, apart from the guard rails below.
+
+A refusal is 403, with one of these titles:
+
+- "You can only give a role or permission that you hold yourself." (role assignment, permission grant, Admin removal);
+- "Only an administrator can change an administrator's account." (deactivate, reactivate, MFA reset).
+
+Nothing is written or audited on a refusal.
 
 ## Endpoints
 
@@ -89,9 +115,18 @@ assignment being added refers to a missing role. Removing an assignment that doe
 | "The account changed at the same time; nothing was changed. Retry." | A deactivation or reset that lost a concurrency race twice. |
 
 The last-administrator check runs inside a transaction that first locks the Admin role row. Two administrators who
-demote or deactivate each other at the same moment are therefore serialised: one succeeds and the other gets 409, so an
-administrator always remains (tested). Accounts that are inactive or whose email is not verified do not count as
-administrators.
+demote or deactivate each other at the same moment are therefore serialised: one succeeds and the other is refused, so
+an administrator always remains (tested). Depending on timing, the refusal is:
+
+- 409 (last administrator);
+- 403 (it is no longer an administrator);
+- 401 (its session already ended).
+
+Over HTTP the actor must itself be an administrator (privilege ceiling), so in practice this guard is reached through
+such races or by host callers.
+
+Accounts that are inactive or whose email is not verified do not count as administrators. Removing the Admin role from
+such a stale account is therefore never refused as "last administrator", because it does not lower the count.
 
 ## What each change does
 
@@ -100,9 +135,9 @@ administrators.
 | Assign role | Adds the `UserRole`. It takes effect on the user's next sign-in or token refresh. | `RoleAssigned {role, source:"admin", actor}` |
 | Remove role | Deletes the `UserRole`, revokes every refresh family, invalidates session liveness and publishes single logout (`AdminRevoked`). The user is signed out everywhere at once. | `RoleRemoved {role, actor}` |
 | Grant permission | Adds the `RolePermission`. It takes effect at the holders' next sign-in or refresh. | `RolePermissionGranted {role, permission, actor}` |
-| Remove permission | Same as removing a role, for every holder of the role. | `RolePermissionRemoved {role, permission, actor}` |
+| Remove permission | Same as removing a role, for every holder of the role: one call signs out everyone who holds it (a deliberate, audited mass logout). | `RolePermissionRemoved {role, permission, actor}` |
 | Deactivate user | Sets `IsActive=false`, issues a new security stamp, revokes every family, invalidates liveness and publishes single logout. Sign-in is refused afterwards. | `UserDeactivated {revoked, actor}` |
-| Reactivate user | Sets `IsActive=true`. The user signs in again with their password. | `UserReactivated {actor}` |
+| Reactivate user | Sets `IsActive=true` and clears the lockout (failed count, lockout end and level). The user signs in again with their password. | `UserReactivated {actor}` |
 | MFA reset | Runs `IMfaService.ResetAsync`: the factor, recovery codes and pending enrollment are removed, a new security stamp is issued and every session ends. | `MfaDisabled {action:"reset", actor}` |
 | App create, update, deactivate | Runs through the registry: validation, the CORS origin cache is invalidated, and deactivation revokes the application's sessions. | `AppCreated` / `AppUpdated` / `AppDeactivated` (each with `actor`) |
 
@@ -143,13 +178,17 @@ The SQL runbook in docs/mfa-admin-recovery.md remains only for when the API is u
   without a session.
 - **Audit rows:** each one is tested with its exact detail, including the actor.
 - **Guard rails:**
-  - the last administrator;
-  - a concurrent mutual demotion;
+  - the last administrator (host caller) and a stale admin account;
+  - concurrent mutual demotion and mutual deactivation;
+  - the privilege ceiling for a non-admin roles.manage holder, and for a non-admin users.write holder acting on an
+    administrator;
+  - reactivation clearing the lockout;
   - self-lockout;
   - Admin role permissions.
 - **Session effects:**
-  - sessions end after a role removal, a permission removal, a deactivation and an MFA reset;
-  - CORS invalidation after an application is deactivated.
+  - sessions end after a role removal, a permission removal, a deactivation and an MFA reset (for the reset, every
+    refresh family is revoked and single logout is published);
+  - CORS follows an update that moves the origin, and a deactivation.
 - **Request handling:**
   - CSRF, origin, 415, 413 and the rate limit;
   - paging caps and validation;

@@ -29,12 +29,16 @@ public enum AdminOutcome
 
     /// <summary>The account kept changing concurrently; nothing changed, the caller may retry.</summary>
     Conflict,
+
+    /// <summary>The target holds the Admin role and the actor does not; only an administrator may change an administrator.</summary>
+    PrivilegeCeiling,
 }
 
 /// <summary>
 /// Account administration behind /api/v1/admin/users (T21b). Reads return account fields only (no hash, secret, stamp or
 /// token). Every change names the acting administrator in <see cref="AuditContext.ActorId"/>, which is audited as
-/// "actor" and used for the self-lockout rules.
+/// "actor" and used for the self-lockout rules. Deactivating, reactivating or resetting the MFA of an Admin holder needs
+/// an actor who is an administrator too (users.write alone is not enough). A null actor is a trusted host caller.
 /// </summary>
 public interface IUserAdministrationService
 {
@@ -49,7 +53,10 @@ public interface IUserAdministrationService
     /// </summary>
     Task<AdminOutcome> DeactivateAsync(Guid userId, AuditContext audit, CancellationToken cancellationToken);
 
-    /// <summary>Turns the account back on, audited as UserReactivated. The user signs in again with their password.</summary>
+    /// <summary>
+    /// Turns the account back on and clears its lockout (failed count, lockout end and level), audited as
+    /// UserReactivated. The user signs in again with their password.
+    /// </summary>
     Task<AdminOutcome> ReactivateAsync(Guid userId, AuditContext audit, CancellationToken cancellationToken);
 
     /// <summary>
@@ -150,10 +157,16 @@ internal sealed class UserAdministrationService(
                 return AdminOutcome.Unchanged;
             }
 
-            Role? admin = await roles.GetGlobalRoleAsync(AuthRoles.Admin.ToUpperInvariant(), cancellationToken);
-            if (admin is not null && user.EmailVerified && await roles.UserHasRoleAsync(userId, admin.Id, cancellationToken))
+            Role? admin = await AdminRoleAsync(cancellationToken);
+            bool targetIsAdmin = admin is not null && await roles.UserHasRoleAsync(userId, admin.Id, cancellationToken);
+            if (targetIsAdmin && !await ActorIsAdministratorAsync(audit, admin, cancellationToken))
             {
-                await roles.LockRoleAsync(admin.Id, cancellationToken);
+                return AdminOutcome.PrivilegeCeiling;
+            }
+
+            if (targetIsAdmin && user.EmailVerified)
+            {
+                await roles.LockRoleAsync(admin!.Id, cancellationToken);
                 if (await roles.CountActiveVerifiedHoldersAsync(admin.Id, userId, cancellationToken) == 0)
                 {
                     return AdminOutcome.LastAdministrator;
@@ -191,7 +204,15 @@ internal sealed class UserAdministrationService(
                 return AdminOutcome.Unchanged;
             }
 
+            if (!await MayChangeAsync(userId, audit, cancellationToken))
+            {
+                return AdminOutcome.PrivilegeCeiling;
+            }
+
             user.IsActive = true;
+            user.FailedLoginCount = 0;
+            user.LockoutEndUtc = null;
+            user.LockoutLevel = 0;
             user.UpdatedUtc = clock.UtcNow;
             await audits.StageAsync(AuditEvents.UserReactivated(userId), audit, cancellationToken);
             try
@@ -228,6 +249,11 @@ internal sealed class UserAdministrationService(
             return AdminOutcome.Unchanged;
         }
 
+        if (!await MayChangeAsync(userId, audit, cancellationToken))
+        {
+            return AdminOutcome.PrivilegeCeiling;
+        }
+
         try
         {
             return await mfa.ResetAsync(userId, audit, cancellationToken) ? AdminOutcome.Changed : AdminOutcome.NotFound;
@@ -250,6 +276,20 @@ internal sealed class UserAdministrationService(
 
     public async Task<IReadOnlyList<AdminPermissionInfo>> ListPermissionsAsync(CancellationToken cancellationToken) =>
         [.. (await roles.GetPermissionsAsync(cancellationToken)).Select(Permission).OrderBy(p => p.Code, StringComparer.Ordinal)];
+
+    private Task<Role?> AdminRoleAsync(CancellationToken cancellationToken) =>
+        roles.GetGlobalRoleAsync(AuthRoles.Admin.ToUpperInvariant(), cancellationToken);
+
+    /// <summary>A null actor (host caller) or an actor holding the Admin role.</summary>
+    private async Task<bool> ActorIsAdministratorAsync(AuditContext audit, Role? admin, CancellationToken cancellationToken) =>
+        audit.ActorId is not Guid actor || (admin is not null && await roles.UserHasRoleAsync(actor, admin.Id, cancellationToken));
+
+    /// <summary>Only an administrator may change an Admin holder; anyone with users.write may change other accounts.</summary>
+    private async Task<bool> MayChangeAsync(Guid userId, AuditContext audit, CancellationToken cancellationToken)
+    {
+        Role? admin = await AdminRoleAsync(cancellationToken);
+        return admin is null || !await roles.UserHasRoleAsync(userId, admin.Id, cancellationToken) || await ActorIsAdministratorAsync(audit, admin, cancellationToken);
+    }
 
     private static AdminPermissionInfo Permission(Permission permission) => new(permission.Id, permission.Code, permission.Description);
 
