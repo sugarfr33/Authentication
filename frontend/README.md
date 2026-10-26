@@ -12,7 +12,10 @@ npm run build      # vue-tsc strict type-check, then a production build that fai
 
 ## Dev setup against the API
 
-- Start Auth.Api with its `http` profile (port 5094), or set `VITE_DEV_API_TARGET` in `.env.local`.
+- Start Auth.Api with its `https` profile, and put `VITE_DEV_API_TARGET=https://localhost:7090` in `.env.local`
+  (git-ignored). **The proxy's built-in default `http://localhost:5094` does not work.** In Development the API
+  answers plain-http requests with 500, because its antiforgery cookie requires SSL (T26 GAP-2). Full steps:
+  [docs/setup.md](../docs/setup.md).
 - The proxy keeps the browser's `Origin` (`http://localhost:5173`), so add it to the API's
   `BrowserProtection:TrustedOrigins` for Development (user secrets or `appsettings.Development.json`).
   Otherwise POSTs get 403.
@@ -23,8 +26,8 @@ npm run build      # vue-tsc strict type-check, then a production build that fai
 
 - Serve the SPA from the same origin as the API (recommended), or set `VITE_API_BASE_URL` to an https
   origin. It is validated at start-up and the app refuses anything else.
-- The host must send a Content-Security-Policy header (recommended policy in docs/ui-kit.md, "API layer
-  notes") and serve `index.html` for unknown paths (history routing).
+- The host must send a Content-Security-Policy header (none ships with the SPA; recommended policy in
+  [docs/deployment.md](../docs/deployment.md)), and serve `index.html` for unknown paths (history routing).
 
 ## Pages and routes
 

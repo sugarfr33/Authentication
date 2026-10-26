@@ -16,9 +16,10 @@
 
 The `Server` header is removed (Kestrel `AddServerHeader = false`).
 
-## CSP for the Vue auth UI (later tasks)
+## CSP for the Vue auth UI
 
-The API's CSP is deliberately `default-src 'none'`. The Vue SPA (served from its own origin, A14) needs its own policy
+No CSP ships with the SPA (`frontend/index.html` has none). The current recommendation and deployment notes are in
+[deployment.md](deployment.md). The API's CSP is deliberately `default-src 'none'`. The Vue SPA (served from its own origin, A14) needs its own policy
 from whatever serves it, as a starting point:
 
 ```
