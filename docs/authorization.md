@@ -105,8 +105,9 @@ never come from headers, the body or a client-readable cookie.
 
 ## Forward notes
 
-- No administration endpoints exist yet (role assignment, user management). They must name a permission policy, give
-  roles with a `RoleAssigned` audit row, and take them away only through `IRoleAssignmentService`.
+- **Administration endpoints (T21b):** see docs/admin-api.md. Each one names a permission policy. Roles are given and
+  taken away only through `IRoleAssignmentService` (audited as `RoleAssigned` and `RoleRemoved`), which also refuses
+  self-lockout and removing the last active, verified administrator.
 - **App-scoped roles (enforced since T18):** `role:Admin` checks the `role` claim. An application role named `Admin`
   can never satisfy it, for two reasons.
   - The API accepts only its default audience, and the registry refuses an application audience equal to it.

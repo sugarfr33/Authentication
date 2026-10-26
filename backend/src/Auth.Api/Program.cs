@@ -82,6 +82,7 @@ builder.Services.AddSingleton<IEndpointModule, PasswordEndpoints>();
 // OAuth Authorization Code + PKCE (T19): login UI for users without a session; see docs/authorization-code-pkce.md.
 builder.Services.AddSingleton((builder.Configuration.GetSection(OAuthOptions.SectionName).Get<OAuthOptions>() ?? new OAuthOptions()).Validated(requireHttps: !builder.Environment.IsDevelopment()));
 builder.Services.AddSingleton<IEndpointModule, OAuthEndpoints>();
+builder.Services.AddSingleton<IEndpointModule, AdminEndpoints>();
 
 // T21 optional TOTP MFA: off by default. Off: no MFA route exists (404) and accounts with MFA fail closed at login.
 MfaOptions mfaOptions = (builder.Configuration.GetSection(MfaOptions.SectionName).Get<MfaOptions>() ?? new MfaOptions()).Validated();

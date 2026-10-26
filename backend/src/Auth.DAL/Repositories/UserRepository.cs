@@ -15,4 +15,19 @@ internal sealed class UserRepository(AuthDbContext context) : IUserRepository
         await context.User.AddAsync(user, cancellationToken);
 
     public void Update(User user) => context.User.Update(user);
+
+    public async Task<IReadOnlyList<User>> ListAsync(string? normalizedEmailPrefix, int skip, int take, CancellationToken cancellationToken) =>
+        await Filter(normalizedEmailPrefix)
+            .AsNoTracking()
+            .OrderBy(u => u.NormalizedEmail)
+            .ThenBy(u => u.Id)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+    public Task<int> CountAsync(string? normalizedEmailPrefix, CancellationToken cancellationToken) =>
+        Filter(normalizedEmailPrefix).CountAsync(cancellationToken);
+
+    private IQueryable<User> Filter(string? normalizedEmailPrefix) =>
+        normalizedEmailPrefix is { Length: > 0 } prefix ? context.User.Where(u => u.NormalizedEmail.StartsWith(prefix)) : context.User;
 }

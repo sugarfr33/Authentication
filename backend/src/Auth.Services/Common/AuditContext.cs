@@ -8,6 +8,12 @@ public sealed record AuditContext(string? IpAddress, string? UserAgent, string? 
 {
     public static readonly AuditContext None = new(null, null, null);
 
+    /// <summary>
+    /// The signed-in administrator making the change (T21b admin endpoints), or null for the user's own actions and the
+    /// server. Written as "actor" in the detail of admin event types, and used by the services for self-lockout checks.
+    /// </summary>
+    public Guid? ActorId { get; init; }
+
     /// <summary>A new audit row. <paramref name="detail"/> is short JSON without secrets, tokens or passwords.</summary>
     internal AuditLog Entry(AuditEventType type, Guid? userId, DateTime occurredUtc, string? detail = null) => new()
     {

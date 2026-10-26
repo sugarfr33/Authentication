@@ -136,4 +136,16 @@ internal static class AuditEvents
 
     public static AuditEvent RolePermissionRemoved(Guid roleId, Guid permissionId) =>
         new(AuditEventType.RolePermissionRemoved, null, new AuditField("role", roleId), new AuditField("permission", permissionId));
+
+    /// <summary>A role given by an administrator (T21b): the role id, source "admin"; the actor comes from the audit context.</summary>
+    public static AuditEvent RoleAssigned(Guid userId, Guid roleId, string source) =>
+        new(AuditEventType.RoleAssigned, userId, new AuditField("role", roleId), new AuditField("source", source));
+
+    public static AuditEvent RolePermissionGranted(Guid roleId, Guid permissionId) =>
+        new(AuditEventType.RolePermissionGranted, null, new AuditField("role", roleId), new AuditField("permission", permissionId));
+
+    public static AuditEvent UserDeactivated(Guid userId, int revoked) =>
+        new(AuditEventType.UserDeactivated, userId, new AuditField("revoked", revoked));
+
+    public static AuditEvent UserReactivated(Guid userId) => new(AuditEventType.UserReactivated, userId);
 }

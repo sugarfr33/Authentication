@@ -47,17 +47,20 @@ public static class AuditCatalogue
         [AuditEventType.PasswordResetFailed] = new(["reason"]),
         [AuditEventType.PasswordChangeFailed] = new(["reason"]),
         [AuditEventType.RefreshRejected] = new(["reason", "app"], AuditVolume.High),
-        [AuditEventType.RoleAssigned] = new(["role", "source"]),
-        [AuditEventType.RoleRemoved] = new(["role"]),
-        [AuditEventType.RolePermissionRemoved] = new(["role", "permission"]),
+        [AuditEventType.RoleAssigned] = new(["role", "source", "actor"]),
+        [AuditEventType.RoleRemoved] = new(["role", "actor"]),
+        [AuditEventType.RolePermissionRemoved] = new(["role", "permission", "actor"]),
         [AuditEventType.RegistrationDuplicate] = new([], AuditVolume.High),
-        [AuditEventType.AppCreated] = new(["app", "source"]),
-        [AuditEventType.AppUpdated] = new(["app", "active", "revoked"]),
-        [AuditEventType.AppDeactivated] = new(["app", "revoked"]),
+        [AuditEventType.AppCreated] = new(["app", "source", "actor"]),
+        [AuditEventType.AppUpdated] = new(["app", "active", "revoked", "actor"]),
+        [AuditEventType.AppDeactivated] = new(["app", "revoked", "actor"]),
         [AuditEventType.AuthorizationCodeRejected] = new(["app", "reason"], AuditVolume.High),
         [AuditEventType.SingleLogout] = new(["cause", "revoked", "app"]),
         [AuditEventType.MfaEnrollmentStarted] = new([]),
-        [AuditEventType.MfaDisabled] = new(["action"]),
+        [AuditEventType.MfaDisabled] = new(["action", "actor"]),
+        [AuditEventType.UserDeactivated] = new(["revoked", "actor"]),
+        [AuditEventType.UserReactivated] = new(["actor"]),
+        [AuditEventType.RolePermissionGranted] = new(["role", "permission", "actor"]),
     };
 
     /// <summary>
@@ -80,7 +83,7 @@ public static class AuditCatalogue
         "email", "password", "displayName",
 
         // System roles and assignment sources
-        AuthRoles.Admin, AuthRoles.User, "bootstrap", "backfill", "registry",
+        AuthRoles.Admin, AuthRoles.User, "bootstrap", "backfill", "registry", "admin",
 
         // OAuth code exchange (T19)
         "unknown_or_expired", "replayed", "client_mismatch", "redirect_mismatch", "pkce_mismatch", "inactive_client",
@@ -128,10 +131,19 @@ internal static class AuditDetail
 {
     public const string Redacted = "[redacted]";
 
-    public static string? Render(AuditEvent auditEvent)
+    public static string? Render(AuditEvent auditEvent) => Render(auditEvent, null);
+
+    /// <summary>
+    /// Renders the detail JSON. <paramref name="actor"/> (the administrator acting, from the audit context, T21b) is added
+    /// as "actor" for the event types whose catalogue entry lists that key, and ignored for the others.
+    /// </summary>
+    public static string? Render(AuditEvent auditEvent, Guid? actor)
     {
         AuditEventSpec spec = AuditCatalogue.Events[auditEvent.Type];
-        List<AuditField> allowed = [.. auditEvent.Fields.Where(f => spec.DetailKeys.Contains(f.Key, StringComparer.Ordinal))];
+        IEnumerable<AuditField> fields = actor is Guid id && !auditEvent.Fields.Any(f => f.Key == "actor")
+            ? auditEvent.Fields.Append(new AuditField("actor", id))
+            : auditEvent.Fields;
+        List<AuditField> allowed = [.. fields.Where(f => spec.DetailKeys.Contains(f.Key, StringComparer.Ordinal))];
         if (allowed.Count == 0)
         {
             return null;

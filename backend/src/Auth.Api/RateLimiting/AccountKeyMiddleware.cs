@@ -9,7 +9,7 @@ using Microsoft.Net.Http.Headers;
 namespace Auth.Api.RateLimiting;
 
 /// <summary>
-/// Runs after the per-IP limiter and before the per-account limiter, on POSTs to the rate-limited auth paths.
+/// Runs after the per-IP limiter and before the per-account limiter, on POSTs (and PUTs) to the rate-limited paths.
 /// <list type="number">
 /// <item><b>Body cap.</b> The body is limited to MaxAccountBodyBytes (16 KB): the server's MaxRequestBodySize is
 /// lowered for the request, and the body is read into memory up to that size. Anything larger, chunked or not, gets
@@ -40,7 +40,8 @@ internal sealed partial class AccountKeyMiddleware(
     {
         AuthRateLimitOptions settings = options.Value;
         AuthRateLimitKind? kind = settings.Resolve(context.Request.Path);
-        if (kind is null || !HttpMethods.IsPost(context.Request.Method))
+        // POST and PUT (the admin API updates applications with PUT) get the body cap.
+        if (kind is null || !(HttpMethods.IsPost(context.Request.Method) || HttpMethods.IsPut(context.Request.Method)))
         {
             await next(context);
             return;

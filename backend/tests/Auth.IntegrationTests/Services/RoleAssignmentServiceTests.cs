@@ -46,10 +46,10 @@ public sealed class RoleAssignmentServiceTests : RepositoryTestBase, IAsyncDispo
         Assert.True(await liveness.IsLiveAsync(user.Id, first.FamilyId, Ct));
         Assert.True(await liveness.IsLiveAsync(bystander.UserId, bystander.FamilyId, Ct));
 
-        bool removed = await InAppScopeAsync<IRoleAssignmentService, bool>(s => s.RemoveUserRoleAsync(user.Id, role.Id, AuditContext.None, Ct));
+        RoleChangeOutcome removed = await InAppScopeAsync<IRoleAssignmentService, RoleChangeOutcome>(s => s.RemoveUserRoleAsync(user.Id, role.Id, AuditContext.None, Ct));
 
         // The cache holds "live" for 30 s here: a false answer now proves the same-instance invalidation.
-        Assert.True(removed);
+        Assert.Equal(RoleChangeOutcome.Changed, removed);
         Assert.False(await liveness.IsLiveAsync(user.Id, first.FamilyId, Ct));
         Assert.False(await liveness.IsLiveAsync(user.Id, second.FamilyId, Ct));
         Assert.True(await liveness.IsLiveAsync(bystander.UserId, bystander.FamilyId, Ct));
@@ -71,9 +71,9 @@ public sealed class RoleAssignmentServiceTests : RepositoryTestBase, IAsyncDispo
         ISessionLiveness liveness = services.GetRequiredService<ISessionLiveness>();
         Assert.True(await liveness.IsLiveAsync(user.Id, first.FamilyId, Ct));
 
-        bool removed = await InAppScopeAsync<IRoleAssignmentService, bool>(s => s.RemoveRolePermissionAsync(role.Id, permission.Id, AuditContext.None, Ct));
+        RoleChangeOutcome removed = await InAppScopeAsync<IRoleAssignmentService, RoleChangeOutcome>(s => s.RemoveRolePermissionAsync(role.Id, permission.Id, AuditContext.None, Ct));
 
-        Assert.True(removed);
+        Assert.Equal(RoleChangeOutcome.Changed, removed);
         Assert.False(await liveness.IsLiveAsync(user.Id, first.FamilyId, Ct));
         Assert.False(await liveness.IsLiveAsync(otherHolder.Id, otherSession.FamilyId, Ct));
         Assert.True(await liveness.IsLiveAsync(outsiderSession.UserId, outsiderSession.FamilyId, Ct));
@@ -88,8 +88,8 @@ public sealed class RoleAssignmentServiceTests : RepositoryTestBase, IAsyncDispo
     {
         (User user, Role role, _, _) = await HolderWithTwoSessionsAsync();
 
-        Assert.False(await InAppScopeAsync<IRoleAssignmentService, bool>(s => s.RemoveUserRoleAsync(user.Id, Guid.NewGuid(), AuditContext.None, Ct)));
-        Assert.False(await InAppScopeAsync<IRoleAssignmentService, bool>(s => s.RemoveRolePermissionAsync(role.Id, Guid.NewGuid(), AuditContext.None, Ct)));
+        Assert.Equal(RoleChangeOutcome.Unchanged, await InAppScopeAsync<IRoleAssignmentService, RoleChangeOutcome>(s => s.RemoveUserRoleAsync(user.Id, Guid.NewGuid(), AuditContext.None, Ct)));
+        Assert.Equal(RoleChangeOutcome.Unchanged, await InAppScopeAsync<IRoleAssignmentService, RoleChangeOutcome>(s => s.RemoveRolePermissionAsync(role.Id, Guid.NewGuid(), AuditContext.None, Ct)));
 
         Assert.All(await TokensAsync(user.Id), t => Assert.Null(t.RevokedUtc));
         Assert.Empty(await AuditAsync(AuditEventType.RoleRemoved, user.Id));

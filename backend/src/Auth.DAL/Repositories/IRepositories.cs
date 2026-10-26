@@ -24,6 +24,15 @@ public interface IUserRepository
     /// and calling it with a second instance of an already-tracked row throws.
     /// </summary>
     void Update(User user);
+
+    /// <summary>
+    /// Admin listing (T21b): one page of accounts, not tracked, ordered by normalized email then id. A non-null prefix
+    /// keeps the accounts whose normalized email starts with it.
+    /// </summary>
+    Task<IReadOnlyList<User>> ListAsync(string? normalizedEmailPrefix, int skip, int take, CancellationToken cancellationToken);
+
+    /// <summary>The number of accounts <see cref="ListAsync"/> pages through.</summary>
+    Task<int> CountAsync(string? normalizedEmailPrefix, CancellationToken cancellationToken);
 }
 
 public interface IRoleRepository
@@ -64,6 +73,30 @@ public interface IRoleRepository
 
     /// <summary>Deletes the role's grant of the permission in one DELETE. Returns the number of rows deleted (0 or 1).</summary>
     Task<int> RemoveRolePermissionAsync(Guid roleId, Guid permissionId, CancellationToken cancellationToken);
+
+    /// <summary>A role by id (global or application-scoped), or null.</summary>
+    Task<Role?> GetByIdAsync(Guid roleId, CancellationToken cancellationToken);
+
+    /// <summary>A permission by id, or null.</summary>
+    Task<Permission?> GetPermissionByIdAsync(Guid permissionId, CancellationToken cancellationToken);
+
+    /// <summary>Every role with its application and permissions, not tracked (admin read model).</summary>
+    Task<IReadOnlyList<Role>> ListWithPermissionsAsync(CancellationToken cancellationToken);
+
+    /// <summary>Every role the user holds, global and application-scoped, with the application, not tracked.</summary>
+    Task<IReadOnlyList<Role>> GetAllForUserAsync(Guid userId, CancellationToken cancellationToken);
+
+    /// <summary>True when the role grants the permission.</summary>
+    Task<bool> RoleHasPermissionAsync(Guid roleId, Guid permissionId, CancellationToken cancellationToken);
+
+    /// <summary>Active, verified holders of the role, leaving out one user when given.</summary>
+    Task<int> CountActiveVerifiedHoldersAsync(Guid roleId, Guid? exceptUserId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Takes an exclusive row lock on the role until the surrounding transaction ends (a no-op UPDATE of the row), so
+    /// changes that check "how many holders are left" run one at a time. Call it first inside the transaction.
+    /// </summary>
+    Task LockRoleAsync(Guid roleId, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -222,4 +255,20 @@ public interface ISigningKeyRepository
 public interface IAuditLogRepository
 {
     Task AddAsync(AuditLog entry, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Read side of the audit log (T21b), for the audit.read endpoint only. Separate from the writer so nothing but
+/// IAuditService can add rows. Rows are newest first (by id); <c>beforeId</c> continues a previous page.
+/// </summary>
+public interface IAuditLogReader
+{
+    Task<IReadOnlyList<AuditLog>> QueryAsync(
+        Guid? userId,
+        string? eventType,
+        DateTime? fromUtc,
+        DateTime? toUtc,
+        long? beforeId,
+        int take,
+        CancellationToken cancellationToken);
 }

@@ -68,6 +68,8 @@ public static class AuthServiceCollectionExtensions
         services.TryAddSingleton(new AuthorizationSeedOptions());
         services.AddScoped<IAuthorizationSeeder, AuthorizationSeeder>();
         services.AddScoped<IRoleAssignmentService, RoleAssignmentService>();
+        services.AddScoped<Admin.IUserAdministrationService, Admin.UserAdministrationService>();
+        services.AddScoped<Admin.IAuditQueryService, Admin.AuditQueryService>();
         services.TryAddSingleton(new RetentionOptions());
         services.AddScoped<IRetentionPurge>(sp => new RetentionPurge(
             sp.GetRequiredService<IRetentionRepository>(),

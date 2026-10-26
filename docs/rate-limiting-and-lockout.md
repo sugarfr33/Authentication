@@ -38,6 +38,7 @@ logout-all and /me are not rate limited (they need the antiforgery token, and lo
 | OAuthLogout | `/api/v1/oauth/logout` (GET and POST) | 30 / 1 min | - |
 | MfaVerify | `/api/v1/auth/mfa/verify` (only when `Mfa:Enabled`) | 10 / 1 min | - (wrong codes count toward the account lockout) |
 | MfaManage | `/api/v1/auth/mfa/enroll`, `/confirm`, `/recovery-codes`, `/disable` | 10 / 15 min | - |
+| Admin | `/api/v1/admin` and everything below it (prefix, every method; POST and PUT bodies capped at 16 KB) | 120 / 1 min | - (named permission policy) |
 | OAuthToken | `/api/v1/oauth/token` | 30 / 1 min | 30 / 1 min per client AND caller IP, counted by the endpoint only after the Origin matched that client (canonical id, any letter case); no bucket is shared by all callers of an application |
 
 All values can be changed under `RateLimiting:Policies:<Kind>:PerIp|PerAccount:PermitLimit|Window`. Other paths are not

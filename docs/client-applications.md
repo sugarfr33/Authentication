@@ -42,10 +42,10 @@ The unique indexes decide: a create or update that loses a race gets the same va
 `audience` (mapped from the violated index), never a 500. Tested with two gated creates of one audience (in different
 spellings): exactly one application is created.
 
-**No HTTP endpoints yet.** A future admin endpoint must:
+**HTTP endpoints (T21b):** `/api/v1/admin/apps` (docs/admin-api.md). They:
 
 - require the `apps.manage` policy (`AuthPolicies.AppsManage`);
-- be JSON-only and protected by CSRF, with a rate limit;
+- are JSON-only and protected by CSRF, with a rate limit;
 - call this service and nothing else.
 
 ## Validation (`ClientApplicationValidator`)

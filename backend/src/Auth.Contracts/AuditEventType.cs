@@ -87,4 +87,13 @@ public enum AuditEventType
 
     /// <summary>MFA turned off by the user (action disabled) or by an administrator (action reset).</summary>
     MfaDisabled,
+
+    /// <summary>An administrator deactivated the account; every session ended (T21b).</summary>
+    UserDeactivated,
+
+    /// <summary>An administrator reactivated the account (T21b).</summary>
+    UserReactivated,
+
+    /// <summary>An administrator granted a permission to a role (T21b).</summary>
+    RolePermissionGranted,
 }

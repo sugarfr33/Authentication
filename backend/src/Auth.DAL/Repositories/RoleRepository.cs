@@ -58,6 +58,42 @@ internal sealed class RoleRepository(AuthDbContext context) : IRoleRepository
     public Task<int> RemoveRolePermissionAsync(Guid roleId, Guid permissionId, CancellationToken cancellationToken) =>
         context.RolePermission.Where(rp => rp.RoleId == roleId && rp.PermissionId == permissionId).ExecuteDeleteAsync(cancellationToken);
 
+    public Task<Role?> GetByIdAsync(Guid roleId, CancellationToken cancellationToken) =>
+        context.Role.FirstOrDefaultAsync(r => r.Id == roleId, cancellationToken);
+
+    public Task<Permission?> GetPermissionByIdAsync(Guid permissionId, CancellationToken cancellationToken) =>
+        context.Permission.FirstOrDefaultAsync(p => p.Id == permissionId, cancellationToken);
+
+    public async Task<IReadOnlyList<Role>> ListWithPermissionsAsync(CancellationToken cancellationToken) =>
+        await context.Role
+            .AsNoTracking()
+            .Include(r => r.ClientApplication)
+            .Include(r => r.RolePermissions).ThenInclude(rp => rp.Permission)
+            .OrderBy(r => r.ClientApplicationId != null)
+            .ThenBy(r => r.NormalizedName)
+            .AsSplitQuery()
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<Role>> GetAllForUserAsync(Guid userId, CancellationToken cancellationToken) =>
+        await context.Role
+            .AsNoTracking()
+            .Include(r => r.ClientApplication)
+            .Where(r => r.UserRoles.Any(ur => ur.UserId == userId))
+            .OrderBy(r => r.ClientApplicationId != null)
+            .ThenBy(r => r.NormalizedName)
+            .ToListAsync(cancellationToken);
+
+    public Task<bool> RoleHasPermissionAsync(Guid roleId, Guid permissionId, CancellationToken cancellationToken) =>
+        context.RolePermission.AnyAsync(rp => rp.RoleId == roleId && rp.PermissionId == permissionId, cancellationToken);
+
+    public Task<int> CountActiveVerifiedHoldersAsync(Guid roleId, Guid? exceptUserId, CancellationToken cancellationToken) =>
+        context.UserRole.CountAsync(
+            ur => ur.RoleId == roleId && ur.User.IsActive && ur.User.EmailVerified && (exceptUserId == null || ur.UserId != exceptUserId),
+            cancellationToken);
+
+    public Task LockRoleAsync(Guid roleId, CancellationToken cancellationToken) =>
+        context.Role.Where(r => r.Id == roleId).ExecuteUpdateAsync(s => s.SetProperty(r => r.NormalizedName, r => r.NormalizedName), cancellationToken);
+
     private IQueryable<Role> RolesForUser(Guid userId, Guid? clientApplicationId) =>
         context.Role.Where(r =>
             r.UserRoles.Any(ur => ur.UserId == userId)

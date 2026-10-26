@@ -16,6 +16,9 @@ public enum AuthRateLimitKind
     OAuthLogout,
     MfaVerify,
     MfaManage,
+
+    /// <summary>The admin API (T21b), every method, per IP.</summary>
+    Admin,
 }
 
 /// <summary>A fixed-window limit: <see cref="PermitLimit"/> requests per <see cref="Window"/>.</summary>
@@ -69,6 +72,7 @@ public sealed class AuthRateLimitOptions
     public Dictionary<string, AuthRateLimitKind> PathPrefixes { get; } = new(StringComparer.OrdinalIgnoreCase)
     {
         ["/api/v1/auth/sessions"] = AuthRateLimitKind.Sessions,
+        ["/api/v1/admin"] = AuthRateLimitKind.Admin,
     };
 
     public Dictionary<AuthRateLimitKind, AuthRateLimitPolicy> Policies { get; } = new()
@@ -91,6 +95,7 @@ public sealed class AuthRateLimitOptions
         // T21: per IP; wrong factors also count toward the account lockout.
         [AuthRateLimitKind.MfaVerify] = Policy(10, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
         [AuthRateLimitKind.MfaManage] = Policy(10, TimeSpan.FromMinutes(15), null, TimeSpan.Zero),
+        [AuthRateLimitKind.Admin] = Policy(120, TimeSpan.FromMinutes(1), null, TimeSpan.Zero),
     };
 
     /// <summary>

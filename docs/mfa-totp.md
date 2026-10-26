@@ -22,10 +22,9 @@ What changed from the design during the build is marked **Built:**; the review f
 
 ## Production gate
 
-**MFA must not be enabled for real users** until either an admin endpoint to reset a user's MFA exists (a separate
-task), or the operator has accepted the runbook docs/mfa-admin-recovery.md. Without one of them, a user who loses the
-device and every recovery code, or every MFA user after the flag is turned off, can only be recovered by hand-written
-SQL.
+The admin MFA reset endpoint now exists (T21b): `POST /api/v1/admin/users/{id}/mfa/reset`, with its runbook in
+docs/admin-api.md. Before enabling MFA for real users, make sure an operator holds `users.write` and knows the
+identity checks. The SQL runbook (docs/mfa-admin-recovery.md) is the fallback when the API is unavailable.
 
 ## 1. Feature flag
 

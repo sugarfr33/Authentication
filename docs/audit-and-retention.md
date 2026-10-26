@@ -89,9 +89,9 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 is high-volume, so it gets the short retention below. Sampling would hide the refresh history of a stolen session, and
 dropping the row would lose the only record of when a session was used.
 
-## Reading audit rows (rule; no endpoint yet)
+## Reading audit rows (T21b: `GET /api/v1/admin/audit`)
 
-There is no read endpoint yet. When one is added:
+The read endpoint is described in docs/admin-api.md. It follows these rules:
 
 - It must require the `audit.read` permission policy (`AuthPolicies.AuditRead`), never only "signed in".
 - Rows must never be shown to the user they describe without that permission.

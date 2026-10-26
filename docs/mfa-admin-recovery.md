@@ -7,9 +7,8 @@
 - they lost both their authenticator device and every recovery code; or
 - `Mfa:Enabled` was turned off while they still have MFA on (they fail closed, see docs/mfa-totp.md section 1).
 
-There is no admin endpoint yet; one is a separate task. Until it exists, this runbook is the only supported way to turn
-MFA off for someone else. **MFA must not be enabled for real users until the admin endpoint exists or the operator has
-accepted this runbook** (docs/mfa-totp.md, "Production gate").
+**Prefer the admin endpoint** (T21b): `POST /api/v1/admin/users/{id}/mfa/reset`. Its runbook is in docs/admin-api.md.
+The SQL below is for when the API is unavailable. Section 1 (verify the person) applies to both routes.
 
 When the host can run code, prefer `IMfaService.ResetAsync(userId, ...)`: it does the same steps, audits
 `MfaDisabled {"action":"reset"}` and publishes the single-logout event to end the application sessions at once. The

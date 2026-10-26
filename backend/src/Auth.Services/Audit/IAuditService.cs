@@ -58,7 +58,7 @@ internal sealed class AuditService(
     {
         ArgumentNullException.ThrowIfNull(auditEvent);
         ArgumentNullException.ThrowIfNull(context);
-        await auditLog.AddAsync(context.Entry(auditEvent.Type, auditEvent.UserId, clock.UtcNow, AuditDetail.Render(auditEvent)), cancellationToken);
+        await auditLog.AddAsync(context.Entry(auditEvent.Type, auditEvent.UserId, clock.UtcNow, AuditDetail.Render(auditEvent, context.ActorId)), cancellationToken);
     }
 
     public async Task WriteAsync(AuditEvent auditEvent, AuditContext context, CancellationToken cancellationToken)
@@ -66,7 +66,7 @@ internal sealed class AuditService(
         ArgumentNullException.ThrowIfNull(auditEvent);
         ArgumentNullException.ThrowIfNull(context);
         Guid? existing = auditEvent.UserId is Guid id && await users.GetByIdAsync(id, cancellationToken) is not null ? id : null;
-        await auditLog.AddAsync(context.Entry(auditEvent.Type, existing, clock.UtcNow, AuditDetail.Render(auditEvent)), cancellationToken);
+        await auditLog.AddAsync(context.Entry(auditEvent.Type, existing, clock.UtcNow, AuditDetail.Render(auditEvent, context.ActorId)), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
