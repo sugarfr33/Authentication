@@ -5,17 +5,17 @@ and tokens are described in [docs/ui-kit.md](../docs/ui-kit.md).
 
 ```sh
 npm ci             # lockfile install; .npmrc sets ignore-scripts and exact versions
-npm run dev        # http://localhost:5173, /api proxied to Auth.Api (http://localhost:5094)
+npm run dev        # http://localhost:5173, /api proxied to Auth.Api (https://localhost:7090)
 npm test           # Vitest (jsdom)
 npm run build      # vue-tsc strict type-check, then a production build that fails if dev-only code ships
 ```
 
 ## Dev setup against the API
 
-- Start Auth.Api with its `https` profile, and put `VITE_DEV_API_TARGET=https://localhost:7090` in `.env.local`
-  (git-ignored). **The proxy's built-in default `http://localhost:5094` does not work.** In Development the API
-  answers plain-http requests with 500, because its antiforgery cookie requires SSL (T26 GAP-2). Full steps:
-  [docs/setup.md](../docs/setup.md).
+- Start Auth.Api with its `https` profile (`https://localhost:7090`), which is the proxy's default target. To point
+  elsewhere, set `VITE_DEV_API_TARGET` in `.env.local` (git-ignored). **It must be an https URL.** In Development
+  the API answers plain-http requests with 500, because its antiforgery cookie requires SSL (T26 GAP-2). The proxy
+  accepts the ASP.NET dev certificate without trusting it (`secure: false`). Full steps: [docs/setup.md](../docs/setup.md).
 - The proxy keeps the browser's `Origin` (`http://localhost:5173`), so add it to the API's
   `BrowserProtection:TrustedOrigins` for Development (user secrets or `appsettings.Development.json`).
   Otherwise POSTs get 403.

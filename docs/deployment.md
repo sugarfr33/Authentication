@@ -12,8 +12,10 @@ listed in `backend/src/Auth.Api/appsettings.Example.json`. Header and host basic
 | 2 | Public host names | `AllowedHosts=auth.example.com` (no `*`; startup refuses it). See "Host filtering and load-balancer probes" below. |
 | 3 | Issuer and audience | `Auth:Issuer` and `Auth:Audience` = the public https URL of the API. |
 | 4 | Database | `ConnectionStrings:CentralAuth` from the environment or a secret store. Apply migrations before the new version starts (the API does not migrate at startup): `dotnet ef migrations script --idempotent` or `docs/CentralAuth.initial.sql`. |
+| 4a | Database encryption | `Encrypt=True;TrustServerCertificate=False` (or `Encrypt=Strict`) with a certificate the API host trusts. The examples use `TrustServerCertificate=True` for local development only. Turn on Transparent Data Encryption and encrypted backups; use a least-privilege SQL login ([threat-model.md](threat-model.md), R24). |
 | 5 | Signing key | `dotnet Auth.Api.dll signing-key add <kid> --reference <kid>` ([setup.md](setup.md) step 3), with the PEM in the secret store (`Secrets__<kid>` or `SecretFiles__<kid>`, kid of letters, digits and underscores). Later keys: the same command with `--activate-at`, overlap rule below. |
 | 6 | Reverse proxy | `ForwardedHeaders:KnownProxies`, or `ForwardedHeaders:Direct=true` when nothing sits in front. See next section. |
+| 6a | Several instances | Rate limits and caches are per process: limits multiply by the instance count ([threat-model.md](threat-model.md), R25). |
 | 7 | SPA URLs | `AccountEmail:VerifyEmailUrl`, `AccountEmail:ResetPasswordUrl` and `OAuth:LoginUrl` (`<spa>/login`), all https. |
 | 8 | SPA client app | `ClientApplications:Bootstrap` with the SPA's https origin in `AllowedOrigins`. |
 | 9 | SPA headers | The host that serves the SPA must send a CSP (below), and serve `index.html` for unknown paths. |

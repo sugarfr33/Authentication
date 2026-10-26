@@ -35,6 +35,7 @@ This page maps each security scenario the backend must cover to the tests that p
 | Wrong MFA codes and wrong current passwords count too | `MfaApiTests.Wrong_codes_count_toward_the_lockout_like_wrong_passwords`; `PasswordServiceTests.Change_password_needs_the_current_one_and_counts_wrong_attempts_toward_lockout` |
 | No timing or answer difference between unknown, inactive, locked and wrong password | `SessionApiTests.Every_failed_login_reason_gets_the_identical_answer_and_no_cookies`; `HashingGuardTests.Unknown_inactive_locked_and_wrong_password_paths_each_cost_exactly_one_Verify_and_look_the_same` |
 | Admin reactivation clears the lockout | `AdminApiTests.Reactivation_clears_the_lockout` |
+| Pipeline order: the per-IP limiter runs before `AccountKeyMiddleware`, so an oversized body still costs an IP permit (mutation-checked by swapping the two in Program.cs) | `RateLimitTests.The_IP_limit_counts_before_the_body_is_read` **(T29)** |
 
 ## 3. CSRF and origin
 

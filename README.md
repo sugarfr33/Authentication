@@ -58,7 +58,7 @@ Running the API and SPA takes five more steps:
 2. create the first signing key (a PEM file, then `dotnet run --project src/Auth.Api -- signing-key add`);
 3. set the User Secrets;
 4. `dotnet run --project src/Auth.Api --launch-profile https`;
-5. `npm ci && npm run dev`, with `VITE_DEV_API_TARGET=https://localhost:7090`.
+5. `npm ci && npm run dev` (the dev proxy targets the API at `https://localhost:7090`).
 
 **Follow [docs/setup.md](docs/setup.md).** It was checked step by step from a clean clone.
 

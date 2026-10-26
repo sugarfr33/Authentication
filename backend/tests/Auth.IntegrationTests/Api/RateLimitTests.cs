@@ -120,7 +120,11 @@ public sealed class RateLimitTests(ApiFixture api)
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
     }
 
-    /// <summary>Audit LOW-2: the per-IP limit counts the request before the body is read.</summary>
+    /// <summary>
+    /// Audit LOW-2, pinned as pipeline order in T29: the per-IP limiter (<c>UseRateLimiter</c>) runs before
+    /// <c>AccountKeyMiddleware</c>. Oversized bodies are counted against the IP before the body cap answers 413, so the
+    /// third gets 429. With the two swapped in Program.cs, every answer is 413 and this test fails (mutation-checked).
+    /// </summary>
     [Fact]
     public async Task The_IP_limit_counts_before_the_body_is_read()
     {

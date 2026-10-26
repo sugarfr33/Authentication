@@ -212,13 +212,12 @@ The `https` profile listens on `https://localhost:7090` and `http://localhost:50
 ```bash
 cd ../frontend
 npm ci                                                       # lockfile install, install scripts disabled
-printf 'VITE_DEV_API_TARGET=https://localhost:7090\n' > .env.local
-npm run dev                                                  # http://localhost:5173
+npm run dev                                                  # http://localhost:5173, /api proxied to https://localhost:7090
 ```
 
-**`VITE_DEV_API_TARGET` must be the API's https URL.** The proxy default (`http://localhost:5094`, the API's plain
-http port) answers every request with 500 in Development. The antiforgery cookie requires HTTPS (T26 GAP-2).
-`.env.local` is git-ignored.
+The proxy targets the API's https URL by default (T29). To point it elsewhere, set `VITE_DEV_API_TARGET` in
+`.env.local` (git-ignored). **Keep it https:** the API's plain-http port (`http://localhost:5094`) answers every
+request with 500 in Development, because the antiforgery cookie requires HTTPS (T26 GAP-2).
 
 Port 5173 is taken: run `npx vite --port 5174 --strictPort`, and use that origin in step 4's
 `BrowserProtection:TrustedOrigins:0` and the three SPA URLs.
@@ -259,14 +258,14 @@ Run on 2026-10-26 from a fresh `git clone` of `main` 94fd63c, with database `Cen
 | API `https` profile | `/health` 200, `/health/ready` 200 |
 | `npm ci`, `npm run build` | 138 packages; "19 files in dist/: no dev-only code" |
 | through the Vite proxy (https target) | `GET /me` 401 (anonymous), register 202, verify-email 204, login 200, `/me` 200; cookies `__Host-access`, `__Secure-refresh`, `__Host-antiforgery`, `XSRF-TOKEN` |
-| same, proxy left on its http default | `GET /me` 500 (GAP-2, hence step 5) |
+| same, proxy on the old http default | `GET /me` 500 (GAP-2); the default is https since T29 |
 | bootstrap admin and restart | `bootstrap admin assigned: True`; roles `Admin, User`; `/admin/users` 200 |
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
-| Every API call through the SPA is 500 | The proxy targets plain http. Set `VITE_DEV_API_TARGET=https://localhost:7090` (step 5). |
+| Every API call through the SPA is 500 | The proxy targets plain http: `VITE_DEV_API_TARGET` in `.env.local` points at `http://...`. Use `https://localhost:7090`, or remove it (step 5). |
 | POSTs answer 403 "Request origin is not allowed." | The SPA's origin is missing from `BrowserProtection:TrustedOrigins` (step 4). |
 | "The private key of signing key ... was not found" | Wrong secret name, often a hyphen in an environment variable. See "Naming rule for secrets". |
 | `/health/ready` 503 | The database does not answer: check the connection string and that `.\SQLEXPRESS` runs. |
