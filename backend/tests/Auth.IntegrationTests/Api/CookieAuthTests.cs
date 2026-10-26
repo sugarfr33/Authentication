@@ -331,6 +331,48 @@ public sealed partial class CookieAuthTests(ApiFixture api)
     }
 
     [Fact]
+    public async Task A_tampered_payload_a_not_yet_valid_token_and_a_hand_made_alg_none_header_get_401()
+    {
+        // Control: the same live session and key are accepted, so each 401 below is caused by its one change.
+        Guid session = await LiveSessionAsync();
+        SecurityTokenDescriptor valid = ValidDescriptor();
+        valid.Claims[AuthClaimTypes.SessionId] = session.ToString();
+        string signed = Sign(valid);
+        Assert.Equal(HttpStatusCode.OK, (await GetMeWithCookieAsync(signed)).StatusCode);
+
+        // Same header and signature, payload rewritten (privilege escalation, then another subject).
+        string[] parts = signed.Split('.');
+        Dictionary<string, JsonElement> payload = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(Base64Url.DecodeFromChars(parts[1]))!;
+        Dictionary<string, object> escalated = payload.ToDictionary(p => p.Key, p => (object)p.Value);
+        escalated[AuthClaimTypes.Role] = new[] { "User", "Admin" };
+        Dictionary<string, object> otherSubject = payload.ToDictionary(p => p.Key, p => (object)p.Value);
+        otherSubject[AuthClaimTypes.Subject] = Guid.NewGuid().ToString();
+
+        SecurityTokenDescriptor early = ValidDescriptor();
+        early.Claims[AuthClaimTypes.SessionId] = session.ToString();
+        early.IssuedAt = early.NotBefore = DateTime.UtcNow.AddHours(1);
+        early.Expires = DateTime.UtcNow.AddHours(2);
+
+        string noneHeader = Base64Url.EncodeToString(JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, string> { ["alg"] = "none", ["typ"] = "at+jwt", ["kid"] = ApiFixture.SigningKid }));
+
+        string[] refused =
+        [
+            parts[0] + "." + Base64Url.EncodeToString(JsonSerializer.SerializeToUtf8Bytes(escalated)) + "." + parts[2],
+            parts[0] + "." + Base64Url.EncodeToString(JsonSerializer.SerializeToUtf8Bytes(otherSubject)) + "." + parts[2],
+            parts[0] + "." + parts[1] + "." + parts[2][..^4] + "AAAA",
+            parts[0] + "." + parts[1] + ".",
+            noneHeader + "." + parts[1] + ".",
+            noneHeader + "." + parts[1] + "." + parts[2],
+            Sign(early),
+        ];
+
+        foreach (string token in refused)
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, (await GetMeWithCookieAsync(token)).StatusCode);
+        }
+    }
+
+    [Fact]
     public async Task Forged_expired_and_misdirected_tokens_get_401()
     {
         SecurityTokenDescriptor none = ValidDescriptor();
