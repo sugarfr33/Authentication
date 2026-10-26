@@ -189,9 +189,13 @@ Port 5173 is taken: run `npx vite --port 5174 --strictPort`, and use that origin
    dotnet user-secrets set "Authorization:BootstrapAdminEmail" "you@example.com" --project src/Auth.Api
    ```
 
-   The startup log says `bootstrap admin assigned: True`. No new sign-in is needed: `/me` and the admin API read
-   roles from the database, so the existing session already shows roles `Admin` and `User`, and
-   `GET /api/v1/admin/users` answers 200. Signing in again does no harm.
+   The startup log says `bootstrap admin assigned: True`. **Sign in again**, or wait for the SPA's next silent refresh
+   (up to 15 minutes). Then `/me` shows roles `Admin` and `User`, and `GET /api/v1/admin/users` answers 200.
+
+   The two can disagree until then. `/me` builds the profile from the database, so it shows `Admin` at once. The admin
+   policies check the `role` and `perm` claims in the access token, and those are minted only at sign-in or refresh.
+   So, until a new token is minted, `/me` can show `Admin` while the admin API still answers 403
+   ([authorization.md](authorization.md), "claims are read when the token is minted").
 5. Remove the setting (`dotnet user-secrets remove "Authorization:BootstrapAdminEmail" --project src/Auth.Api`).
    It only applies while no active administrator exists, and later starts warn while it is set
    ([authorization.md](authorization.md)).
