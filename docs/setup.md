@@ -55,10 +55,61 @@ PowerShell: `$env:CENTRALAUTH_CONNECTION = 'Server=.\SQLEXPRESS;...'`.
 ## 3. Create the first signing key
 
 Access tokens are signed with a key whose **public** JWK lives in `auth.SigningKey` and whose **private** PEM lives in
-the secret store (configuration). There is no admin endpoint or command for the first key yet. In code it is
-`ISigningKeyRotation.AddKeyAsync`. This recipe writes the same row by hand.
+the secret store (configuration). The API's maintenance command `signing-key add` publishes a key through
+`ISigningKeyRotation.AddKeyAsync`, then exits without starting the web host (T29).
 
-Save this script **outside the repository** (for example in `~/centralauth-keys/`) as `make-signing-key.mjs`:
+1. Create the private key **outside the repository**, for example in `~/centralauth-keys/`. Node is enough:
+
+   ```bash
+   mkdir -p ~/centralauth-keys && cd ~/centralauth-keys
+   node -e "const c=require('node:crypto');const {privateKey}=c.generateKeyPairSync('ec',{namedCurve:'P-256'});require('node:fs').writeFileSync('signingkey1.pem',privateKey.export({type:'pkcs8',format:'pem'}),{mode:0o600,flag:'wx'})"
+   ```
+
+   Or use OpenSSL: `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out signingkey1.pem`.
+2. Tell the API where the database and the key are (User Secrets, as in step 4):
+
+   ```bash
+   cd <repo>/backend
+   dotnet user-secrets set "ConnectionStrings:CentralAuth" "Server=.\SQLEXPRESS;Database=CentralAuth;Trusted_Connection=True;TrustServerCertificate=True;" --project src/Auth.Api
+   dotnet user-secrets set "SecretFiles:signingkey1" "$HOME/centralauth-keys/signingkey1.pem" --project src/Auth.Api
+   ```
+
+3. Publish the key:
+
+   ```bash
+   dotnet run --project src/Auth.Api -- signing-key add signingkey1 --reference signingkey1
+   # Signing key 'signingkey1' (ES256) is published and signs from 2026-10-26T10:08:30Z (UTC).
+   ```
+
+The command:
+
+- **Options:** `signing-key add <kid> --reference <secret name> [--algorithm ES256|RS256] [--activate-at <UTC time>]`.
+  The default algorithm is ES256. Any other argument (such as `--environment Production`) configures the host as
+  usual.
+- **Exit codes:** 0 when the key was added, 1 when it was refused (message on stderr), 2 for a usage error.
+- **Checks:** it loads the PEM from the secret store and derives the public JWK from it, so the row always matches the
+  key. It refuses a kid that already exists, a missing secret, or a PEM of the wrong type.
+- **The first key** (nothing published yet) signs at once.
+- **Every later key** must be published at least the token lifetime plus clock skew (15.5 minutes) before it signs,
+  because resource servers cache the JWKS. Without `--activate-at` the command refuses, and names the earliest time
+  allowed:
+
+  ```bash
+  dotnet run --project src/Auth.Api -- signing-key add signingkey2 --reference signingkey2 --activate-at 2026-10-27T08:00:00Z
+  ```
+
+  Then follow [single-logout-and-shared-domain.md](single-logout-and-shared-domain.md), section 3, and
+  [t22-client-extension.md](t22-client-extension.md), "Key revocation runbook".
+- **On a server**, run the published app the same way, with the environment's configuration:
+  `dotnet Auth.Api.dll signing-key add <kid> --reference <kid>`.
+
+At startup the API loads each key's PEM, checks it matches the stored public JWK, and refuses to sign with a key that
+does not.
+
+### Fallback without the command: SQL recipe
+
+Use this only when the API cannot be run against the database, for the **first** key. Save this script **outside the
+repository** as `make-signing-key.mjs`:
 
 ```js
 // Creates the first ES256 signing key: a private PEM file (keep it out of the repo) and the SQL that publishes it.
@@ -87,12 +138,7 @@ sqlcmd -S '.\SQLEXPRESS' -E -d CentralAuth -b -i signingkey1.sql
 ```
 
 - The script refuses to overwrite existing files, and the PEM never passes through the database or a log.
-- At startup the API loads the PEM named by `PrivateKeyReference`, checks it matches the stored public JWK, and
-  refuses to sign with a key that does not match.
-- Use this recipe **only for the first key**, when no key is published. Later keys must be published at least the
-  token lifetime plus clock skew before they sign, because resource servers cache the JWKS. Follow
-  [single-logout-and-shared-domain.md](single-logout-and-shared-domain.md), section 3, and
-  [t22-client-extension.md](t22-client-extension.md), "Key revocation runbook".
+- Use this recipe **only for the first key**. It skips the overlap rule, so it must never add a second key.
 
 ### Naming rule for secrets
 

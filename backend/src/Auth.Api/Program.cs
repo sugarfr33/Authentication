@@ -22,7 +22,8 @@ using Auth.Services.Security;
 using Serilog;
 using Serilog.Events;
 
-WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+// The maintenance command's own arguments (T29) never reach host configuration.
+WebApplicationBuilder builder = WebApplication.CreateBuilder(SigningKeyCommand.HostArgs(args));
 
 HostingGuards.EnsureAllowedHostsRestricted(builder.Configuration, builder.Environment);
 HostingGuards.EnsureBrowserProtectionSafe(builder.Configuration, builder.Environment);
@@ -147,6 +148,12 @@ builder.Services.AddSingleton<ICorsPolicyProvider, ClientApplicationCorsPolicyPr
 
 WebApplication app = builder.Build();
 
+// Opt-in maintenance command (T29): uses the configured services, then exits without starting the web host.
+if (SigningKeyCommand.IsCommand(args))
+{
+    return await SigningKeyCommand.RunAsync(app.Services, args, Console.Out, Console.Error, CancellationToken.None);
+}
+
 if (behindProxy)
 {
     app.UseForwardedHeaders();
@@ -192,6 +199,7 @@ foreach (IEndpointModule module in app.Services.GetServices<IEndpointModule>())
 }
 
 app.Run();
+return 0;
 
 /// <summary>Entry point; public so integration tests can host the app with WebApplicationFactory.</summary>
 public partial class Program;

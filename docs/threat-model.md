@@ -71,7 +71,7 @@ action. Severity: **M** medium, **L** low, **I** information.
 |---|---|---|---|
 | R1 | M | **Behind a TLS-terminating proxy without `ForwardedHeaders:KnownProxies`, every request looks like http** (from the T09 review). `UseHttpsRedirection` loops, HSTS is never sent, and all users share the proxy's rate-limit bucket. Only single proxy IPs are accepted (no CIDR), one hop deep. | List the proxy IPs, make the proxy overwrite `X-Forwarded-*`, or set `ForwardedHeaders:Direct=true` when nothing is in front ([deployment.md](deployment.md)). |
 | R2 | L | **Host filtering against load-balancer probes.** `AllowedHosts` applies to `/health` too, so a probe that sends an IP or internal name as `Host` gets 400 and the instance is marked unhealthy. | Probe with the public host name as `Host`, or add the exact probe host to `AllowedHosts`. Never `*`. |
-| R3 | L | **The first signing key has no supported tool** (T26 GAP-1). It is created by a recipe (Node script and SQL, [setup.md](setup.md) step 3), or by `ISigningKeyRotation.AddKeyAsync` from code. Later rotations also run from code. A hand-made row is checked at startup against the PEM, so a mismatch fails closed. | Use the recipe. A small maintenance command is proposed separately, and not built (see below). |
+| R3 | I | **Signing keys are added from the command line, not an admin endpoint** (T26 GAP-1, closed in T29). `signing-key add` calls `ISigningKeyRotation.AddKeyAsync`, with the overlap rule, and exits without starting the host ([setup.md](setup.md) step 3). A hand-made row from the fallback SQL recipe skips the overlap rule, but is checked at startup against the PEM, so a mismatch fails closed. | Use the command. Use the SQL recipe only for a first key when the API cannot reach the database. |
 | R4 | L | **Secret names with `-` cannot be exported as bash environment variables** (T26 GAP-1). The MFA names are fixed with a hyphen (`MfaEncryptionKey-<id>`). | Kids of letters, digits and underscores. For the MFA names use User Secrets or JSON, `SecretFiles`, `env 'NAME=value'`, PowerShell, or the container or service manager ([setup.md](setup.md), "Naming rule for secrets"). |
 | R5 | I | **Development plain-http requests answer 500** (T26 GAP-2): the antiforgery cookie requires SSL. It fails closed. Production redirects (307). | Use the https profile and an https proxy target for the SPA. |
 | R6 | M | **No CSP ships with the SPA.** `index.html` has none, and the SPA relies on its host's headers. Tokens are not in the page, but an XSS could still act as the user. | Send the recommended CSP from the SPA's host ([deployment.md](deployment.md)). Apps in Mode B must do the same. |
@@ -110,12 +110,17 @@ The T26 run used curl and could not exercise these. The automated tests cover th
 | R22 | `KnownProxies` behind a real proxy | no proxy in the test setup | `RateLimitTests.X_Forwarded_For_is_honored_only_from_a_configured_known_proxy`, `An_unconfigured_proxy_is_reported_once_as_a_warning` |
 | R23 | Per-account limiter from many IPs | one source IP | `RateLimitTests` (per-account partition) |
 
-## Proposal (not built): signing-key maintenance command
+## Signing-key maintenance command (T29)
 
-R3 could be closed with a small, opt-in command in Auth.Api. For example, `dotnet Auth.Api.dll signing-key add <kid>
---algorithm ES256 --reference <secret name>` would run `ISigningKeyRotation.AddKeyAsync` (with its overlap rule)
-against the configured database and secret store, then exit without starting the web host. No new package and no
-schema change would be needed.
+The proposal from T27 is built.
 
-It was **not built**: T27 is documentation only, and the decision belongs to god. The recipe in [setup.md](setup.md)
-works until then.
+- `dotnet Auth.Api.dll signing-key add <kid> --reference <secret name> [--algorithm ES256|RS256] [--activate-at <UTC time>]`
+  runs `ISigningKeyRotation.AddKeyAsync` against the configured database and secret store, then exits.
+- Exit codes: 0 when the key was added, 1 when it was refused, 2 for a usage error.
+- It needs no new package and no schema change.
+- `SigningKeyCommandTests` cover the parsing, the call and the error mapping.
+- A run of the built dll against a throwaway database proved the rest:
+  - the first key signs at once;
+  - a second key without `--activate-at` is refused, naming the earliest allowed time;
+  - a missing secret is reported;
+  - no listener starts.

@@ -55,7 +55,7 @@ cd backend && dotnet build Auth.sln && dotnet test Auth.sln
 Running the API and SPA takes five more steps:
 
 1. create the database (`dotnet ef database update`, with Auth.DAL as the startup project);
-2. create the first signing key (a Node script and one SQL insert);
+2. create the first signing key (a PEM file, then `dotnet run --project src/Auth.Api -- signing-key add`);
 3. set the User Secrets;
 4. `dotnet run --project src/Auth.Api --launch-profile https`;
 5. `npm ci && npm run dev`, with `VITE_DEV_API_TARGET=https://localhost:7090`.

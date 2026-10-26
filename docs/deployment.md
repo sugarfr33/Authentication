@@ -12,7 +12,7 @@ listed in `backend/src/Auth.Api/appsettings.Example.json`. Header and host basic
 | 2 | Public host names | `AllowedHosts=auth.example.com` (no `*`; startup refuses it). See "Host filtering and load-balancer probes" below. |
 | 3 | Issuer and audience | `Auth:Issuer` and `Auth:Audience` = the public https URL of the API. |
 | 4 | Database | `ConnectionStrings:CentralAuth` from the environment or a secret store. Apply migrations before the new version starts (the API does not migrate at startup): `dotnet ef migrations script --idempotent` or `docs/CentralAuth.initial.sql`. |
-| 5 | Signing key | First key: [setup.md](setup.md) step 3 (recipe), with the PEM in the secret store (`Secrets__<kid>` or `SecretFiles__<kid>`, kid of letters, digits and underscores). Later keys: overlap rule below. |
+| 5 | Signing key | `dotnet Auth.Api.dll signing-key add <kid> --reference <kid>` ([setup.md](setup.md) step 3), with the PEM in the secret store (`Secrets__<kid>` or `SecretFiles__<kid>`, kid of letters, digits and underscores). Later keys: the same command with `--activate-at`, overlap rule below. |
 | 6 | Reverse proxy | `ForwardedHeaders:KnownProxies`, or `ForwardedHeaders:Direct=true` when nothing sits in front. See next section. |
 | 7 | SPA URLs | `AccountEmail:VerifyEmailUrl`, `AccountEmail:ResetPasswordUrl` and `OAuth:LoginUrl` (`<spa>/login`), all https. |
 | 8 | SPA client app | `ClientApplications:Bootstrap` with the SPA's https origin in `AllowedOrigins`. |
@@ -57,9 +57,13 @@ header is not listed gets **400**.
 
 ## Signing keys after the first one
 
-- A new key must be published (in JWKS) at least the access-token lifetime plus clock skew before it signs.
-  `ISigningKeyRotation.AddKeyAsync` enforces this; it is how keys after the first should be added.
-- There is no admin endpoint or CLI for key rotation yet; it runs from code (a maintenance host).
+- A new key must be published (in JWKS) at least the access-token lifetime plus clock skew (15.5 minutes) before it
+  signs. `ISigningKeyRotation.AddKeyAsync` enforces this.
+- Add it with the maintenance command, which uses that method:
+  `dotnet Auth.Api.dll signing-key add <kid> --reference <secret name> --activate-at <UTC time>`.
+  - It runs against the environment's configuration and exits without starting the web host.
+  - It refuses an activation time that is too early, and names the earliest one allowed.
+- Retiring superseded keys happens in the running API. There is no admin endpoint for keys.
 - Revocation and resource-server caches: [t22-client-extension.md](t22-client-extension.md), "Key revocation runbook".
 
 ## Recommended Content-Security-Policy for the SPA
