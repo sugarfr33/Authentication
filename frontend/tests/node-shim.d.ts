@@ -5,3 +5,7 @@ declare module 'node:fs' {
 }
 
 declare const process: { cwd(): string };
+
+declare module 'node:crypto' {
+  export const webcrypto: Crypto;
+}

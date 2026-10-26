@@ -26,6 +26,28 @@ npm run build      # vue-tsc strict type-check, then a production build that fai
 - The host must send a Content-Security-Policy header (recommended policy in docs/ui-kit.md, "API layer
   notes") and serve `index.html` for unknown paths (history routing).
 
+## Pages and routes
+
+| Path | Page | Guard |
+|---|---|---|
+| `/` | your account | signed in |
+| `/account/mfa` | set up two-step verification (password, key, code, recovery codes) | signed in |
+| `/login` | sign in (`?returnTo=`) | guests only |
+| `/login/verify` | second step: authenticator or recovery code | guests only |
+| `/register`, `/forgot-password` | sign up, ask for a reset link | guests only |
+| `/reset-password#token=`, `/verify-email#token=` | email links (token read from the fragment, then removed from the URL) | open |
+
+- **Guards** (`src/router/guards.ts`) load the session once (`GET /auth/me`, silent refresh included) and only
+  decide what to show; the API re-checks everything. When a silent refresh finds the session over, a protected
+  page goes to sign-in with its `returnTo`.
+- **Return URL** (`src/router/returnTo.ts`): only a same-origin app path, or the API's
+  `/api/v1/oauth/authorize?...` resume path, which is opened on the API origin. Anything else lands on `/`.
+- **API settings that must point here:** `AccountEmail:VerifyEmailUrl` = `<spa>/verify-email`,
+  `AccountEmail:ResetPasswordUrl` = `<spa>/reset-password`, `OAuth:LoginUrl` = `<spa>/login`.
+- **Forms** use `useAuthForm`: client checks first, then the API (authoritative). API field errors appear under
+  their fields as text, other failures in one alert, and focus moves to the first invalid field or the alert.
+- **Apps on other domains** sign in with OAuth + PKCE: see `examples/consuming-app/` (composable and route guard).
+
 ## Rules the code follows (and tests enforce)
 
 | Rule | Where | Test |

@@ -16,7 +16,7 @@ withDefaults(
     required?: boolean;
     inputmode?: 'text' | 'email' | 'numeric' | 'tel' | 'url' | 'search';
     spellcheck?: boolean;
-    autocapitalize?: 'off' | 'none' | 'sentences' | 'words';
+    autocapitalize?: 'off' | 'none' | 'sentences' | 'words' | 'characters';
     maxlength?: number;
   }>(),
   {

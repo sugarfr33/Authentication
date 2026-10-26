@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import { RouterLink, useRouter } from 'vue-router';
 import { BaseAlert, BaseButton, BaseCard, BaseSpinner } from '@/components/ui';
 import { useToast } from '@/composables/useToast';
 import { describeError } from '@/i18n/errors';
@@ -7,6 +8,7 @@ import { format, messages } from '@/i18n/messages';
 import { useSessionStore } from '@/stores/session';
 
 const session = useSessionStore();
+const router = useRouter();
 const toast = useToast();
 const loadError = ref<string | null>(null);
 const signingOut = ref(false);
@@ -25,6 +27,7 @@ async function signOut(): Promise<void> {
   try {
     await session.signOut();
     toast.show(messages.home.signedOutToast, { tone: 'success' });
+    await router.replace({ name: 'login' });
   } catch (error) {
     toast.show(describeError(error), { tone: 'danger' });
   } finally {
@@ -58,14 +61,20 @@ onMounted(() => {
         <dd>{{ session.profile.email }}</dd>
         <dt>{{ messages.home.roles }}</dt>
         <dd>{{ session.profile.roles.length > 0 ? session.profile.roles.join(', ') : messages.home.noRoles }}</dd>
+        <dt>{{ messages.home.mfa }}</dt>
+        <dd>{{ session.profile.mfaEnabled ? messages.account.mfaOn : messages.account.mfaOff }}</dd>
       </dl>
+      <p v-if="!session.profile.mfaEnabled"><RouterLink :to="{ name: 'mfa-enroll' }">{{ messages.account.setUpMfa }}</RouterLink></p>
       <template #footer>
         <BaseButton variant="secondary" :loading="signingOut" @click="signOut">{{ messages.home.signOut }}</BaseButton>
       </template>
     </BaseCard>
 
     <BaseAlert v-else-if="session.status === 'anonymous'" tone="info">
-      {{ messages.home.signedOut }}
+      <div class="stack">
+        <p>{{ messages.home.signedOut }}</p>
+        <p><RouterLink :to="{ name: 'login' }">{{ messages.login.submit }}</RouterLink></p>
+      </div>
     </BaseAlert>
   </div>
 </template>

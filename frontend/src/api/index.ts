@@ -1,11 +1,15 @@
 import { createAuthApi } from './auth';
 import { resolveApiBaseUrl } from './config';
-import { createHttpClient } from './http';
+import { API_PREFIX, createHttpClient } from './http';
+
+/** The API origin ('' = same origin as the SPA). */
+export const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL, import.meta.env.PROD);
+
+/** Where the API sends the browser back to resume an OAuth authorization after sign-in (its returnTo). */
+export const OAUTH_AUTHORIZE_PATH = `${API_PREFIX}/oauth/authorize`;
 
 /** The app-wide client. Same origin by default (the Vite dev server proxies /api). */
-export const http = createHttpClient({
-  baseUrl: resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL, import.meta.env.PROD),
-});
+export const http = createHttpClient({ baseUrl: apiBaseUrl });
 
 export const authApi = createAuthApi(http);
 
