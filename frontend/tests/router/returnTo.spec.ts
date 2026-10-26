@@ -17,6 +17,12 @@ describe('parseReturnTo', () => {
 
   it.each([
     'https://evil.example',
+    '/.//evil.com',
+    '/..//evil.com',
+    '/a/..//evil.com',
+    '/%2e//evil.com',
+    '/%2E%2E//evil.com/x?y#z',
+    '/././/evil.com',
     'http://evil.example/account',
     '//evil.example',
     '//evil.example/path',

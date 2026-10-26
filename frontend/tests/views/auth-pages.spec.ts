@@ -27,6 +27,14 @@ afterEach(() => {
   app = null;
 });
 
+/** After a form is swapped for its success message, focus is on that message, not lost to <body>. */
+function expectFocusOnSuccess(text: string): void {
+  const active = document.activeElement as HTMLElement | null;
+  expect(active).not.toBe(document.body);
+  expect(active?.getAttribute('tabindex')).toBe('-1');
+  expect(active?.textContent).toContain(text);
+}
+
 function liveRegionsText(root: ParentNode): string {
   return [...root.querySelectorAll('[aria-live="assertive"], [aria-live="polite"], [role="alert"], [role="status"]')].map((el) => el.textContent ?? '').join(' ');
 }
@@ -65,7 +73,7 @@ describe('sign-in page', () => {
     expect(liveRegionsText(app.root)).toContain(messages.validation.passwordRequired);
   });
 
-  it('shows one generic message for a failed sign-in, in an alert (assertive) that takes focus', async () => {
+  it('shows one generic message for a failed sign-in in an alert, and puts focus back on the password', async () => {
     vi.spyOn(authApi, 'login').mockRejectedValue(new ApiError({ status: 401, title: 'Invalid email or password.' }));
     app = await mountApp('/login');
     await type(input(app.root, messages.fields.email), 'nobody@example.com');
@@ -73,7 +81,8 @@ describe('sign-in page', () => {
     await submit(app.root);
     const alert = app.root.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain(messages.auth.loginFailed);
-    expect(document.activeElement?.contains(alert ?? null)).toBe(true);
+    expect(document.activeElement).toBe(input(app.root, messages.fields.password));
+    expect(document.activeElement?.contains(alert ?? null)).toBe(false);
     expect(input(app.root, messages.fields.password).value).toBe('');
     expect(app.root.textContent).not.toMatch(/not found|no account|does not exist|unknown/i);
   });
@@ -85,7 +94,7 @@ describe('sign-in page', () => {
     await type(input(app.root, messages.fields.password), 'a long enough password');
     await submit(app.root);
     expect(authApi.login).toHaveBeenCalledWith('ana@example.com', 'a long enough password');
-    expect(app.router.currentRoute.value.fullPath).toBe('/account/mfa');
+    await vi.waitFor(() => expect(app!.router.currentRoute.value.fullPath).toBe('/account/mfa'));
   });
 
   it('ignores an external returnTo after sign-in (no open redirect)', async () => {
@@ -94,7 +103,7 @@ describe('sign-in page', () => {
     await type(input(app.root, messages.fields.email), 'ana@example.com');
     await type(input(app.root, messages.fields.password), 'a long enough password');
     await submit(app.root);
-    expect(app.router.currentRoute.value.fullPath).toBe('/');
+    await vi.waitFor(() => expect(app!.router.currentRoute.value.fullPath).toBe('/'));
   });
 
   it('goes to the MFA step when the API asks for it, keeping the returnTo', async () => {
@@ -103,7 +112,7 @@ describe('sign-in page', () => {
     await type(input(app.root, messages.fields.email), 'ana@example.com');
     await type(input(app.root, messages.fields.password), 'a long enough password');
     await submit(app.root);
-    expect(app.router.currentRoute.value.name).toBe('mfa-challenge');
+    await vi.waitFor(() => expect(app!.router.currentRoute.value.name).toBe('mfa-challenge'));
     expect(app.router.currentRoute.value.query.returnTo).toBe('/account/mfa');
   });
 
@@ -133,6 +142,7 @@ describe('MFA challenge page', () => {
     await submit(app.root);
     expect(verify).toHaveBeenCalledWith('123 456', false);
     expect(app.root.querySelector('[role="alert"]')?.textContent).toContain(messages.mfaChallenge.failed);
+    expect(document.activeElement).toBe(input(app.root, messages.fields.code));
 
     button(app.root, messages.mfaChallenge.useRecovery).click();
     await settle();
@@ -149,7 +159,7 @@ describe('MFA challenge page', () => {
     await type(input(app.root, messages.fields.code), '123456');
     await submit(app.root);
     expect(app.session.isAuthenticated).toBe(true);
-    expect(app.router.currentRoute.value.fullPath).toBe('/account/mfa');
+    await vi.waitFor(() => expect(app!.router.currentRoute.value.fullPath).toBe('/account/mfa'));
   });
 });
 
@@ -173,6 +183,7 @@ describe('register page', () => {
     await submit(app.root);
     expect(register).toHaveBeenCalledWith({ displayName: 'Ana', email: 'ana@example.com', password: 'a long enough password' });
     expect(liveRegionsText(app.root)).toContain(messages.auth.registerAccepted);
+    expectFocusOnSuccess(messages.auth.registerAccepted);
   });
 
   it('renders the API field errors as text under their fields', async () => {
@@ -200,6 +211,7 @@ describe('forgot-password page', () => {
     await submit(app.root);
     expect(forgot).toHaveBeenCalledWith('nobody@example.com');
     expect(liveRegionsText(app.root)).toContain(messages.auth.forgotAccepted);
+    expectFocusOnSuccess(messages.auth.forgotAccepted);
     expect(messages.auth.forgotAccepted).toMatch(/^If an account/);
   });
 });
@@ -215,6 +227,7 @@ describe('reset-password page', () => {
     await submit(app.root);
     expect(reset).toHaveBeenCalledWith('abc123', 'a brand new password');
     expect(liveRegionsText(app.root)).toContain(messages.reset.doneTitle);
+    expectFocusOnSuccess(messages.reset.doneTitle);
   });
 
   it('shows the generic invalid-link answer and a way to get a new link', async () => {
@@ -243,6 +256,7 @@ describe('verify-email page', () => {
     await settle();
     expect(verify).toHaveBeenCalledWith('tok');
     expect(liveRegionsText(app.root)).toContain(messages.verify.doneTitle);
+    expectFocusOnSuccess(messages.verify.doneTitle);
   });
 
   it('announces an invalid link and focuses the message', async () => {

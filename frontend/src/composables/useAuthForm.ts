@@ -2,7 +2,9 @@
 // client checks first (no request when they fail), then the API call; the API stays authoritative.
 // - Field errors (client, or the API's ValidationProblem `errors`) show under their field as text.
 // - Anything else becomes one form-level message (an assertive BaseAlert in the page).
-// - After a failed submit, focus moves to the first invalid field (WCAG 3.3.1), or to the form message.
+// - After a failed submit, focus moves to the first invalid field (WCAG 3.3.1), to a field the page names
+//   (mapError `focus`, e.g. the cleared password after a generic sign-in failure; the role=alert message is
+//   still announced once), or else to the form message.
 import { nextTick, ref, useTemplateRef, type Ref } from 'vue';
 import { focusFirstInvalid } from '@/components/ui';
 import { isApiError, type ApiError } from '@/api';
@@ -10,7 +12,9 @@ import { describeError } from '@/i18n/errors';
 import type { FieldErrors } from '@/forms/validation';
 
 /** Lets a page translate a failure into its own message; return null for the default. */
-export type ErrorMapper<K extends string> = (error: ApiError) => { form?: string; fields?: FieldErrors<K> } | null;
+export type ErrorMapper<K extends string> = (
+  error: ApiError,
+) => { form?: string; fields?: FieldErrors<K>; focus?: K } | null;
 
 export interface AuthForm<K extends string> {
   errors: Ref<FieldErrors<K>>;
@@ -50,9 +54,15 @@ export function useAuthForm<K extends string>(fields: readonly K[], refs: AuthFo
     return mapped;
   }
 
-  async function moveFocus(): Promise<void> {
+  /** `focusField` is a field key; the input is found by its name attribute inside the form. */
+  async function moveFocus(focusField?: K): Promise<void> {
     await nextTick();
     if (formEl.value && focusFirstInvalid(formEl.value)) return;
+    const named = focusField ? formEl.value?.querySelector<HTMLElement>(`[name="${focusField}"]`) : null;
+    if (named) {
+      named.focus();
+      return;
+    }
     alertEl.value?.focus();
   }
 
@@ -80,7 +90,7 @@ export function useAuthForm<K extends string>(fields: readonly K[], refs: AuthFo
       const fromServer = isApiError(error) ? serverFieldErrors(error) : {};
       errors.value = { ...fromServer, ...(custom?.fields ?? {}) };
       formError.value = custom?.form ?? (hasAny(errors.value) ? null : describeError(error));
-      await moveFocus();
+      await moveFocus(custom?.focus);
       return false;
     } finally {
       submitting.value = false;
@@ -88,4 +98,18 @@ export function useAuthForm<K extends string>(fields: readonly K[], refs: AuthFo
   }
 
   return { errors, formError, submitting, run, clear };
+}
+
+/**
+ * When a form is swapped for its success message, the focused button disappears and focus would fall back to
+ * <body> (WCAG 2.4.3). Bind ref="<name>" on a tabindex=-1 wrapper of the message and call focus() after showing it.
+ */
+export function useFocusTarget(name: string): { focus(): Promise<void> } {
+  const target = useTemplateRef<HTMLElement>(name);
+  return {
+    async focus() {
+      await nextTick();
+      target.value?.focus();
+    },
+  };
 }

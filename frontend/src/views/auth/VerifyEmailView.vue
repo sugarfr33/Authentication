@@ -7,7 +7,7 @@ import { onMounted, ref } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 import { authApi } from '@/api';
 import { BaseAlert, BaseButton, BaseCard } from '@/components/ui';
-import { useAuthForm } from '@/composables/useAuthForm';
+import { useAuthForm, useFocusTarget } from '@/composables/useAuthForm';
 import { messages } from '@/i18n/messages';
 import { takeFragmentToken } from '@/router/fragmentToken';
 
@@ -19,6 +19,7 @@ const ready = ref(false);
 const done = ref(false);
 const linkInvalid = ref(false);
 const { formError, submitting, run } = useAuthForm([] as const);
+const successMessage = useFocusTarget('successEl');
 
 onMounted(async () => {
   token.value = await takeFragmentToken(route, router);
@@ -34,6 +35,7 @@ async function confirm(): Promise<void> {
       await authApi.verifyEmail(value);
       token.value = null;
       done.value = true;
+      await successMessage.focus();
     },
     (error) => {
       if (error.status === 400) {
@@ -50,12 +52,14 @@ async function confirm(): Promise<void> {
   <div class="page page--narrow stack stack--lg">
     <BaseCard :title="messages.verify.title" :heading-level="1">
       <template v-if="!ready" />
-      <BaseAlert v-else-if="done" tone="success" live="polite" :title="messages.verify.doneTitle">
-        <div class="stack">
-          <p>{{ messages.verify.doneBody }}</p>
-          <p><RouterLink to="/login">{{ messages.verify.signIn }}</RouterLink></p>
-        </div>
-      </BaseAlert>
+      <div v-else-if="done" ref="successEl" tabindex="-1">
+        <BaseAlert tone="success" live="polite" :title="messages.verify.doneTitle">
+          <div class="stack">
+            <p>{{ messages.verify.doneBody }}</p>
+            <p><RouterLink to="/login">{{ messages.verify.signIn }}</RouterLink></p>
+          </div>
+        </BaseAlert>
+      </div>
       <BaseAlert v-else-if="token === null && !linkInvalid" tone="warning">
         <div class="stack">
           <p>{{ messages.verify.missingToken }}</p>

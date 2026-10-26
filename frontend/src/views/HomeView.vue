@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { ref } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import { BaseAlert, BaseButton, BaseCard, BaseSpinner } from '@/components/ui';
 import { useToast } from '@/composables/useToast';
@@ -35,9 +35,7 @@ async function signOut(): Promise<void> {
   }
 }
 
-onMounted(() => {
-  if (session.status === 'unknown') void load();
-});
+// The route guard already loaded the session (requiresAuth); load() here is only the retry button.
 </script>
 
 <template>

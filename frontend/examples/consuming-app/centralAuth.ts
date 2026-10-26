@@ -19,6 +19,11 @@ export interface CentralAuthOptions {
   clientId: string;
   /** Registered redirect URI of this app, matched character for character by the server. */
   redirectUri: string;
+  /**
+   * Origins of this app's own API(s), e.g. ["https://api.example.org"]. authFetch sends the Bearer token to
+   * these origins only and refuses any other URL, so a token never leaks to a third party.
+   */
+  apiOrigins: readonly string[];
   /** Seconds before expiry at which the access token is refreshed (default 60). */
   refreshLeewaySeconds?: number;
   // Injection points for tests.
@@ -38,14 +43,14 @@ export interface CentralAuth {
   handleCallback(callbackUrl: string): Promise<string>;
   /** A valid access token (refreshed when close to expiry), or null when signed out. */
   getAccessToken(): Promise<string | null>;
-  /** fetch() for this app's own API with the Bearer token. */
+  /** fetch() for this app's own API (an `apiOrigins` URL only, else it throws) with the Bearer token. */
   authFetch(input: string, init?: RequestInit): Promise<Response>;
   /** Forgets the tokens in this tab. (Ending the Central Auth session is /oauth/logout, not shown here.) */
   signOut(): void;
 }
 
 export class CentralAuthError extends Error {
-  constructor(readonly code: 'state_mismatch' | 'authorization_failed' | 'token_failed') {
+  constructor(readonly code: 'state_mismatch' | 'issuer_mismatch' | 'authorization_failed' | 'token_failed' | 'origin_not_allowed') {
     super(code);
     this.name = 'CentralAuthError';
   }
@@ -73,7 +78,9 @@ export function safeReturnPath(raw: unknown, origin: string): string {
   if (/[\u0000-\u001f\u007f\s]/.test(raw)) return '/';
   try {
     const url = new URL(raw, origin);
-    return url.origin === new URL(origin).origin ? `${url.pathname}${url.search}${url.hash}` : '/';
+    // Dot segments can normalise to '//host' ('/.//evil.com'): refuse that too.
+    if (url.origin !== new URL(origin).origin || url.pathname.startsWith('//')) return '/';
+    return `${url.pathname}${url.search}${url.hash}`;
   } catch {
     return '/';
   }
@@ -88,6 +95,7 @@ export function createCentralAuth(options: CentralAuthOptions): CentralAuth {
   const appOrigin = options.appOrigin ?? window.location.origin;
   const leewayMs = (options.refreshLeewaySeconds ?? 60) * 1000;
   const issuer = new URL(options.issuer).origin;
+  const apiOrigins = new Set(options.apiOrigins.map((origin) => new URL(origin).origin));
 
   // Memory only.
   const tokens = shallowRef<TokenSet | null>(null);
@@ -150,6 +158,9 @@ export function createCentralAuth(options: CentralAuthOptions): CentralAuth {
     if (typeof pending.state !== 'string' || state === null || state !== pending.state) {
       throw new CentralAuthError('state_mismatch');
     }
+    // RFC 9207: when the response names its issuer, it must be ours (mix-up defence).
+    const iss = params.get('iss');
+    if (iss !== null && iss !== issuer && iss !== `${issuer}/`) throw new CentralAuthError('issuer_mismatch');
     const code = params.get('code');
     if (params.has('error') || code === null || typeof pending.verifier !== 'string' || !UNRESERVED.test(pending.verifier)) {
       throw new CentralAuthError('authorization_failed');
@@ -185,6 +196,7 @@ export function createCentralAuth(options: CentralAuthOptions): CentralAuth {
   }
 
   async function authFetch(input: string, init: RequestInit = {}): Promise<Response> {
+    if (!apiOrigins.has(new URL(input, appOrigin).origin)) throw new CentralAuthError('origin_not_allowed');
     const token = await getAccessToken();
     const headers = new Headers(init.headers);
     if (token) headers.set('Authorization', `Bearer ${token}`);

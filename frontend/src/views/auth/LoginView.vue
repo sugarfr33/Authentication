@@ -32,7 +32,7 @@ async function submit(): Promise<void> {
       // One generic answer for every sign-in failure: it never says whether the account exists.
       if (error.status === 401) {
         password.value = '';
-        return { form: messages.auth.loginFailed };
+        return { form: messages.auth.loginFailed, focus: 'password' };
       }
       return null;
     },

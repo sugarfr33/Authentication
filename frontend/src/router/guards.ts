@@ -26,7 +26,8 @@ export function loginRedirect(to: Pick<RouteLocationNormalized, 'fullPath'>) {
 }
 
 async function ensureLoaded(session: GuardSession): Promise<void> {
-  if (session.status !== 'unknown') return;
+  // 'loading': another caller started the check; load() returns that same request.
+  if (session.status !== 'unknown' && session.status !== 'loading') return;
   try {
     await session.load();
   } catch {

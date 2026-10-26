@@ -6,7 +6,7 @@ import { ref } from 'vue';
 import { RouterLink } from 'vue-router';
 import { authApi } from '@/api';
 import { BaseAlert, BaseButton, BaseCard, BaseInput, FormField, PasswordInput } from '@/components/ui';
-import { useAuthForm } from '@/composables/useAuthForm';
+import { useAuthForm, useFocusTarget } from '@/composables/useAuthForm';
 import { collectErrors, validateDisplayName, validateEmail, validateNewPassword } from '@/forms/validation';
 import { messages } from '@/i18n/messages';
 
@@ -15,6 +15,7 @@ const email = ref('');
 const password = ref('');
 const accepted = ref(false);
 const { errors, formError, submitting, run } = useAuthForm(['displayName', 'email', 'password'] as const);
+const successMessage = useFocusTarget('successEl');
 
 async function submit(): Promise<void> {
   await run(
@@ -28,6 +29,7 @@ async function submit(): Promise<void> {
       await authApi.register({ displayName: displayName.value.trim(), email: email.value.trim(), password: password.value });
       password.value = '';
       accepted.value = true;
+      await successMessage.focus();
     },
   );
 }
@@ -36,9 +38,11 @@ async function submit(): Promise<void> {
 <template>
   <div class="page page--narrow stack stack--lg">
     <BaseCard :title="messages.register.title" :heading-level="1">
-      <BaseAlert v-if="accepted" tone="success" live="polite" :title="messages.register.acceptedTitle">
-        {{ messages.auth.registerAccepted }}
-      </BaseAlert>
+      <div v-if="accepted" ref="successEl" tabindex="-1">
+        <BaseAlert tone="success" live="polite" :title="messages.register.acceptedTitle">
+          {{ messages.auth.registerAccepted }}
+        </BaseAlert>
+      </div>
       <form v-else ref="formEl" class="stack" novalidate @submit.prevent="submit">
         <div v-if="formError" ref="alertEl" tabindex="-1">
           <BaseAlert tone="danger" live="assertive">{{ formError }}</BaseAlert>

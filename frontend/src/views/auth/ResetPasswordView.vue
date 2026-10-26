@@ -4,8 +4,8 @@
 import { onMounted, ref } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 import { authApi } from '@/api';
-import { BaseAlert, BaseButton, BaseCard, BaseInput, FormField, PasswordInput } from '@/components/ui';
-import { useAuthForm } from '@/composables/useAuthForm';
+import { BaseAlert, BaseButton, BaseCard, FormField, PasswordInput } from '@/components/ui';
+import { useAuthForm, useFocusTarget } from '@/composables/useAuthForm';
 import { collectErrors, validateNewPassword } from '@/forms/validation';
 import { messages } from '@/i18n/messages';
 import { takeFragmentToken } from '@/router/fragmentToken';
@@ -21,6 +21,7 @@ const newPassword = ref('');
 const done = ref(false);
 const linkInvalid = ref(false);
 const { errors, formError, submitting, run } = useAuthForm(['newPassword'] as const);
+const successMessage = useFocusTarget('successEl');
 
 onMounted(async () => {
   token.value = await takeFragmentToken(route, router);
@@ -38,6 +39,7 @@ async function submit(): Promise<void> {
       token.value = null;
       session.clear();
       done.value = true;
+      await successMessage.focus();
     },
     (error) => {
       // A 400 without field errors is the one generic "invalid or expired link" answer.
@@ -55,12 +57,14 @@ async function submit(): Promise<void> {
   <div class="page page--narrow stack stack--lg">
     <BaseCard :title="messages.reset.title" :heading-level="1">
       <template v-if="!ready" />
-      <BaseAlert v-else-if="done" tone="success" live="polite" :title="messages.reset.doneTitle">
-        <div class="stack">
-          <p>{{ messages.reset.doneBody }}</p>
-          <p><RouterLink to="/login">{{ messages.reset.signIn }}</RouterLink></p>
-        </div>
-      </BaseAlert>
+      <div v-else-if="done" ref="successEl" tabindex="-1">
+        <BaseAlert tone="success" live="polite" :title="messages.reset.doneTitle">
+          <div class="stack">
+            <p>{{ messages.reset.doneBody }}</p>
+            <p><RouterLink to="/login">{{ messages.reset.signIn }}</RouterLink></p>
+          </div>
+        </BaseAlert>
+      </div>
       <BaseAlert v-else-if="token === null && !linkInvalid" tone="warning">
         <div class="stack">
           <p>{{ messages.reset.missingToken }}</p>
@@ -76,8 +80,6 @@ async function submit(): Promise<void> {
             </div>
           </BaseAlert>
         </div>
-        <!-- Lets password managers store the new password against an account; the API knows the user from the link. -->
-        <BaseInput class="visually-hidden" autocomplete="username" aria-hidden="true" tabindex="-1" />
         <FormField
           v-slot="field"
           :label="messages.fields.newPassword"

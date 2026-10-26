@@ -14,7 +14,16 @@ export interface MountedApp {
   unmount(): void;
 }
 
+let preloaded: Promise<unknown> | null = null;
+
+/** Imports every lazy route component once, so navigation in a test never waits on a cold module transform. */
+function preloadRoutes(): Promise<unknown> {
+  preloaded ??= Promise.all(routes.map((r) => (typeof r.component === 'function' ? (r.component as () => Promise<unknown>)() : null)));
+  return preloaded;
+}
+
 export async function mountApp(path: string): Promise<MountedApp> {
+  await preloadRoutes();
   const pinia = createPinia();
   setActivePinia(pinia);
   const session = useSessionStore(pinia);

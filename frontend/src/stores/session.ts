@@ -24,8 +24,20 @@ export const useSessionStore = defineStore('session', () => {
     status.value = 'anonymous';
   }
 
-  /** Asks the API who is signed in (a silent refresh happens inside the API layer when needed). */
-  async function load(): Promise<void> {
+  let inFlight: Promise<void> | null = null;
+
+  /**
+   * Asks the API who is signed in (a silent refresh happens inside the API layer when needed).
+   * Concurrent callers (a guard and a page, two navigations) share one request.
+   */
+  function load(): Promise<void> {
+    inFlight ??= doLoad().finally(() => {
+      inFlight = null;
+    });
+    return inFlight;
+  }
+
+  async function doLoad(): Promise<void> {
     status.value = 'loading';
     try {
       setProfile(await authApi.getProfile());

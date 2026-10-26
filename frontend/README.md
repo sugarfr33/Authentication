@@ -43,7 +43,11 @@ npm run build      # vue-tsc strict type-check, then a production build that fai
 - **Return URL** (`src/router/returnTo.ts`): only a same-origin app path, or the API's
   `/api/v1/oauth/authorize?...` resume path, which is opened on the API origin. Anything else lands on `/`.
 - **API settings that must point here:** `AccountEmail:VerifyEmailUrl` = `<spa>/verify-email`,
-  `AccountEmail:ResetPasswordUrl` = `<spa>/reset-password`, `OAuth:LoginUrl` = `<spa>/login`.
+  `AccountEmail:ResetPasswordUrl` = `<spa>/reset-password`, `OAuth:LoginUrl` = `<spa>/login` (the API's
+  appsettings.Example.json shows `/signin`; this SPA's page is `/login`).
+- **Dev email links:** `AccountEmailOptions` defaults those two URLs to `https://localhost:5173/...`, but the Vite
+  dev server is plain http. In Development set them to `http://localhost:5173/verify-email` and
+  `http://localhost:5173/reset-password` (user secrets or `appsettings.Development.json`), or the links will not open.
 - **Forms** use `useAuthForm`: client checks first, then the API (authoritative). API field errors appear under
   their fields as text, other failures in one alert, and focus moves to the first invalid field or the alert.
 - **Apps on other domains** sign in with OAuth + PKCE: see `examples/consuming-app/` (composable and route guard).

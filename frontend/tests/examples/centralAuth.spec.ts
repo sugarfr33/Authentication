@@ -43,6 +43,7 @@ function setup(overrides: Partial<CentralAuthOptions> = {}) {
     crypto: webcrypto,
     now: () => clock,
     appOrigin: ORIGIN,
+    apiOrigins: ['https://api.example.org'],
     ...overrides,
   });
   return { auth, storage, navigate, fetch, advance: (ms: number) => (clock += ms) };
@@ -137,9 +138,27 @@ describe('consuming-app example', () => {
     expect(headers.get('Authorization')).toBe('Bearer access-1');
   });
 
+  it('authFetch refuses any origin outside apiOrigins, before reading the token', async () => {
+    const { auth, fetch } = await signedIn();
+    for (const url of ['https://evil.example/collect', 'https://api.example.org.evil.example/x', '//evil.example/x', 'http://api.example.org/x']) {
+      await expect(auth.authFetch(url)).rejects.toEqual(new CentralAuthError('origin_not_allowed'));
+    }
+    expect(fetch).toHaveBeenCalledTimes(1); // only the code exchange
+  });
+
+  it('refuses a callback from another issuer (iss)', async () => {
+    const { auth, fetch, navigate } = setup();
+    await auth.signIn('/');
+    const state = new URL(navigate.mock.calls[0]![0]).searchParams.get('state');
+    await expect(auth.handleCallback(`${ORIGIN}/callback?code=c&state=${state}&iss=https%3A%2F%2Fevil.example`)).rejects.toEqual(
+      new CentralAuthError('issuer_mismatch'),
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('only returns to same-origin paths', () => {
     expect(safeReturnPath('/orders?x=1', ORIGIN)).toBe('/orders?x=1');
-    for (const bad of ['https://evil.example', '//evil.example', '/\\evil.example', 'javascript:alert(1)', '/\n/x', 42]) {
+    for (const bad of ['/.//evil.com', '/..//evil.com', '/a/..//evil.com', '/%2e//evil.com', '/%2E%2E//evil.com', 'https://evil.example', '//evil.example', '/\\evil.example', 'javascript:alert(1)', '/\n/x', 42]) {
       expect(safeReturnPath(bad, ORIGIN)).toBe('/');
     }
   });

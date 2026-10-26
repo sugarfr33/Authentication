@@ -38,7 +38,7 @@ async function submit(): Promise<void> {
     (error) => {
       if (error.status === 401) {
         code.value = '';
-        return { form: messages.mfaChallenge.failed };
+        return { form: messages.mfaChallenge.failed, focus: 'code' };
       }
       return null;
     },
@@ -97,7 +97,7 @@ async function submit(): Promise<void> {
             :id="field.id"
             ref="codeInput"
             v-model="code"
-            name="recovery-code"
+            name="code"
             autocomplete="off"
             autocapitalize="characters"
             :maxlength="20"

@@ -58,6 +58,26 @@ describe('auth guard', () => {
     expect(assign).toHaveBeenCalledWith(`${window.location.origin}/api/v1/oauth/authorize?client_id=a&state=s`);
   });
 
+  it('waits for a session check already in flight instead of redirecting (one /auth/me)', async () => {
+    let resolve!: (p: UserProfile) => void;
+    const getProfile = vi.spyOn(authApi, 'getProfile').mockImplementation(() => new Promise((r) => (resolve = r)));
+    app = await mountApp('/reset-password'); // open page: no guard check yet
+    const pageLoad = app.session.load(); // e.g. a page started the check
+    expect(app.session.status).toBe('loading');
+    const navigation = app.router.push('/account/mfa');
+    resolve(PROFILE);
+    await Promise.all([pageLoad, navigation]);
+    expect(app.router.currentRoute.value.name).toBe('mfa-enroll');
+    expect(getProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it('the home page does not ask for the session a second time', async () => {
+    const getProfile = vi.spyOn(authApi, 'getProfile').mockResolvedValue(PROFILE);
+    app = await mountApp('/');
+    expect(app.router.currentRoute.value.name).toBe('home');
+    expect(getProfile).toHaveBeenCalledTimes(1);
+  });
+
   it('reset and verify pages are open to everyone', async () => {
     vi.spyOn(authApi, 'getProfile').mockRejectedValue(new ApiError({ status: 401 }));
     app = await mountApp('/reset-password');

@@ -45,6 +45,9 @@ export function parseReturnTo(raw: unknown, appOrigin: string = currentOrigin(),
     return null;
   }
   if (url.origin !== new URL(appOrigin).origin) return null;
+  // Dot segments can normalise to a scheme-relative path ('/.//evil.com' -> '//evil.com'), which a later
+  // full-page navigation would read as another host.
+  if (url.pathname.startsWith('//')) return null;
   if (url.pathname.startsWith('/api/')) return null;
   if (NOT_A_DESTINATION.some((page) => url.pathname === page || url.pathname.startsWith(`${page}/`))) return null;
   return { kind: 'app', path: `${url.pathname}${url.search}${url.hash}` };
