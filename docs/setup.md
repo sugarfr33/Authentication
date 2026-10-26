@@ -8,13 +8,15 @@ Production settings (proxy, hosts, HSTS, CSP, keys) are in [deployment.md](deplo
 
 ## 0. Prerequisites
 
-| Tool | Version used for this guide | Notes |
-|---|---|---|
-| .NET SDK | 10.0.403 | `dotnet --version` must print 10.0.x. |
-| dotnet-ef (global tool) | 10.0.10 | `dotnet tool install --global dotnet-ef --version 10.0.10` |
-| SQL Server Express | instance `.\SQLEXPRESS`, Windows Authentication | Any SQL Server 2019+ works with a changed connection string. |
-| sqlcmd | ODBC sqlcmd 17 | Or SQL Server Management Studio, to run one SQL file. |
-| Node.js / npm | 24.22.1 / 12.2.1 | Only for the SPA. Also used to create the signing key (step 3). |
+The versions below are the ones **used** for this guide, not minimums, unless the notes say otherwise.
+
+| Tool | Used | Required | Notes |
+|---|---|---|---|
+| .NET SDK | 10.0.403 | 10.0.x | `dotnet --version` must print 10.0.x. |
+| dotnet-ef (global tool) | 10.0.10 | 10.0.x | `dotnet tool install --global dotnet-ef --version 10.0.10` |
+| SQL Server Express | instance `.\SQLEXPRESS`, Windows Authentication | SQL Server 2019 or newer | Other instances work with a changed connection string. |
+| sqlcmd | ODBC sqlcmd 17 | any | Or SQL Server Management Studio, to run one SQL file. |
+| Node.js / npm | 24.22.1 / 12.2.1 | Node 20.19 or newer (`frontend/package.json` engines) | Only for the SPA, and to create the signing key (step 3). |
 
 Commands below are for bash (Git Bash on Windows). PowerShell equivalents are given where they differ.
 
@@ -187,8 +189,9 @@ Port 5173 is taken: run `npx vite --port 5174 --strictPort`, and use that origin
    dotnet user-secrets set "Authorization:BootstrapAdminEmail" "you@example.com" --project src/Auth.Api
    ```
 
-   The startup log says `bootstrap admin assigned: True`. Sign in again: `/me` now shows roles `Admin` and `User`,
-   and `GET /api/v1/admin/users` answers 200.
+   The startup log says `bootstrap admin assigned: True`. No new sign-in is needed: `/me` and the admin API read
+   roles from the database, so the existing session already shows roles `Admin` and `User`, and
+   `GET /api/v1/admin/users` answers 200. Signing in again does no harm.
 5. Remove the setting (`dotnet user-secrets remove "Authorization:BootstrapAdminEmail" --project src/Auth.Api`).
    It only applies while no active administrator exists, and later starts warn while it is set
    ([authorization.md](authorization.md)).

@@ -46,7 +46,7 @@ Prerequisites:
 
 - .NET SDK 10.0.x and the `dotnet-ef` tool;
 - SQL Server Express (`.\SQLEXPRESS`, Windows authentication) and `sqlcmd`;
-- Node.js 24 and npm.
+- Node.js 20.19 or newer (24 used) and npm.
 
 ```bash
 cd backend && dotnet build Auth.sln && dotnet test Auth.sln

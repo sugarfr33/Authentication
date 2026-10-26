@@ -93,8 +93,14 @@ export const refresh = () => post('/refresh');
 export const logout = () => post('/logout');
 ```
 
-- Sign-in itself happens on the Auth SPA (`https://auth.example.com/login?returnTo=...`), or by posting
-  `/auth/login` from your page.
+- **Sign-in:** your SPA posts `/auth/login` itself, from its own sign-in form. The cookies are shared across the
+  Domain, so that is all it needs. A `GET /me` first gives the XSRF pair.
+- **The Auth SPA cannot send users back to your app.** Its `returnTo` accepts only a same-origin path (`/...`) or
+  the API's own `/api/v1/oauth/authorize` resume path. An absolute URL such as `https://app.example.com/` is ignored,
+  and the user lands on the Auth SPA's home page (`frontend/src/router/returnTo.ts`).
+  - You can still link users to `https://auth.example.com/login`. After signing in they come back by their own
+    navigation (a link or the back button), and your SPA then finds the session with `GET /me`.
+  - A cross-origin return for sibling apps is not built (possible follow-up feature).
 - Always **GET before the first POST** after the session changes. The antiforgery token is bound to the user, so an
   old one gives 400.
 - One refresh at a time. The Auth SPA serialises refresh across tabs with a Web Lock. A double submit within 10 s is
