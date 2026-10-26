@@ -71,13 +71,18 @@ public sealed class ApiFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        await using (AuthDbContext context = NewContext(ConnectionString))
-        {
-            SqlServerDatabaseFixture.EnsureThrowawayDatabase(ConnectionString);
-            await context.Database.EnsureDeletedAsync();
-            await context.Database.MigrateAsync();
-            await SeedAsync(context);
-        }
+        SqlServerDatabaseFixture.EnsureThrowawayDatabase(ConnectionString);
+        await TestDatabaseWarmup.WaitForServerAsync(ConnectionString);
+        await TestDatabaseWarmup.RetryAsync(
+            async () =>
+            {
+                await using AuthDbContext context = NewContext(ConnectionString);
+                await context.Database.EnsureDeletedAsync();
+                await context.Database.MigrateAsync();
+                await SeedAsync(context);
+            },
+            "The API test database could not be created");
+        await TestDatabaseWarmup.WarmPoolAsync(ConnectionString);
 
         await using AsyncServiceScope scope = Factory.Services.CreateAsyncScope();
         await scope.ServiceProvider.GetRequiredService<ISigningKeyRotation>()

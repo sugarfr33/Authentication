@@ -39,10 +39,17 @@ public sealed class SqlServerDatabaseFixture : IAsyncLifetime
         collection.AddDataAccess(ConnectionString, options => options.AddInterceptors(Commands));
         services = collection.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
 
-        await using AsyncServiceScope scope = services.CreateAsyncScope();
-        AuthDbContext context = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
-        await context.Database.EnsureDeletedAsync();
-        await context.Database.MigrateAsync();
+        await TestDatabaseWarmup.WaitForServerAsync(ConnectionString);
+        await TestDatabaseWarmup.RetryAsync(
+            async () =>
+            {
+                await using AsyncServiceScope scope = services.CreateAsyncScope();
+                AuthDbContext context = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
+                await context.Database.EnsureDeletedAsync();
+                await context.Database.MigrateAsync();
+            },
+            "The test database could not be created");
+        await TestDatabaseWarmup.WarmPoolAsync(ConnectionString);
     }
 
     public async Task DisposeAsync()
