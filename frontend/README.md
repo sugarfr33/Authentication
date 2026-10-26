@@ -19,6 +19,13 @@ npm run build      # vue-tsc strict type-check, then a production build that fai
 - Outside dev, set `VITE_API_BASE_URL` to the API origin, or serve the SPA from the same origin.
 - The UI kit gallery is at `/dev/gallery` (dev server only).
 
+## Deployment
+
+- Serve the SPA from the same origin as the API (recommended), or set `VITE_API_BASE_URL` to an https
+  origin. It is validated at start-up and the app refuses anything else.
+- The host must send a Content-Security-Policy header (recommended policy in docs/ui-kit.md, "API layer
+  notes") and serve `index.html` for unknown paths (history routing).
+
 ## Rules the code follows (and tests enforce)
 
 | Rule | Where | Test |

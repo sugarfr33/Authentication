@@ -176,3 +176,70 @@ describe('request basics', () => {
     expect(error.traceId).toBe('t-1');
   });
 });
+
+describe('audit lows (T23 fix)', () => {
+  it('L1: a 401 that arrives after the refresh finished probes /auth/me and does NOT refresh again', async () => {
+    const { server, api } = setup({ slowResponsePaths: { '/auth/sessions': 25 } });
+    await api.getProfile();
+    server.expireAccess();
+
+    // the fast call 401s first and refreshes; the slow call's 401 lands after that recovery has settled
+    await Promise.all([api.getProfile(), api.listSessions()]);
+
+    expect(server.state.refreshCount).toBe(1);
+    expect(server.count('POST', '/auth/refresh')).toBe(1);
+    // GET /auth/me: initial load, fast call + its retry, first recovery probe, and the late call's own probe
+    // (proves the late 401 really started a second recovery, which found the session active)
+    expect(server.count('GET', '/auth/me')).toBe(5);
+  });
+
+  it('L2: a hung recovery request times out, ends as unavailable (no sign-out) and releases the lock', async () => {
+    let hang = true;
+    const locks = createFakeLocks();
+    const onSessionExpired = vi.fn();
+    const fetchImpl: typeof fetch = (input, init) => {
+      const path = String(input);
+      if (path.endsWith('/auth/me') && hang) {
+        return new Promise((_resolve, reject) =>
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))),
+        );
+      }
+      if (path.endsWith('/auth/sessions')) {
+        return Promise.resolve(new Response(JSON.stringify({ title: 'Authentication required.' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+      }
+      return Promise.resolve(new Response(null, { status: 503 }));
+    };
+    const http = createHttpClient({ fetch: fetchImpl, readCookie: () => 'anon-1', locks, onSessionExpired, recoveryTimeoutMs: 30 });
+    const api = createAuthApi(http);
+
+    const started = Date.now();
+    const first = (await api.listSessions().catch((e: unknown) => e)) as ApiError;
+    expect(first.status).toBe(401);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(onSessionExpired).not.toHaveBeenCalled();
+
+    hang = false;
+    await expect(http.recoverSession()).resolves.toBe('unavailable'); // lock was released: a new recovery runs
+    expect(locks.grants).toBe(2);
+  });
+});
+
+describe('L4: API base URL', () => {
+  it('accepts empty (same origin) and https origins', async () => {
+    const { resolveApiBaseUrl } = await import('@/api/config');
+    expect(resolveApiBaseUrl(undefined, true)).toBe('');
+    expect(resolveApiBaseUrl('  ', true)).toBe('');
+    expect(resolveApiBaseUrl('https://auth.example.com/', true)).toBe('https://auth.example.com');
+    expect(resolveApiBaseUrl('http://localhost:5094', false)).toBe('http://localhost:5094');
+  });
+
+  it('refuses http in production, non-loopback http, paths, queries and credentials', async () => {
+    const { resolveApiBaseUrl } = await import('@/api/config');
+    expect(() => resolveApiBaseUrl('http://localhost:5094', true)).toThrow(/https/);
+    expect(() => resolveApiBaseUrl('http://auth.example.com', false)).toThrow(/https/);
+    expect(() => resolveApiBaseUrl('https://auth.example.com/api', true)).toThrow(/origin only/);
+    expect(() => resolveApiBaseUrl('https://auth.example.com?x=1', true)).toThrow(/origin only/);
+    expect(() => resolveApiBaseUrl('https://u:p@auth.example.com', true)).toThrow(/origin only/);
+    expect(() => resolveApiBaseUrl('not a url', true)).toThrow(/valid URL/);
+  });
+});

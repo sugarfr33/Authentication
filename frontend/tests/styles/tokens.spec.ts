@@ -3,8 +3,10 @@
 import { describe, expect, it } from 'vitest';
 import tokensCss from '@/styles/tokens.css?raw';
 
-const vueFiles = import.meta.glob<string>('/src/**/*.vue', { query: '?raw', import: 'default', eager: true });
-const cssFiles = import.meta.glob<string>('/src/**/*.css', { query: '?raw', import: 'default', eager: true });
+import { readSources } from '../helpers/sources';
+
+const vueFiles = Object.fromEntries(readSources(['.vue']));
+const cssFiles = Object.fromEntries(readSources(['.css']));
 
 function block(css: string, selector: string): string {
   const start = css.indexOf(selector);
@@ -120,6 +122,13 @@ describe('token structure', () => {
     expect(lightColours.filter((k) => !dark.has(k))).toEqual([]);
   });
 
+  it('reduced motion stops transitions but keeps loading indicators turning (slowly)', () => {
+    const reduced = declarations(block(tokensCss, '@media (prefers-reduced-motion: reduce)'));
+    expect(reduced.get('--duration-base')).toBe('0ms');
+    expect(reduced.get('--duration-spin')).toBe('var(--p-duration-spin-reduced)');
+    expect(primitives.get('--p-duration-spin-reduced')).not.toMatch(/^0/);
+  });
+
   it('the WCAG formula is implemented correctly (black on white is 21:1)', () => {
     expect(contrast('#000000', '#ffffff')).toBeCloseTo(21, 5);
   });
@@ -160,7 +169,7 @@ describe('kit and pages use tokens only', () => {
   });
 
   it('nothing renders raw HTML (v-html / innerHTML): IP and user agent stay text', () => {
-    const all = import.meta.glob<string>('/src/**/*.{ts,vue}', { query: '?raw', import: 'default', eager: true });
+    const all = Object.fromEntries(readSources(['.ts', '.vue']));
     const offenders = Object.entries(all)
       .filter(([, s]) => /v-html|innerHTML|outerHTML|insertAdjacentHTML/.test(s))
       .map(([file]) => file);

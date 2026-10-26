@@ -96,6 +96,8 @@
   --p-duration-1: 120ms;
   --p-duration-2: 200ms;
   --p-duration-3: 320ms;
+  --p-duration-spin: 800ms;
+  --p-duration-spin-reduced: 2400ms;
   --p-ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --p-ease-exit: cubic-bezier(0.3, 0, 1, 1);
 }
@@ -296,6 +298,8 @@
   --duration-fast: var(--p-duration-1);
   --duration-base: var(--p-duration-2);
   --duration-slow: var(--p-duration-3);
+  /* loading indicators keep moving under reduced motion (slowly): a frozen ring reads as broken */
+  --duration-spin: var(--p-duration-spin);
   --ease-standard: var(--p-ease-standard);
   --ease-exit: var(--p-ease-exit);
 
@@ -327,6 +331,7 @@
     --duration-fast: 0ms;
     --duration-base: 0ms;
     --duration-slow: 0ms;
+    --duration-spin: var(--p-duration-spin-reduced);
   }
 }
 

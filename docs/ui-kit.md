@@ -17,7 +17,9 @@ Three tiers in one file:
    `--focus-ring`, `--target-comfortable` and so on. **Dark mode is redefined at this layer only:** under
    `@media (prefers-color-scheme: dark)` unless `<html data-theme="light">`, and again under
    `<html data-theme="dark">`. The two dark blocks must be identical, and dark must define every light
-   colour token (both tested). `prefers-reduced-motion` sets every duration to 0.
+   colour token (both tested). `prefers-reduced-motion` sets every transition duration to 0, but
+   `--duration-spin` only slows from 800 ms to 2.4 s per turn, so a loading indicator still reads as
+   working instead of a frozen, broken-looking ring (tested).
 3. **Component** (`--button-*`, `--input-*`, `--card-*` and so on): built from semantic tokens.
 
 Component styles contain no hex/rgb/hsl colours and no pixel values except the `1px` visually-hidden
@@ -63,6 +65,10 @@ offset) and a target of at least 24 by 24 px (`--target-min`). Primary controls 
 - **A11y:** `type="button"` unless set, so it never submits by accident. While loading it stays focusable,
   sets `aria-busy="true"`, keeps its label, ignores activation and prevents a double submit. Other ARIA
   attributes such as `aria-pressed` fall through.
+- **Announcing the result is the page's job.** Its spinner is decorative and `aria-busy` is not reliably
+  read, so a page that sets `loading` must announce the outcome: a failure in a `BaseAlert` with
+  `live="assertive"`, a success in a `BaseAlert` with `live="polite"` or a toast. For a wait that takes more
+  than a moment, also show a `BaseSpinner` (it has `role="status"`) with a label that says what is loading.
 - **API:** props `variant`, `size`, `type`, `disabled`, `loading`, `block`, `icon`. Emits `click`.
   Default slot. Exposes `focus()`.
 
@@ -112,6 +118,11 @@ offset) and a target of at least 24 by 24 px (`--target-min`). Primary controls 
   never become markup (tested with `<img onerror>`). Dates are formatted with `Intl`.
 - When narrower than 30em (container query), rows stack into labelled blocks, so there is no horizontal
   scroll at 320 px.
+- The stacked layout sets `display: block`, which makes Chrome and Safari drop the implicit table semantics
+  (WCAG 1.3.1). So every element carries its role explicitly: `table`, `rowgroup`, `row`, `columnheader`
+  and `cell` (tested). The table is labelled by its caption (`aria-labelledby`). The header row stays in
+  the accessibility tree, visually clipped, so cells keep their column header. The visual `data-label`
+  prefix uses CSS alt text (`content: attr(data-label) / ""`), so it is not read twice.
 
 ### BaseDialog
 - A native `<dialog>` with `showModal()`: focus trap, an inert page and Esc, all from the browser.
@@ -121,6 +132,8 @@ offset) and a target of at least 24 by 24 px (`--target-min`). Primary controls 
 - **Focus:** on open it goes to Cancel for `danger` and to Confirm otherwise. On close it returns to the
   opener.
 - Esc and backdrop clicks cancel. Both are blocked while `confirmLoading` is set.
+- `persistent` ignores backdrop clicks (Esc and Cancel still work). Use it for any dialog that holds a
+  form or other input, so a stray click loses nothing.
 
 ### BaseSpinner
 - `role="status"` with visually hidden text (default "Loading"). `decorative` hides it inside a busy
@@ -128,8 +141,11 @@ offset) and a target of at least 24 by 24 px (`--target-min`). Primary controls 
 - Sizes `sm`, `md`, `lg`. Under reduced motion the animation stops and the text still conveys the state.
 
 ### Toast (BaseToast and ToastRegion, with `useToast()`)
-- `useToast().show(message, { tone, timeoutMs })`. Info and success dismiss themselves after 6 s, paused
-  while hovered or focused. Warnings and errors stay until dismissed.
+- `useToast().show(message, { tone, timeoutMs })`. Info and success dismiss themselves after **10 s**,
+  paused while hovered or focused, which leaves time to read them and to reach Dismiss by keyboard.
+  Warnings and errors are **always sticky**: a `timeoutMs` passed for them is ignored (tested).
+- **Toasts carry no actions and no information the user needs later.** Anything to act on (retry, undo,
+  a link) goes in a `BaseAlert` on the page. Toasts confirm what already happened ("You have signed out.").
 - `ToastRegion` (mounted once in App.vue) keeps two live regions from page load: assertive
   (`role="alert"`) for warning and danger, polite (`role="status"`) for info and success.
 - Each toast has a visually hidden tone prefix and a "Dismiss notification" button.
@@ -137,6 +153,27 @@ offset) and a target of at least 24 by 24 px (`--target-min`). Primary controls 
 ### Icons
 `IconSprite.vue` is one inline SVG sprite we author (info, success, warning, danger, close, eye, eye-off),
 mounted once. `BaseIcon` uses it and is decorative (`aria-hidden`) unless given a `label`.
+
+## API layer notes (T23 audit)
+
+- **L1 (late 401s):** single flight covers one recovery. A 401 whose response arrives after that
+  recovery has settled starts a new one, which first probes `GET /auth/me`. The session is already
+  fresh, so it answers 200 and nothing is rotated again (tested: one refresh, two probes).
+- **L2 (hung recovery):** each recovery request (probe, refresh) is aborted after `recoveryTimeoutMs`
+  (default 15 s). The recovery then ends as `unavailable`: the original error is returned, the user is
+  not signed out and the Web Lock is released for the next recovery (tested).
+- **L3 (replay):** after a 401 or a stale-antiforgery 400 the request is sent once more with the same body.
+  This is safe because both answers come from middleware (authentication, BrowserProtectionMiddleware)
+  before any endpoint runs, so the first attempt did nothing. Any future endpoint that can answer 400/401
+  after doing work must not use this retry path, or must carry an idempotency key.
+- **L4 (API origin):** `VITE_API_BASE_URL` is validated at start-up (`src/api/config.ts`): empty (same
+  origin, recommended), or an https origin with no path, query or credentials; http is allowed for
+  localhost in development only (tested). Cookies are SameSite=Strict, so a cross-site API would get no
+  cookies anyway; a different origin on the same site must be in the API's CORS allowlist.
+- **CSP:** the host that serves the SPA must send a Content-Security-Policy header. A meta tag is not used
+  because the Vite dev server needs inline scripts. Recommended for production:
+  `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'
+  <api origin if different>; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'`.
 
 ## UX writing
 

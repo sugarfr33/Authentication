@@ -1,6 +1,9 @@
 <script setup lang="ts" generic="T">
 // Cells are rendered with text interpolation only (never as raw HTML), so values such as IP addresses and user
-// agents can never become markup. When the table is narrower than 30em, rows stack into labelled blocks: no horizontal scroll.
+// agents can never become markup. When the table is narrower than 30em, rows stack into labelled blocks: no
+// horizontal scroll. The stacked layout sets display:block, which makes some browsers drop the implicit table
+// semantics (WCAG 1.3.1), so every element carries its table role explicitly.
+import { useId } from 'vue';
 import type { TableColumn } from './types';
 
 withDefaults(
@@ -33,6 +36,8 @@ function asText(value: unknown): string {
   return String(value);
 }
 
+const captionId = `table-${useId()}-caption`;
+
 function alignClass(column: TableColumn): string {
   return column.align === 'end' ? 'cell--end' : 'cell--start';
 }
@@ -40,21 +45,21 @@ function alignClass(column: TableColumn): string {
 
 <template>
   <div class="table-wrap">
-    <table class="table">
-      <caption :class="{ 'visually-hidden': captionHidden }">{{ caption }}</caption>
-      <thead>
-        <tr>
-          <th v-for="column in columns" :key="column.key" scope="col" :class="alignClass(column)">{{ column.label }}</th>
+    <table class="table" role="table" :aria-labelledby="captionId">
+      <caption :id="captionId" :class="{ 'visually-hidden': captionHidden }">{{ caption }}</caption>
+      <thead role="rowgroup">
+        <tr role="row">
+          <th v-for="column in columns" :key="column.key" scope="col" role="columnheader" :class="alignClass(column)">{{ column.label }}</th>
         </tr>
       </thead>
-      <tbody>
-        <tr v-if="rows.length === 0">
-          <td class="table__empty" :colspan="columns.length">
+      <tbody role="rowgroup">
+        <tr v-if="rows.length === 0" role="row">
+          <td class="table__empty" role="cell" :colspan="columns.length">
             <slot name="empty">{{ emptyText }}</slot>
           </td>
         </tr>
-        <tr v-for="row in rows" :key="rowKey(row)">
-          <td v-for="column in columns" :key="column.key" :data-label="column.label" :class="alignClass(column)">
+        <tr v-for="row in rows" :key="rowKey(row)" role="row">
+          <td v-for="column in columns" :key="column.key" role="cell" :data-label="column.label" :class="alignClass(column)">
             <slot name="cell" :row="row" :column="column" :value="valueOf(row, column.key)">{{
               asText(valueOf(row, column.key))
             }}</slot>
@@ -143,6 +148,8 @@ th {
 
   td::before {
     content: attr(data-label);
+    /* visual label only: the column header already names the cell for assistive tech */
+    content: attr(data-label) / '';
     color: var(--color-text-muted);
     font-weight: var(--font-weight-medium);
   }

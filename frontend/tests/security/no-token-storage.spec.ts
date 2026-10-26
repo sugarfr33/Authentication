@@ -3,9 +3,10 @@ import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http } from '@/api';
 import { useSessionStore } from '@/stores/session';
+import { readSources } from '../helpers/sources';
 import { createFakeAuthServer, SECRET_ACCESS_TOKEN, SECRET_REFRESH_TOKEN } from '../helpers/fakeAuthServer';
 
-const sources = import.meta.glob<string>('/src/**/*.{ts,vue}', { query: '?raw', import: 'default', eager: true });
+const sources = Object.fromEntries(readSources(['.ts', '.vue']));
 
 function scriptVisibleState(store: ReturnType<typeof useSessionStore>): string {
   const storage: Record<string, string | null> = {};

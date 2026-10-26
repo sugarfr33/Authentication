@@ -33,7 +33,7 @@ withDefaults(
   border: var(--spinner-stroke) solid currentColor;
   border-inline-end-color: transparent;
   border-radius: var(--radius-full);
-  animation: spin calc(var(--duration-slow) * 2.5) linear infinite;
+  animation: spin var(--duration-spin) linear infinite;
 }
 
 .spinner--sm {

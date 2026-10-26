@@ -15,8 +15,10 @@ const props = withDefaults(
     tone?: 'default' | 'danger';
     /** Confirm in progress: confirm shows busy, cancel and Esc are blocked. */
     confirmLoading?: boolean;
+    /** Ignore backdrop clicks (use for dialogs holding a form, so a stray click loses nothing). Esc and Cancel still work. */
+    persistent?: boolean;
   }>(),
-  { description: undefined, cancelLabel: messages.common.cancel, tone: 'default', confirmLoading: false },
+  { description: undefined, cancelLabel: messages.common.cancel, tone: 'default', confirmLoading: false, persistent: false },
 );
 
 const open = defineModel<boolean>('open', { required: true });
@@ -64,7 +66,7 @@ function onNativeCancel(event: Event): void {
 
 /** A click on the dialog element itself (not its panel) is a click on the backdrop. */
 function onDialogClick(event: MouseEvent): void {
-  if (event.target === dialog.value) cancel();
+  if (event.target === dialog.value && !props.persistent) cancel();
 }
 
 watch(open, (value) => (value ? void show() : hide()), { flush: 'post' });

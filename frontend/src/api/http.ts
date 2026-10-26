@@ -55,6 +55,12 @@ export interface HttpClientOptions {
   locks?: LockManagerLike | null;
   readCookie?: (name: string) => string | null;
   onSessionExpired?: () => void;
+  /**
+   * Each request made during session recovery (the /auth/me probe, /auth/refresh) is aborted after this long
+   * and the recovery ends as `unavailable`, so a hung request cannot hold the refresh lock and block every
+   * later 401 in this tab and the others. Default 15 s.
+   */
+  recoveryTimeoutMs?: number;
 }
 
 export const API_PREFIX = '/api/v1';
@@ -63,6 +69,7 @@ export const XSRF_HEADER = 'X-XSRF-TOKEN';
 export const REFRESH_LOCK_NAME = 'central-auth:session-refresh';
 const PROBE_PATH = '/auth/me';
 const REFRESH_PATH = '/auth/refresh';
+export const DEFAULT_RECOVERY_TIMEOUT_MS = 15_000;
 
 interface RawResponse {
   readonly status: number;
@@ -129,6 +136,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
   const readCookie = options.readCookie ?? readDocumentCookie;
   let onExpired: (() => void) | null = options.onSessionExpired ?? null;
   let inflight: Promise<RecoveryOutcome> | null = null;
+  const recoveryTimeoutMs = options.recoveryTimeoutMs ?? DEFAULT_RECOVERY_TIMEOUT_MS;
 
   async function send(path: string, method: HttpMethod, body?: unknown, signal?: AbortSignal): Promise<RawResponse> {
     const headers: Record<string, string> = { Accept: 'application/json' };
@@ -161,12 +169,16 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
     return { status: response.status, ok: response.ok, headers: response.headers, body: await readBody(response) };
   }
 
-  /** Like send, but a network failure is `null` instead of an exception. */
+  /** Like send, but bounded by recoveryTimeoutMs; a network failure or timeout is `null` instead of an exception. */
   async function trySend(path: string, method: HttpMethod): Promise<RawResponse | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), recoveryTimeoutMs);
     try {
-      return await send(path, method);
+      return await send(path, method, undefined, controller.signal);
     } catch {
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -226,6 +238,10 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
 
     if (unsafe && readCookie(XSRF_COOKIE) === null) await primeAntiforgery();
 
+    // Replaying the request once (same body) is safe because both triggers mean the server did NOT run the
+    // endpoint: the antiforgery 400 comes from BrowserProtectionMiddleware and the 401 from authentication,
+    // both before any handler. If an endpoint ever answers 400/401 AFTER doing work, it must not be called
+    // with auth 'session' through this path, or it needs an idempotency key (docs/ui-kit.md, audit L3).
     let response = await send(path, method, requestOptions.body, signal);
     let retried = false;
 

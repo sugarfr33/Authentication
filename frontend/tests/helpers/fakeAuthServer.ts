@@ -36,6 +36,8 @@ export interface FakeAuthServerOptions {
   loseNextRefreshRace?: boolean;
   /** Simulated latency per request, in macrotasks. */
   latencyTicks?: number;
+  /** Extra macrotasks AFTER the answer is decided, per path: a response that is already on its way. */
+  slowResponsePaths?: Record<string, number>;
   /** Also write XSRF-TOKEN into document.cookie (for the app-wide client, which reads the real cookie). */
   mirrorXsrfToDocument?: boolean;
 }
@@ -79,8 +81,17 @@ export function createFakeAuthServer(options: FakeAuthServerOptions = {}) {
     return header.startsWith(`${identity}-`);
   }
 
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
   const fetch: typeof globalThis.fetch = async (input, init) => {
-    for (let i = 0; i < latency; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < latency; i++) await tick();
+    const response = handle(input, init);
+    const path = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://localhost').pathname.replace(/^\/api\/v1/, '');
+    for (let i = 0; i < (options.slowResponsePaths?.[path] ?? 0); i++) await tick();
+    return response;
+  };
+
+  function handle(input: Parameters<typeof globalThis.fetch>[0], init: Parameters<typeof globalThis.fetch>[1]): Response {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://localhost');
     const method = (init?.method ?? 'GET').toUpperCase();
     const headers = new Headers(init?.headers);
@@ -144,7 +155,7 @@ export function createFakeAuthServer(options: FakeAuthServerOptions = {}) {
       default:
         return problem(404, 'Not found.');
     }
-  };
+  }
 
   return {
     state,

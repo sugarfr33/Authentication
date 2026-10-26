@@ -199,6 +199,27 @@ describe('BaseTable', () => {
     expect([...root.querySelectorAll('th')].every((th) => th.getAttribute('scope') === 'col')).toBe(true);
   });
 
+  it('keeps table semantics explicit, so the stacked small-screen layout (display:block) still reads as a table', () => {
+    const { root } = track(
+      mount(BaseTable, {
+        caption: 'Active sessions',
+        columns: [
+          { key: 'ua', label: 'Device' },
+          { key: 'ip', label: 'IP address' },
+        ],
+        rows: [{ id: '1', ua: 'Firefox', ip: '203.0.113.7' }],
+        rowKey: (row: { id: string }) => row.id,
+      }),
+    );
+    const table = root.querySelector('table') as HTMLTableElement;
+    expect(table.getAttribute('role')).toBe('table');
+    expect(document.getElementById(table.getAttribute('aria-labelledby') ?? '')?.textContent).toBe('Active sessions');
+    expect([...root.querySelectorAll('thead, tbody')].map((e) => e.getAttribute('role'))).toEqual(['rowgroup', 'rowgroup']);
+    expect([...root.querySelectorAll('tr')].every((e) => e.getAttribute('role') === 'row')).toBe(true);
+    expect([...root.querySelectorAll('th')].every((e) => e.getAttribute('role') === 'columnheader')).toBe(true);
+    expect([...root.querySelectorAll('td')].every((e) => e.getAttribute('role') === 'cell')).toBe(true);
+  });
+
   it('shows the empty text when there are no rows', () => {
     const { root } = track(
       mount(BaseTable, { caption: 'Sessions', columns: [{ key: 'a', label: 'A' }], rows: [], rowKey: () => 'x', emptyText: 'No active sessions.' }),
@@ -247,6 +268,20 @@ describe('BaseDialog', () => {
     opener.remove();
   });
 
+  it('a backdrop click cancels, unless the dialog is persistent', async () => {
+    for (const persistent of [false, true]) {
+      const onCancel = vi.fn();
+      const { m, opener } = openDialog({ persistent, onCancel });
+      m.props.open = true;
+      await flush();
+      const dialog = m.root.querySelector('dialog') as HTMLDialogElement;
+      dialog.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await flush();
+      expect(onCancel).toHaveBeenCalledTimes(persistent ? 0 : 1);
+      opener.remove();
+    }
+  });
+
   it('the confirm button restates the action and emits confirm', async () => {
     const onConfirm = vi.fn();
     const { m, opener } = openDialog({ onConfirm });
@@ -261,6 +296,11 @@ describe('BaseDialog', () => {
 });
 
 describe('Toasts', () => {
+  it('warnings and errors are sticky even if a timeout is passed', () => {
+    useToast().show('Failed.', { tone: 'danger', timeoutMs: 1000 });
+    expect(useToast().items.value[0]?.timeoutMs).toBeNull();
+  });
+
   it('errors go to the assertive region, info to the polite one; both regions exist before any toast', async () => {
     const { root } = track(mount(ToastRegion));
     const alertRegion = root.querySelector('[role="alert"]') as HTMLElement;
@@ -282,7 +322,10 @@ describe('Toasts', () => {
     useToast().show('Saved.', { tone: 'success' });
     useToast().show('Failed.', { tone: 'danger' });
     await flush();
-    vi.advanceTimersByTime(10_000);
+    vi.advanceTimersByTime(9_000);
+    await flush();
+    expect(root.textContent).toContain('Saved.'); // 10 s default: time to read it and reach Dismiss
+    vi.advanceTimersByTime(2_000);
     await flush();
     expect(root.textContent).not.toContain('Saved.');
     expect(root.textContent).toContain('Failed.');

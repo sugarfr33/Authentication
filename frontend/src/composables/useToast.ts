@@ -5,7 +5,7 @@ export interface ToastItem {
   readonly id: number;
   readonly tone: Tone;
   readonly message: string;
-  /** null: stays until dismissed (the default for warnings and errors). */
+  /** null: stays until dismissed (always for warnings and errors). */
   readonly timeoutMs: number | null;
 }
 
@@ -14,8 +14,12 @@ export interface ToastOptions {
   timeoutMs?: number | null;
 }
 
-/** Long enough to read a sentence; paused while hovered or focused. */
-export const DEFAULT_TOAST_TIMEOUT_MS = 6000;
+/**
+ * Info/success toasts only; paused while hovered or focused. Long enough to read a sentence and reach the
+ * dismiss button by keyboard. Toasts carry no actions: anything the user must act on goes in a BaseAlert on
+ * the page, or a sticky toast (timeoutMs: null). Warnings and errors are always sticky.
+ */
+export const DEFAULT_TOAST_TIMEOUT_MS = 10_000;
 
 const items = shallowRef<readonly ToastItem[]>([]);
 let nextId = 1;
@@ -23,7 +27,7 @@ let nextId = 1;
 function show(message: string, options: ToastOptions = {}): number {
   const tone = options.tone ?? 'info';
   const sticky = tone === 'danger' || tone === 'warning';
-  const timeoutMs = options.timeoutMs !== undefined ? options.timeoutMs : sticky ? null : DEFAULT_TOAST_TIMEOUT_MS;
+  const timeoutMs = sticky ? null : options.timeoutMs !== undefined ? options.timeoutMs : DEFAULT_TOAST_TIMEOUT_MS;
   const id = nextId++;
   items.value = [...items.value, { id, tone, message, timeoutMs }];
   return id;

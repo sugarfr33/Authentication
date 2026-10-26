@@ -1,7 +1,8 @@
 // T23 acceptance: API calls only in /src/api.
 import { describe, expect, it } from 'vitest';
+import { readSources } from '../helpers/sources';
 
-const sources = import.meta.glob<string>('/src/**/*.{ts,vue}', { query: '?raw', import: 'default', eager: true });
+const sources = Object.fromEntries(readSources(['.ts', '.vue']));
 
 const NETWORK_PATTERNS: readonly [string, RegExp][] = [
   ['fetch(', /\bfetch\s*\(/],
