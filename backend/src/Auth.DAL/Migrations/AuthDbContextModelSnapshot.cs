@@ -149,7 +149,7 @@ namespace Auth.DAL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<string>("AllowedOrigin")
+                    b.Property<string>("AllowedOrigins")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
@@ -175,17 +175,13 @@ namespace Auth.DAL.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("nvarchar(128)");
 
-                    b.Property<string>("PostLogoutRedirectUri")
+                    b.Property<string>("PostLogoutRedirectUris")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
-                    b.Property<string>("RedirectUri")
+                    b.Property<string>("RedirectUris")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
-
-                    b.Property<bool>("RequirePkce")
-                        .HasColumnType("bit")
-                        .HasDefaultValue(true, "DF_ClientApplication_RequirePkce");
 
                     b.Property<DateTime>("UpdatedUtc")
                         .HasPrecision(7)
@@ -204,11 +200,11 @@ namespace Auth.DAL.Migrations
 
                     b.ToTable("ClientApplication", "auth", t =>
                         {
-                            t.HasCheckConstraint("CK_ClientApplication_AllowedOrigin_IsJson", "ISJSON([AllowedOrigin]) = 1");
+                            t.HasCheckConstraint("CK_ClientApplication_AllowedOrigins_IsJsonArray", "ISJSON([AllowedOrigins]) = 1 AND LEFT(LTRIM([AllowedOrigins]), 1) = N'['");
 
-                            t.HasCheckConstraint("CK_ClientApplication_PostLogoutRedirectUri_IsJson", "ISJSON([PostLogoutRedirectUri]) = 1");
+                            t.HasCheckConstraint("CK_ClientApplication_PostLogoutRedirectUris_IsJsonArray", "ISJSON([PostLogoutRedirectUris]) = 1 AND LEFT(LTRIM([PostLogoutRedirectUris]), 1) = N'['");
 
-                            t.HasCheckConstraint("CK_ClientApplication_RedirectUri_IsJson", "ISJSON([RedirectUri]) = 1");
+                            t.HasCheckConstraint("CK_ClientApplication_RedirectUris_IsJsonArray", "ISJSON([RedirectUris]) = 1 AND LEFT(LTRIM([RedirectUris]), 1) = N'['");
                         });
                 });
 

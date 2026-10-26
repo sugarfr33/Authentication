@@ -43,8 +43,8 @@ public class AuthDbContextMappingTests
         ["ClientApplication"] =
         [
             "Id uniqueidentifier", "ClientId nvarchar(100)", "Name nvarchar(128)", "Audience nvarchar(256)",
-            "AllowedOrigin nvarchar(max)", "RedirectUri nvarchar(max)", "PostLogoutRedirectUri nvarchar(max)",
-            "RequirePkce bit", "IsActive bit", "CreatedUtc datetime2(7)", "UpdatedUtc datetime2(7)",
+            "AllowedOrigins nvarchar(max)", "RedirectUris nvarchar(max)", "PostLogoutRedirectUris nvarchar(max)",
+            "IsActive bit", "CreatedUtc datetime2(7)", "UpdatedUtc datetime2(7)",
         ],
         ["RefreshToken"] =
         [
@@ -197,9 +197,9 @@ public class AuthDbContextMappingTests
         ["RolePermission"] = [],
         ["ClientApplication"] =
         [
-            "CK_ClientApplication_AllowedOrigin_IsJson: ISJSON([AllowedOrigin]) = 1",
-            "CK_ClientApplication_RedirectUri_IsJson: ISJSON([RedirectUri]) = 1",
-            "CK_ClientApplication_PostLogoutRedirectUri_IsJson: ISJSON([PostLogoutRedirectUri]) = 1",
+            "CK_ClientApplication_AllowedOrigins_IsJsonArray: ISJSON([AllowedOrigins]) = 1 AND LEFT(LTRIM([AllowedOrigins]), 1) = N'['",
+            "CK_ClientApplication_PostLogoutRedirectUris_IsJsonArray: ISJSON([PostLogoutRedirectUris]) = 1 AND LEFT(LTRIM([PostLogoutRedirectUris]), 1) = N'['",
+            "CK_ClientApplication_RedirectUris_IsJsonArray: ISJSON([RedirectUris]) = 1 AND LEFT(LTRIM([RedirectUris]), 1) = N'['",
         ],
         ["RefreshToken"] =
         [
@@ -225,7 +225,6 @@ public class AuthDbContextMappingTests
 
     private static readonly string[] ExpectedDefaults =
     [
-        "DF_ClientApplication_RequirePkce True",
         "DF_User_CreatedUtc sysutcdatetime()",
     ];
 
@@ -341,14 +340,6 @@ public class AuthDbContextMappingTests
         Assert.Equal(
             ExpectedDefaults,
             actual.Order(StringComparer.Ordinal));
-    }
-
-    [Fact]
-    public void RequirePkce_is_always_sent_so_an_explicit_false_is_not_replaced_by_the_default()
-    {
-        IProperty property = Property("ClientApplication", "RequirePkce");
-
-        Assert.Equal(ValueGenerated.Never, property.ValueGenerated);
     }
 
     [Theory]

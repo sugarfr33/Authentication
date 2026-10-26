@@ -12,15 +12,14 @@ public class ClientApplication
     public string Audience { get; set; } = string.Empty;
 
     /// <summary>JSON array of allowed CORS origins.</summary>
-    public string AllowedOrigin { get; set; } = "[]";
+    public string AllowedOrigins { get; set; } = "[]";
 
     /// <summary>JSON array of redirect URIs, matched exactly.</summary>
-    public string RedirectUri { get; set; } = "[]";
+    public string RedirectUris { get; set; } = "[]";
 
     /// <summary>JSON array of post-logout redirect URIs, matched exactly.</summary>
-    public string PostLogoutRedirectUri { get; set; } = "[]";
+    public string PostLogoutRedirectUris { get; set; } = "[]";
 
-    public bool RequirePkce { get; set; } = true;
 
     public bool IsActive { get; set; }
 

@@ -602,3 +602,113 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    SET XACT_ABORT ON;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    EXEC(N'IF EXISTS (SELECT 1 FROM [auth].[ClientApplication] WHERE ISJSON([AllowedOrigin]) = 0 OR LEFT(LTRIM([AllowedOrigin]), 1) <> N''['' OR ISJSON([RedirectUri]) = 0 OR LEFT(LTRIM([RedirectUri]), 1) <> N''['' OR ISJSON([PostLogoutRedirectUri]) = 0 OR LEFT(LTRIM([PostLogoutRedirectUri]), 1) <> N''['') THROW 50029, ''A ClientApplication list column is not a JSON array; fix it before applying ClientApplicationListNames (see docs/client-applications.md).'', 1;');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    ALTER TABLE [auth].[ClientApplication] DROP CONSTRAINT [CK_ClientApplication_AllowedOrigin_IsJson];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    ALTER TABLE [auth].[ClientApplication] DROP CONSTRAINT [CK_ClientApplication_PostLogoutRedirectUri_IsJson];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    ALTER TABLE [auth].[ClientApplication] DROP CONSTRAINT [CK_ClientApplication_RedirectUri_IsJson];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    ALTER TABLE [auth].[ClientApplication] DROP CONSTRAINT [DF_ClientApplication_RequirePkce];
+    ALTER TABLE [auth].[ClientApplication] DROP COLUMN [RequirePkce];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    EXEC sp_rename N'[auth].[ClientApplication].[RedirectUri]', N'RedirectUris', 'COLUMN';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    EXEC sp_rename N'[auth].[ClientApplication].[PostLogoutRedirectUri]', N'PostLogoutRedirectUris', 'COLUMN';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    EXEC sp_rename N'[auth].[ClientApplication].[AllowedOrigin]', N'AllowedOrigins', 'COLUMN';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [auth].[ClientApplication] ADD CONSTRAINT [CK_ClientApplication_AllowedOrigins_IsJsonArray] CHECK (ISJSON([AllowedOrigins]) = 1 AND LEFT(LTRIM([AllowedOrigins]), 1) = N''['')');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [auth].[ClientApplication] ADD CONSTRAINT [CK_ClientApplication_PostLogoutRedirectUris_IsJsonArray] CHECK (ISJSON([PostLogoutRedirectUris]) = 1 AND LEFT(LTRIM([PostLogoutRedirectUris]), 1) = N''['')');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [auth].[ClientApplication] ADD CONSTRAINT [CK_ClientApplication_RedirectUris_IsJsonArray] CHECK (ISJSON([RedirectUris]) = 1 AND LEFT(LTRIM([RedirectUris]), 1) = N''['')');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261026095636_ClientApplicationListNames'
+)
+BEGIN
+    INSERT INTO [auth].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261026095636_ClientApplicationListNames', N'10.0.13');
+END;
+
+COMMIT;
+GO
+

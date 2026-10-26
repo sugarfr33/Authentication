@@ -10,9 +10,10 @@ internal sealed class ClientApplicationConfiguration : IEntityTypeConfiguration<
     {
         builder.ToTable(nameof(ClientApplication), AuthDbContext.Schema, t =>
         {
-            t.HasCheckConstraint("CK_ClientApplication_AllowedOrigin_IsJson", "ISJSON([AllowedOrigin]) = 1");
-            t.HasCheckConstraint("CK_ClientApplication_RedirectUri_IsJson", "ISJSON([RedirectUri]) = 1");
-            t.HasCheckConstraint("CK_ClientApplication_PostLogoutRedirectUri_IsJson", "ISJSON([PostLogoutRedirectUri]) = 1");
+            // T29: each list is a JSON array (portable check: valid JSON that starts with "[", SQL Server 2019 and later).
+            t.HasCheckConstraint("CK_ClientApplication_AllowedOrigins_IsJsonArray", JsonArray("AllowedOrigins"));
+            t.HasCheckConstraint("CK_ClientApplication_RedirectUris_IsJsonArray", JsonArray("RedirectUris"));
+            t.HasCheckConstraint("CK_ClientApplication_PostLogoutRedirectUris_IsJsonArray", JsonArray("PostLogoutRedirectUris"));
         });
 
         builder.HasKey(c => c.Id).HasName("PK_ClientApplication");
@@ -20,18 +21,16 @@ internal sealed class ClientApplicationConfiguration : IEntityTypeConfiguration<
         builder.Property(c => c.ClientId).HasMaxLength(100);
         builder.Property(c => c.Name).HasMaxLength(128);
         builder.Property(c => c.Audience).HasMaxLength(256);
-        builder.Property(c => c.AllowedOrigin).HasColumnType("nvarchar(max)");
-        builder.Property(c => c.RedirectUri).HasColumnType("nvarchar(max)");
-        builder.Property(c => c.PostLogoutRedirectUri).HasColumnType("nvarchar(max)");
-
-        // The database default covers raw inserts; EF always sends the value so an explicit false is never replaced by the default.
-        builder.Property(c => c.RequirePkce)
-            .HasDefaultValue(true, "DF_ClientApplication_RequirePkce")
-            .ValueGeneratedNever();
+        builder.Property(c => c.AllowedOrigins).HasColumnType("nvarchar(max)");
+        builder.Property(c => c.RedirectUris).HasColumnType("nvarchar(max)");
+        builder.Property(c => c.PostLogoutRedirectUris).HasColumnType("nvarchar(max)");
 
         builder.HasIndex(c => c.ClientId).IsUnique().HasDatabaseName("UQ_ClientApplication_ClientId");
 
         // T18: one audience per application, so tokens of two applications are never interchangeable.
         builder.HasIndex(c => c.Audience).IsUnique().HasDatabaseName("UQ_ClientApplication_Audience");
     }
+
+    /// <summary>The CHECK expression for a JSON array column. Also used by the T29 migration.</summary>
+    internal static string JsonArray(string column) => "ISJSON([" + column + "]) = 1 AND LEFT(LTRIM([" + column + "]), 1) = N'['";
 }

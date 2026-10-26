@@ -7,7 +7,7 @@ namespace Auth.Api.Security;
 
 /// <summary>
 /// CORS from the ClientApplication registry. A policy exists only for an allowed origin (active applications'
-/// AllowedOrigin entries plus BrowserProtection:TrustedOrigins), and it lists exactly that origin with credentials.
+/// AllowedOrigins entries plus BrowserProtection:TrustedOrigins), and it lists exactly that origin with credentials.
 /// There is never a wildcard. Unknown origins get no policy, so no CORS headers at all.
 /// </summary>
 internal sealed class ClientApplicationCorsPolicyProvider(

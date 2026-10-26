@@ -278,7 +278,7 @@ internal sealed class ClientApplicationRegistry(
         }
 
         DateTime now = clock.UtcNow;
-        ClientApplication application = new() { ClientId = valid.ClientId, RequirePkce = true, IsActive = active, CreatedUtc = now };
+        ClientApplication application = new() { ClientId = valid.ClientId, IsActive = active, CreatedUtc = now };
         Apply(application, valid);
         application.UpdatedUtc = now;
         await applications.AddAsync(application, cancellationToken);
@@ -312,9 +312,9 @@ internal sealed class ClientApplicationRegistry(
     {
         application.Name = valid.Name;
         application.Audience = valid.Audience;
-        application.AllowedOrigin = JsonSerializer.Serialize(valid.AllowedOrigins);
-        application.RedirectUri = JsonSerializer.Serialize(valid.RedirectUris);
-        application.PostLogoutRedirectUri = JsonSerializer.Serialize(valid.PostLogoutRedirectUris);
+        application.AllowedOrigins = JsonSerializer.Serialize(valid.AllowedOrigins);
+        application.RedirectUris = JsonSerializer.Serialize(valid.RedirectUris);
+        application.PostLogoutRedirectUris = JsonSerializer.Serialize(valid.PostLogoutRedirectUris);
     }
 
     private static ClientApplicationResponse ToResponse(ClientApplication application) => new(
@@ -322,9 +322,8 @@ internal sealed class ClientApplicationRegistry(
         application.ClientId,
         application.Name,
         application.Audience,
-        ClientApplicationLists.Read(application.AllowedOrigin),
-        ClientApplicationLists.Read(application.RedirectUri),
-        ClientApplicationLists.Read(application.PostLogoutRedirectUri),
-        application.RequirePkce,
+        ClientApplicationLists.Read(application.AllowedOrigins),
+        ClientApplicationLists.Read(application.RedirectUris),
+        ClientApplicationLists.Read(application.PostLogoutRedirectUris),
         application.IsActive);
 }

@@ -14,7 +14,7 @@ public sealed record ClientApplicationView(
     Guid Id, string ClientId, IReadOnlySet<string> Origins, IReadOnlyList<string> RedirectUris, IReadOnlyList<string> PostLogoutRedirectUris);
 
 /// <summary>
-/// Browser origins allowed to call the API with credentials (the AllowedOrigin entries of active client applications),
+/// Browser origins allowed to call the API with credentials (the AllowedOrigins entries of active client applications),
 /// and the per-client read model the OAuth endpoints use (one client's own origins and redirect URIs).
 /// </summary>
 public interface IClientApplicationOriginProvider
@@ -107,7 +107,7 @@ internal sealed class ClientApplicationOriginProvider(
             foreach (ClientApplication application in active)
             {
                 HashSet<string> own = new(StringComparer.Ordinal);
-                foreach (string entry in ClientApplicationLists.Read(application.AllowedOrigin))
+                foreach (string entry in ClientApplicationLists.Read(application.AllowedOrigins))
                 {
                     if (OriginNormalizer.TryNormalize(entry, options.RequireHttps, out string normalized))
                     {
@@ -117,7 +117,7 @@ internal sealed class ClientApplicationOriginProvider(
 
                 origins.UnionWith(own);
                 applications[application.ClientId] = new ClientApplicationView(
-                    application.Id, application.ClientId, own, ClientApplicationLists.Read(application.RedirectUri), ClientApplicationLists.Read(application.PostLogoutRedirectUri));
+                    application.Id, application.ClientId, own, ClientApplicationLists.Read(application.RedirectUris), ClientApplicationLists.Read(application.PostLogoutRedirectUris));
             }
 
             Snapshot loaded = new(clock.UtcNow, origins, applications);

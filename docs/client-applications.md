@@ -1,6 +1,6 @@
 # Client applications: registry, CORS source and app tokens (T18)
 
-## Model (existing table, no schema change)
+## Model
 
 `auth.ClientApplication` has the following columns:
 
@@ -9,12 +9,24 @@
 | `ClientId` | unique (`UQ_ClientApplication_ClientId`) |
 | `Name` | display name |
 | `Audience` | one per application, unique (`UQ_ClientApplication_Audience`, T18 fix) |
-| `AllowedOrigin`, `RedirectUri`, `PostLogoutRedirectUri` | JSON arrays |
-| `RequirePkce` | always true; only public clients exist |
+| `AllowedOrigins`, `RedirectUris`, `PostLogoutRedirectUris` | JSON arrays (`CK_ClientApplication_*_IsJsonArray`: valid JSON starting with `[`) |
 | `IsActive` | active flag |
 
 There is **no client secret** column: applications are public clients (SPAs, PKCE). Confidential clients with hashed
 secrets would need a schema change; ask first.
+
+PKCE is always required: every client is public, so there is no per-application switch.
+
+**Migration `ClientApplicationListNames` (T29, approved by the human).**
+
+- It renames the three list columns from singular (`AllowedOrigin`, `RedirectUri`, `PostLogoutRedirectUri`) to plural,
+  in place with `sp_rename`, so existing values are kept (tested on a database with an application, and through the
+  idempotent script run twice).
+- It replaces the `ISJSON` checks with JSON-array checks, and drops the unused `RequirePkce` column and its default.
+  `ClientApplicationResponse` no longer has `requirePkce`.
+- If a list holds JSON that is not an array, it stops with error 50029 before changing anything. Fix the row, then
+  apply it again (tested).
+- Down restores the old names and checks, and `RequirePkce` as true (which every application had).
 
 **Migration `RetentionAndAudienceIndexes` (approved, additive).** It adds `UQ_ClientApplication_Audience`,
 `IX_RefreshToken_ExpiresUtc`, `IX_EmailVerificationToken_ExpiresUtc` and `IX_PasswordResetToken_ExpiresUtc`.

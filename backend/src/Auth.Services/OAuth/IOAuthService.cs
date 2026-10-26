@@ -360,7 +360,7 @@ internal sealed partial class OAuthService(
         // The redirect URI must match the one on the code AND still be registered: /authorize reads a cache that can be
         // up to 30 s old on other instances, so a URI removed meanwhile is refused here (T19 recheck L-A).
         if (!string.Equals(code.RedirectUri, request.RedirectUri, StringComparison.Ordinal)
-            || !ClientApplicationLists.Read(application.RedirectUri).Contains(code.RedirectUri, StringComparer.Ordinal))
+            || !ClientApplicationLists.Read(application.RedirectUris).Contains(code.RedirectUri, StringComparer.Ordinal))
         {
             return (new Rejection("redirect_mismatch", OAuthErrorCodes.InvalidGrant, application.Id), null);
         }

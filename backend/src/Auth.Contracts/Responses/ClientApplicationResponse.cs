@@ -9,5 +9,4 @@ public sealed record ClientApplicationResponse(
     IReadOnlyList<string> AllowedOrigins,
     IReadOnlyList<string> RedirectUris,
     IReadOnlyList<string> PostLogoutRedirectUris,
-    bool RequirePkce,
     bool IsActive);

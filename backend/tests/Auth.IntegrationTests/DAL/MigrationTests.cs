@@ -16,7 +16,7 @@ namespace Auth.IntegrationTests.DAL;
 [Collection(SqlServerTestGroup.Name)]
 public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncLifetime
 {
-    private static readonly string[] AllMigrations = ["20261024081023_InitialCreate", "20261024120957_EmailVerificationPendingRegistration", "20261025040727_RetentionAndAudienceIndexes", "20261025043218_AuthorizationCodes"];
+    private static readonly string[] AllMigrations = ["20261024081023_InitialCreate", "20261024120957_EmailVerificationPendingRegistration", "20261025040727_RetentionAndAudienceIndexes", "20261025043218_AuthorizationCodes", "20261026095636_ClientApplicationListNames"];
 
     private static readonly string[] Tables =
     [
@@ -103,6 +103,56 @@ public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncL
         await migrator.MigrateAsync();
 
         Assert.Contains("share an Audience", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(await context.Database.GetPendingMigrationsAsync());
+    }
+
+    /// <summary>T29: the list columns are renamed in place, so an existing application keeps every value; RequirePkce goes.</summary>
+    [Fact]
+    public async Task The_list_rename_migration_keeps_existing_applications_and_drops_RequirePkce()
+    {
+        await using AuthDbContext context = await FreshContextAsync(createEmptyDatabase: false);
+        IMigrator migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261025043218_AuthorizationCodes");
+        Guid id = Guid.NewGuid();
+        DateTime now = DateTime.UtcNow;
+        await context.Database.ExecuteSqlAsync($"""
+            INSERT INTO [auth].[ClientApplication] ([Id], [ClientId], [Name], [Audience], [AllowedOrigin], [RedirectUri], [PostLogoutRedirectUri], [RequirePkce], [IsActive], [CreatedUtc], [UpdatedUtc])
+            VALUES ({id}, N'kept-app', N'Kept', N'api://kept', N'["https://kept.example.test"]', N'["https://kept.example.test/callback"]', N'["https://kept.example.test/"]', 1, 1, {now}, {now})
+            """);
+
+        await migrator.MigrateAsync();
+
+        Assert.Equal(
+            ["[\"https://kept.example.test\"]|[\"https://kept.example.test/callback\"]|[\"https://kept.example.test/\"]"],
+            await QueryAsync("SELECT [AllowedOrigins] + N'|' + [RedirectUris] + N'|' + [PostLogoutRedirectUris] FROM [auth].[ClientApplication] WHERE [ClientId] = N'kept-app'"));
+        Assert.Empty(await QueryAsync("SELECT c.name FROM sys.columns c WHERE c.object_id = OBJECT_ID(N'auth.ClientApplication') AND c.name IN (N'RequirePkce', N'AllowedOrigin', N'RedirectUri', N'PostLogoutRedirectUri')"));
+        Assert.Contains(await QueryAsync("SELECT name FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'auth.ClientApplication')"), n => n == "CK_ClientApplication_AllowedOrigins_IsJsonArray");
+
+        // The stricter CHECK refuses JSON that is not an array.
+        await Assert.ThrowsAsync<SqlException>(() => context.Database.ExecuteSqlAsync($"UPDATE [auth].[ClientApplication] SET [AllowedOrigins] = N'{{}}' WHERE [Id] = {id}"));
+    }
+
+    /// <summary>T29: a list column holding JSON that is not an array stops the migration with a clear error, before any change.</summary>
+    [Fact]
+    public async Task The_list_rename_migration_stops_on_a_non_array_list_and_applies_once_it_is_fixed()
+    {
+        await using AuthDbContext context = await FreshContextAsync(createEmptyDatabase: false);
+        IMigrator migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261025043218_AuthorizationCodes");
+        DateTime now = DateTime.UtcNow;
+        string notAnArray = """{"origin":"https://odd.example.test"}""";
+        await context.Database.ExecuteSqlAsync($"""
+            INSERT INTO [auth].[ClientApplication] ([Id], [ClientId], [Name], [Audience], [AllowedOrigin], [RedirectUri], [PostLogoutRedirectUri], [RequirePkce], [IsActive], [CreatedUtc], [UpdatedUtc])
+            VALUES ({Guid.NewGuid()}, N'odd-app', N'Odd', N'api://odd', {notAnArray}, N'[]', N'[]', 1, 1, {now}, {now})
+            """);
+
+        SqlException refused = await Assert.ThrowsAsync<SqlException>(() => migrator.MigrateAsync());
+        Assert.Contains("is not a JSON array", refused.Message, StringComparison.Ordinal);
+        Assert.Single(await QueryAsync("SELECT c.name FROM sys.columns c WHERE c.object_id = OBJECT_ID(N'auth.ClientApplication') AND c.name = N'AllowedOrigin'"));
+
+        await context.Database.ExecuteSqlAsync($"UPDATE [auth].[ClientApplication] SET [AllowedOrigin] = N'[\"https://odd.example.test\"]' WHERE [ClientId] = N'odd-app'");
+        await migrator.MigrateAsync();
+
         Assert.Empty(await context.Database.GetPendingMigrationsAsync());
     }
 

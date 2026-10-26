@@ -34,21 +34,6 @@ public class ClientApplicationSigningKeyAuditRepositoryTests(SqlServerDatabaseFi
     }
 
     [Fact]
-    public async Task Added_application_with_explicit_RequirePkce_false_keeps_false()
-    {
-        ClientApplication app = TestData.ClientApplication();
-        app.RequirePkce = false;
-        await using (AsyncServiceScope scope = Database.CreateScope())
-        {
-            await scope.ServiceProvider.GetRequiredService<IClientApplicationRepository>().AddAsync(app, Ct);
-            await scope.ServiceProvider.GetRequiredService<IUnitOfWork>().SaveChangesAsync(Ct);
-        }
-
-        ClientApplication? reloaded = await InScopeAsync<IClientApplicationRepository, ClientApplication?>(r => r.GetByIdAsync(app.Id, Ct));
-        Assert.False(reloaded?.RequirePkce);
-    }
-
-    [Fact]
     public async Task Publishable_keys_are_active_and_retiring_and_active_key_is_the_latest_activated()
     {
         // Far-future activation times so keys seeded by other runs or tests cannot be "newer".

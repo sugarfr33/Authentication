@@ -39,7 +39,7 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
         ClientApplicationResult sameAudience = await RegistryAsync(r => r.CreateAsync(request with { ClientId = "other-" + Guid.NewGuid().ToString("N")[..8] }, true, AuditContext.None, Ct));
 
         ClientApplicationResponse app = Assert.IsType<ClientApplicationResponse>(created.Application);
-        Assert.True(app.IsActive && app.RequirePkce);
+        Assert.True(app.IsActive);
         Assert.Equal(["https://" + request.ClientId + ".example.com"], app.AllowedOrigins);
         Assert.Contains(await RegistryAsync(r => r.ListAsync(Ct)), a => a.Id == app.Id);
         Assert.Equal((AuthError.ValidationFailed, true), (sameClientId.Error!.Value, sameClientId.Errors.ContainsKey("clientId")));

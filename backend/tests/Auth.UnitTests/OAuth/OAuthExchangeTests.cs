@@ -34,7 +34,7 @@ public class OAuthExchangeTests
     private readonly FakeAudit audits = new();
     private readonly FakeUnitOfWork unitOfWork = new();
     private readonly Stub<IRefreshTokenRepository> refreshRows;
-    private readonly ClientApplication application = new() { Id = Guid.NewGuid(), ClientId = "spa", IsActive = true, RedirectUri = "[\"" + RedirectUri + "\"]" };
+    private readonly ClientApplication application = new() { Id = Guid.NewGuid(), ClientId = "spa", IsActive = true, RedirectUris = "[\"" + RedirectUri + "\"]" };
     private readonly OAuthService service;
     private readonly TokenGenerator generator = new();
 
@@ -108,7 +108,7 @@ public class OAuthExchangeTests
     [Fact]
     public async Task A_redirect_uri_no_longer_registered_is_refused()
     {
-        application.RedirectUri = "[\"https://spa.example.test/other\"]";
+        application.RedirectUris = "[\"https://spa.example.test/other\"]";
 
         TokenGrantResult result = await ExchangeAsync(Verifier);
 

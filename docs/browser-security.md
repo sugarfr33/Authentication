@@ -37,7 +37,7 @@ as the name and role claim types. Any failure gives a bare 401 ProblemDetails. F
    signed-in user).
 2. **Every other method except OPTIONS** (POST, PUT, PATCH, DELETE, ...) must pass both checks:
    - **Origin**: the `Origin` header, or the `Referer` origin when Origin is absent, must be the API's own origin, a
-     `BrowserProtection:TrustedOrigins` entry (e.g. the auth UI) or an active client application's AllowedOrigin.
+     `BrowserProtection:TrustedOrigins` entry (e.g. the auth UI) or an active client application's `AllowedOrigins` entry.
      `Origin: null`, malformed values and look-alike hosts are rejected with **403** ProblemDetails.
    - **Antiforgery**: header `X-XSRF-TOKEN` must carry the `XSRF-TOKEN` cookie value. A missing or wrong token gives
      **400** ProblemDetails.
@@ -52,7 +52,7 @@ sign-in and sign-out** before its next state-changing call. T13's login and logo
 
 `ClientApplicationCorsPolicyProvider` builds the policy per request:
 
-- The allowed origins are active client applications' `AllowedOrigin` entries (from `IClientApplicationOriginProvider`,
+- The allowed origins are active client applications' `AllowedOrigins` entries (from `IClientApplicationOriginProvider`,
   a singleton cache with a 30 s TTL) plus `BrowserProtection:TrustedOrigins`. Inactive applications are excluded.
   Since T18 every registry change invalidates the cache, so it is immediate on the instance that made it and at most
   30 s on the others (see client-applications.md).
