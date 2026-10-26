@@ -99,7 +99,13 @@ The integration suites create one throwaway database per fixture and run. The na
 and the `_Test` guard refuses any other name. The tests share one local SQL Express (or LocalDB) instance with every
 other run on the machine.
 
-**Warm-up (T25).** Before its schema step, each fixture runs `TestDatabaseWarmup.WarmAsync`. It does two things:
+**Warm-up (T25).** Each fixture uses `TestDatabaseWarmup` (`tests/Auth.IntegrationTests/DAL`) around its schema step:
+
+1. `WaitForServerAsync` before the schema step;
+2. `RetryAsync` for the delete-and-migrate schema step itself;
+3. `WarmPoolAsync` after it.
+
+Together they do two things:
 
 - **Retries transient failures.** It retries the first connection until SQL Server answers: login timeouts, prelogin
   delays, error 17189 "failed to spawn a thread", and the server-side transport errors seen when the instance is cold or
