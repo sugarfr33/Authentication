@@ -92,7 +92,7 @@ action. Severity: **M** medium, **L** low, **I** information.
 | R14 | I | **The access JWT carries `email` and `name`** (T26 GAP-3). It sits in a cookie the server can read; bearer tokens carry it to resource APIs. | Never log tokens (the redaction enricher scrubs JWTs). |
 | R26 | L | **Added roles and permissions take effect at the next token mint** (T28 review). Policies read the `role` and `perm` claims in the access token, so a grant reaches a session at its next sign-in or refresh, within 15 minutes. `/me` reads the database and can show it earlier. Removals end the holders' sessions at once, so only additions wait. | Accepted: additions are not a security risk. Ask the user to sign in again when it must apply immediately ([setup.md](setup.md) step 6). |
 | R27 | M | **Administrative power is concentrated, with no dual control** (T28 review). One `users.write` holder can deactivate accounts (ending their sessions) and reset their MFA; one Admin can do everything. No action needs a second approver. Guard rails exist: the privilege ceiling for holders who are not Admin, only an Admin may act on an Admin, no self-changes, the last-admin rule, a rate limit and an audit row for every change. | Keep few Admins and `users.write` holders, review the `AuditLog` for `UserDeactivated`, `MfaReset` and role changes, and verify identity out of band before an MFA reset. Dual control would be a new feature. |
-| R28 | L | **An unverified sign-up keeps its Argon2id password hash in `EmailVerificationToken.PendingPasswordHash`** (T28 review), with the display name, until the link is used or expires (default 1 day, then erased by the next retention run, hourly). It is a hash, not the password, but it is personal data of someone who never finished signing up. | Accepted; mention it in the privacy notes (T23b). Retention erases it ([audit-and-retention.md](audit-and-retention.md)). |
+| R28 | L | **An unverified sign-up keeps its Argon2id password hash in `EmailVerificationToken.PendingPasswordHash`** (T28 review), with the display name, until the link is used, or until the first retention purge run after the link expires (link lifetime 24 hours; `Retention:Interval` defaults to 1 hour). **The purge is off by default** (`Retention:Enabled` = false): without it, an unused link keeps the hash indefinitely. It is a hash, not the password, but it is personal data of someone who never finished signing up. | Accepted; mention it in the privacy notes (T23b). Enable the retention purge in production ([deployment.md](deployment.md)); it erases the payload ([audit-and-retention.md](audit-and-retention.md)). |
 | R15 | L | **App-scoped roles have no admin endpoint** to create them. A database administrator inserts the `auth.Role` row. Global role names starting with `app:` should be refused once role creation exists (T18 review). | Follow-up task when role creation is added. |
 
 ### Engineering decisions
@@ -121,7 +121,11 @@ The proposal from T27 is built.
 
 - `dotnet Auth.Api.dll signing-key add <kid> --reference <secret name> [--algorithm ES256|RS256] [--activate-at <UTC time>]`
   runs `ISigningKeyRotation.AddKeyAsync` against the configured database and secret store, then exits.
-- Exit codes: 0 when the key was added, 1 when it was refused, 2 for a usage error.
+- Exit codes: 0 when the key was added, 1 when it was not added, 2 for a usage error.
+- Fix after review (T29): usage is checked before the host is built; any failure (database unreachable, a concurrent
+  add of the same kid) is one line with the exception type only, and framework logs below Fatal are filtered in
+  command mode, so no stack trace is printed; a `--reference` that looks like a PEM is refused; each added key writes a
+  `SigningKeyAdded` audit row.
 - It needs no new package and no schema change.
 - `SigningKeyCommandTests` cover the parsing, the call and the error mapping.
 - A run of the built dll against a throwaway database proved the rest:

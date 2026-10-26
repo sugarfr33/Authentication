@@ -3,6 +3,7 @@ using Auth.Contracts.Responses;
 using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
+using Auth.Services.Audit;
 using Auth.Services.Common;
 
 namespace Auth.Services.Tokens;
@@ -13,7 +14,8 @@ internal sealed class SigningKeyRotation(
     ISecretStore secretStore,
     IClock clock,
     TokenOptions options,
-    SigningKeyProvider provider) : ISigningKeyRotation
+    SigningKeyProvider provider,
+    IAuditService audits) : ISigningKeyRotation
 {
     private const int MaxKidLength = 64;
     private const int MaxReferenceLength = 256;
@@ -73,6 +75,8 @@ internal sealed class SigningKeyRotation(
                 ActivatedUtc = activateAtUtc,
             },
             cancellationToken);
+        // T29: the audit row is saved with the key, in the same SaveChanges.
+        await audits.StageAsync(AuditEvents.SigningKeyAdded(kid, algorithm, activateAtUtc), AuditContext.None, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         provider.Invalidate();
     }

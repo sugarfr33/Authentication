@@ -84,6 +84,7 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | MfaFailed | reason (wrong_code, wrong_recovery_code, replayed, locked, bad_challenge without user id, wrong_password, conflict) | **high** |
 | MfaRecoveryCodeUsed | none | normal |
 | SigningKeyRotated | reserved | |
+| SigningKeyAdded | kid (written only when it is 1-64 ASCII letters, digits, `.`, `_` or `-`; otherwise `[redacted]`), algorithm (ES256, RS256), activates (UTC). No user, no actor, never the secret reference. Written by `ISigningKeyRotation.AddKeyAsync` (the `signing-key add` command, T29) in the same save as the key. | normal |
 
 **TokenRefreshed decision:** it is kept, with no sampling. It writes about one row per 15 minutes per active session. It
 is high-volume, so it gets the short retention below. Sampling would hide the refresh history of a stolen session, and
@@ -148,7 +149,7 @@ at the next interval.
 
 | Data | Rule | Default |
 |---|---|---|
-| Pending registration (password hash, display name) on a verification link | erased as soon as the link expires unused; used links are erased when used | immediate |
+| Pending registration (password hash, display name) on a verification link | erased when the link is used; an unused link's payload is erased by the first purge run after it expires (so only while the purge is enabled) | at expiry, next run |
 | EmailVerificationToken, PasswordResetToken | deleted once used or expired for longer than `OneTimeTokens` (also covers links left by failed sends) | 7 days |
 | Refresh tokens | only tokens of **ended families** (every token of the family expired or revoked for longer than `RefreshFamilies`), in row-bounded batches | 30 days |
 | Audit rows, high-volume types | deleted after `HighVolumeAuditLog` | 90 days |

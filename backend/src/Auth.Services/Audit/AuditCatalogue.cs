@@ -61,6 +61,7 @@ public static class AuditCatalogue
         [AuditEventType.UserDeactivated] = new(["revoked", "actor"]),
         [AuditEventType.UserReactivated] = new(["actor"]),
         [AuditEventType.RolePermissionGranted] = new(["role", "permission", "actor"]),
+        [AuditEventType.SigningKeyAdded] = new(["kid", "algorithm", "activates"]),
     };
 
     /// <summary>
@@ -96,6 +97,9 @@ public static class AuditCatalogue
         // MFA (T21): actions and failure reasons
         "enrolled", "disabled", "reset", "regenerated", "wrong_code", "wrong_recovery_code", "bad_challenge",
         "mfa_unavailable", "conflict",
+
+        // Signing key algorithms (T29)
+        "ES256", "RS256",
     };
 
     /// <summary>Event names (as stored in AuditLog.EventType) with <see cref="AuditVolume.High"/>.</summary>
@@ -121,6 +125,15 @@ public sealed record AuditEvent
 }
 
 internal sealed record AuditField(string Key, object? Value);
+
+/// <summary>
+/// A signing key's kid (T29). Kids are public (every resource server reads them from the JWKS), so one is written as is
+/// when it is 1 to 64 ASCII letters, digits, '.', '_' or '-'; anything else is written as "[redacted]" like free text.
+/// </summary>
+internal sealed record AuditKeyId(string Value)
+{
+    public bool IsPlain => Value.Length is > 0 and <= 64 && Value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+}
 
 /// <summary>
 /// Central redaction of the detail JSON: only the catalogue's keys for the type, and only values that cannot carry a
@@ -185,6 +198,9 @@ internal static class AuditDetail
                 break;
             case string word:
                 writer.WriteStringValue(IsSafeWord(word) ? word : Redacted);
+                break;
+            case AuditKeyId kid:
+                writer.WriteStringValue(kid.IsPlain ? kid.Value : Redacted);
                 break;
             case IEnumerable<string> words:
                 writer.WriteStartArray();

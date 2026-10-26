@@ -96,4 +96,10 @@ public enum AuditEventType
 
     /// <summary>An administrator granted a permission to a role (T21b).</summary>
     RolePermissionGranted,
+
+    /// <summary>
+    /// A signing key was added (T29, the signing-key add command): its kid, algorithm and activation time. No actor: the
+    /// command runs with the host's configuration, outside any session. Never holds the secret reference or key material.
+    /// </summary>
+    SigningKeyAdded,
 }

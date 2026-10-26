@@ -170,6 +170,12 @@ Use this when a user has lost their authenticator device and every recovery code
 
 The SQL runbook in docs/mfa-admin-recovery.md remains only for when the API is unavailable.
 
+## Changes
+
+- **T29:** application responses (`ClientApplicationResponse`, `GET/POST/PUT /admin/apps`) no longer have
+  `requirePkce`. PKCE was always required and the column is dropped. The list fields are `allowedOrigins`,
+  `redirectUris` and `postLogoutRedirectUris`, as before ([client-applications.md](client-applications.md)).
+
 ## Tests
 
 `tests/Auth.IntegrationTests/Api/AdminApiTests.cs` covers the following:

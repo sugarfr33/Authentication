@@ -59,6 +59,7 @@ This page maps each security scenario the backend must cover to the tests that p
 | Bearer header ignored (cookie only); application tokens never unlock this API | `CookieAuthTests.A_valid_token_in_the_Authorization_header_is_ignored_cookie_only`; `ClientApplicationApiTests.A_token_with_a_client_id_is_never_a_browser_session_of_this_API`, `An_app_token_carries_the_app_audience_client_id_session_and_app_roles_but_never_unlocks_this_API` |
 | Claims from anyone but the server are never trusted | `AuthorizationApiTests.Claims_signed_by_anyone_but_the_server_are_never_trusted` |
 | Signing key rotation and JWKS | `SigningKeyRotationTests.*` (unit); `CentralAuthClientTests.A_token_signed_with_a_rotated_key_is_accepted_after_one_rate_limited_refresh` |
+| `signing-key add` command: usage checked before the host, overlap refusal, one-line failures with no stack trace or message leak, PEM refused as `--reference`; each added key audited (kid, algorithm, activation only) **(T29)** | `SigningKeyCommandTests.*`; `SigningKeyRotationTests.An_added_key_stages_one_SigningKeyAdded_row_with_kid_algorithm_and_activation_only`, `A_refused_key_stages_no_audit_row`; `AuditDetailTests.A_signing_key_kid_is_written_only_when_it_is_plain`; `AdminApiTests.Adding_a_signing_key_writes_a_SigningKeyAdded_row_with_kid_and_algorithm_only` |
 
 ## 5. CORS
 

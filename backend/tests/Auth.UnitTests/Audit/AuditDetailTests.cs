@@ -20,6 +20,21 @@ public class AuditDetailTests
     }
 
     [Theory]
+    [InlineData("signingkey1", "signingkey1")]
+    [InlineData("2026-10.k_2", "2026-10.k_2")]
+    [InlineData("-----BEGIN PRIVATE KEY-----", "[redacted]")]
+    [InlineData("kid with spaces", "[redacted]")]
+    [InlineData("kid\"quote", "[redacted]")]
+    [InlineData("", "[redacted]")]
+    [InlineData("a-kid-that-is-much-longer-than-sixty-four-characters-is-redacted-too", "[redacted]")]
+    public void A_signing_key_kid_is_written_only_when_it_is_plain(string kid, string written)
+    {
+        string detail = AuditDetail.Render(AuditEvents.SigningKeyAdded(kid, "ES256", new DateTime(2026, 10, 26, 10, 0, 0, DateTimeKind.Utc)))!;
+
+        Assert.StartsWith("{\"kid\":\"" + written + "\",\"algorithm\":\"ES256\"", detail, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("hunter2-Violet-7319")]
     [InlineData("q2V7nYx0Rk3sJ9bT4uLmW8cZ1aP6dE5fG0hI2jK7lMn")]
     [InlineData("$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$aGFzaA")]

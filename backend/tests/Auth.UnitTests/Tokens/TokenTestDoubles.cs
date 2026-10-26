@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
+using Auth.Services.Audit;
 using Auth.Services.Common;
 using Auth.Services.Tokens;
 using Microsoft.Extensions.DependencyInjection;
@@ -85,6 +86,26 @@ internal sealed class FakeUnitOfWork : IUnitOfWork
 }
 
 /// <summary>Wires the real provider and rotation over the fakes.</summary>
+/// <summary>Records the audit events staged by the code under test (T29: SigningKeyAdded).</summary>
+internal sealed class RecordingAudit : IAuditService
+{
+    public List<AuditEvent> Staged { get; } = [];
+
+    public Task StageAsync(AuditEvent auditEvent, AuditContext context, CancellationToken cancellationToken)
+    {
+        Staged.Add(auditEvent);
+        return Task.CompletedTask;
+    }
+
+    public Task WriteAsync(AuditEvent auditEvent, AuditContext context, CancellationToken cancellationToken) => StageAsync(auditEvent, context, cancellationToken);
+
+    public async Task<bool> TryWriteAsync(AuditEvent auditEvent, AuditContext context, CancellationToken cancellationToken)
+    {
+        await StageAsync(auditEvent, context, cancellationToken);
+        return true;
+    }
+}
+
 internal sealed class KeyHarness : IDisposable
 {
     public static readonly DateTime Start = new(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
@@ -99,7 +120,7 @@ internal sealed class KeyHarness : IDisposable
         collection.AddSingleton<ISigningKeyRepository>(Repository);
         services = collection.BuildServiceProvider();
         Provider = new SigningKeyProvider(services.GetRequiredService<IServiceScopeFactory>(), Secrets, Clock, Options);
-        Rotation = new SigningKeyRotation(Repository, UnitOfWork, Secrets, Clock, Options, Provider);
+        Rotation = new SigningKeyRotation(Repository, UnitOfWork, Secrets, Clock, Options, Provider, Audit);
     }
 
     public FakeClock Clock { get; }
@@ -109,6 +130,8 @@ internal sealed class KeyHarness : IDisposable
     public FakeSigningKeyRepository Repository { get; } = new();
 
     public FakeUnitOfWork UnitOfWork { get; } = new();
+
+    public RecordingAudit Audit { get; } = new();
 
     public TokenOptions Options { get; }
 

@@ -405,6 +405,20 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(writer, "POST", Admin + "/users/" + plainId + "/reactivate", null)).StatusCode);
     }
 
+    /// <summary>T29: the fixture adds its key through AddKeyAsync, the path the signing-key command uses.</summary>
+    [Fact]
+    public async Task Adding_a_signing_key_writes_a_SigningKeyAdded_row_with_kid_and_algorithm_only()
+    {
+        AuditLog added = Assert.Single(await RowsAsync(AuditEventType.SigningKeyAdded, null), r => r.Detail!.Contains("\"kid\":\"" + ApiFixture.SigningKid + "\"", StringComparison.Ordinal));
+
+        Assert.Null(added.UserId);
+        Assert.StartsWith("{\"kid\":\"" + ApiFixture.SigningKid + "\",\"algorithm\":\"ES256\",\"activates\":\"", added.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("api-test-key", added.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("actor", added.Detail, StringComparison.Ordinal);
+        SigningKey key = Assert.Single(await QueryAsync(c => c.SigningKey.AsNoTracking().Where(k => k.Kid == ApiFixture.SigningKid).ToListAsync()));
+        Assert.InRange(added.OccurredUtc, key.CreatedUtc.AddSeconds(-1), key.CreatedUtc.AddMinutes(1));
+    }
+
     [Fact]
     public async Task Reactivation_clears_the_lockout()
     {

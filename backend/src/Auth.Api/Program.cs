@@ -22,7 +22,14 @@ using Auth.Services.Security;
 using Serilog;
 using Serilog.Events;
 
-// The maintenance command's own arguments (T29) never reach host configuration.
+// The maintenance command (T29): a usage error is reported before the host is built; its own arguments never reach host
+// configuration.
+if (SigningKeyCommand.CheckUsage(args, Console.Error) is int usageError)
+{
+    return usageError;
+}
+
+bool maintenanceCommand = SigningKeyCommand.IsCommand(args);
 WebApplicationBuilder builder = WebApplication.CreateBuilder(SigningKeyCommand.HostArgs(args));
 
 HostingGuards.EnsureAllowedHostsRestricted(builder.Configuration, builder.Environment);
@@ -41,6 +48,12 @@ builder.Services.AddSerilog((services, logger) =>
         .MinimumLevel.Override("Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware", LogEventLevel.Fatal)
         .Enrich.FromLogContext()
         .Enrich.With<RedactionEnricher>();
+    if (maintenanceCommand)
+    {
+        // The command prints one result line; framework logs (EF connection errors with stack traces) stay out of it.
+        logger.Filter.ByExcluding(logEvent => logEvent.Level < LogEventLevel.Fatal);
+    }
+
     logger.WriteTo.Sink(Serilog.Configuration.LoggerSinkConfiguration.Wrap(
         sink => new ExceptionScrubbingSink(sink),
         sinks => sinks.Console(formatProvider: CultureInfo.InvariantCulture)));
@@ -149,7 +162,7 @@ builder.Services.AddSingleton<ICorsPolicyProvider, ClientApplicationCorsPolicyPr
 WebApplication app = builder.Build();
 
 // Opt-in maintenance command (T29): uses the configured services, then exits without starting the web host.
-if (SigningKeyCommand.IsCommand(args))
+if (maintenanceCommand)
 {
     return await SigningKeyCommand.RunAsync(app.Services, args, Console.Out, Console.Error, CancellationToken.None);
 }

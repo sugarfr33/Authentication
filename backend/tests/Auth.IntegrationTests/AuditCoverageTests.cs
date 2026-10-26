@@ -53,6 +53,7 @@ public class AuditCoverageTests
         [AuditEventType.UserDeactivated] = "Api.AdminApiTests.Deactivating_a_user_ends_every_session_blocks_sign_in_and_reactivation_restores_it",
         [AuditEventType.UserReactivated] = "Api.AdminApiTests.Deactivating_a_user_ends_every_session_blocks_sign_in_and_reactivation_restores_it",
         [AuditEventType.RolePermissionGranted] = "Api.AdminApiTests.Granting_and_removing_a_permission_is_audited_and_removal_ends_the_holders_sessions",
+        [AuditEventType.SigningKeyAdded] = "Api.AdminApiTests.Adding_a_signing_key_writes_a_SigningKeyAdded_row_with_kid_and_algorithm_only",
     };
 
     public static TheoryData<AuditEventType> AllTypes()

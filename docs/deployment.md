@@ -23,6 +23,7 @@ listed in `backend/src/Auth.Api/appsettings.Example.json`. Header and host basic
 | 11 | First admin | `Authorization:BootstrapAdminEmail` once, restart, then remove it ([authorization.md](authorization.md)). |
 | 12 | MFA | `Mfa:Enabled`, with the secrets `MfaEncryptionKey-<id>` and `MfaRecoveryPepper` in the secret store ([mfa-totp.md](mfa-totp.md)). The fixed names contain a hyphen; see [setup.md](setup.md), "Naming rule for secrets". |
 | 13 | Cookie mode | `AuthCookies:Domain` empty (host-only), or the shared parent domain ([connect-a-project.md](connect-a-project.md)). |
+| 14 | Retention purge | `Retention:Enabled` = true (off by default). Without it the audit table grows without bound and unused sign-up links keep their password hash ([audit-and-retention.md](audit-and-retention.md), [threat-model.md](threat-model.md) R28). |
 
 ## Behind a TLS-terminating proxy (from the T09 review)
 

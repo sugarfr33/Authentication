@@ -86,7 +86,12 @@ The command:
 - **Options:** `signing-key add <kid> --reference <secret name> [--algorithm ES256|RS256] [--activate-at <UTC time>]`.
   The default algorithm is ES256. Any other argument (such as `--environment Production`) configures the host as
   usual.
-- **Exit codes:** 0 when the key was added, 1 when it was refused (message on stderr), 2 for a usage error.
+- **`--reference` is the secret's name, never the PEM itself.** The value is stored in `SigningKey.PrivateKeyReference`
+  and stays in your shell history. The command refuses a value that looks like a PEM (usage error, exit 2).
+- **Exit codes:** 0 when the key was added; 1 when it was not added (refused, or the database or secret store failed),
+  with one line on stderr and no stack trace; 2 for a usage error, reported before the host is built.
+- **Audit:** each added key writes a `SigningKeyAdded` row (kid, algorithm, activation time; no actor) in the same save
+  as the key ([audit-and-retention.md](audit-and-retention.md)).
 - **Checks:** it loads the PEM from the secret store and derives the public JWK from it, so the row always matches the
   key. It refuses a kid that already exists, a missing secret, or a PEM of the wrong type.
 - **The first key** (nothing published yet) signs at once.

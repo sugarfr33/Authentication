@@ -1,5 +1,7 @@
+using Auth.Contracts;
 using Auth.Contracts.Responses;
 using Auth.Entities;
+using Auth.Services.Audit;
 using Auth.Services.Tokens;
 
 namespace Auth.UnitTests.Tokens;
@@ -161,6 +163,30 @@ public sealed class SigningKeyRotationTests : IDisposable
         await Assert.ThrowsAsync<InvalidOperationException>(() => harness.AddKeyAsync("k1", KeyHarness.Start + Overlap));
         await Assert.ThrowsAsync<ArgumentException>(
             () => harness.Rotation.AddKeyAsync("k9", "HS256", "ref-k9", KeyHarness.Start + Overlap, Ct));
+    }
+
+    [Fact]
+    public async Task An_added_key_stages_one_SigningKeyAdded_row_with_kid_algorithm_and_activation_only()
+    {
+        await harness.AddKeyAsync("k1", KeyHarness.Start);
+        await harness.AddKeyAsync("k2", KeyHarness.Start + Overlap, SigningKeyAlgorithm.RS256);
+
+        Assert.Equal([AuditEventType.SigningKeyAdded, AuditEventType.SigningKeyAdded], harness.Audit.Staged.Select(e => e.Type));
+        Assert.All(harness.Audit.Staged, e => Assert.Null(e.UserId));
+        Assert.Equal("""{"kid":"k1","algorithm":"ES256","activates":"2026-10-24T12:00:00.0000000Z"}""", AuditDetail.Render(harness.Audit.Staged[0]));
+        Assert.Equal("""{"kid":"k2","algorithm":"RS256","activates":"2026-10-24T12:15:30.0000000Z"}""", AuditDetail.Render(harness.Audit.Staged[1]));
+        Assert.DoesNotContain("ref-", AuditDetail.Render(harness.Audit.Staged[0])!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_refused_key_stages_no_audit_row()
+    {
+        await harness.AddKeyAsync("k1", KeyHarness.Start);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => harness.AddKeyAsync("k1", KeyHarness.Start + Overlap));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => harness.AddKeyAsync("k2", KeyHarness.Start));
+
+        Assert.Single(harness.Audit.Staged);
     }
 
     private async Task<IReadOnlyList<string>> JwksKidsAsync()

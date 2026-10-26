@@ -148,4 +148,8 @@ internal static class AuditEvents
         new(AuditEventType.UserDeactivated, userId, new AuditField("revoked", revoked));
 
     public static AuditEvent UserReactivated(Guid userId) => new(AuditEventType.UserReactivated, userId);
+
+    /// <summary>A signing key was added (T29): kid, algorithm word and activation time; never the secret reference.</summary>
+    public static AuditEvent SigningKeyAdded(string kid, string algorithm, DateTime activatesUtc) =>
+        new(AuditEventType.SigningKeyAdded, null, new AuditField("kid", new AuditKeyId(kid)), new AuditField("algorithm", algorithm), new AuditField("activates", activatesUtc));
 }

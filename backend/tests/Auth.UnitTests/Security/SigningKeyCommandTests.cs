@@ -55,6 +55,9 @@ public sealed class SigningKeyCommandTests
     [InlineData("signing-key", "add", "k1", "--reference")]
     [InlineData("signing-key", "add", "k1", "--reference", "k1", "--algorithm", "HS256")]
     [InlineData("signing-key", "add", "k1", "--reference", "k1", "--activate-at", "tomorrow-ish")]
+    [InlineData("signing-key", "add", "k1", "--reference", "-----BEGIN PRIVATE KEY-----MIGHAgEAMBMGByqGSM49")]
+    [InlineData("signing-key", "add", "k1", "--reference", "MIGHAgEA\nMBMGByqG")]
+    [InlineData("signing-key", "add", "a-kid-that-is-much-longer-than-sixty-four-characters-is-refused-early", "--reference", "k1")]
     public async Task Usage_errors_exit_with_2_and_never_touch_the_keys(params string[] args)
     {
         FakeRotation rotation = new();
@@ -90,6 +93,49 @@ public sealed class SigningKeyCommandTests
 
         Assert.Equal(1, code);
         Assert.Contains("The signing key was not added: The private key of signing key 'k3' was not found", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Usage_is_checked_without_any_host_or_service_and_a_PEM_reference_is_named_as_the_problem()
+    {
+        using StringWriter error = new();
+
+        Assert.Equal(2, SigningKeyCommand.CheckUsage(["signing-key", "add", "k1", "--reference", "-----BEGIN PRIVATE KEY-----"], error));
+        Assert.Contains("--reference must be the secret's name, never the PEM itself", error.ToString(), StringComparison.Ordinal);
+        Assert.Null(SigningKeyCommand.CheckUsage(["signing-key", "add", "k1", "--reference", "k1"], TextWriter.Null));
+        Assert.Null(SigningKeyCommand.CheckUsage(["--environment", "Production"], TextWriter.Null));
+    }
+
+    [Theory]
+    [InlineData(typeof(TimeoutException))]
+    [InlineData(typeof(IOException))]
+    [InlineData(typeof(NotSupportedException))]
+    public async Task Database_or_secret_store_failures_exit_with_1_on_one_line_without_their_message(Type failureType)
+    {
+        Exception failure = (Exception)Activator.CreateInstance(failureType, "Server db01.corp.example, login svc_auth: connection refused")!;
+        FakeRotation rotation = new() { Failure = failure };
+
+        (int code, string output, string error) = await RunAsync(rotation, "signing-key", "add", "k4", "--reference", "k4");
+
+        Assert.Equal(1, code);
+        Assert.Empty(output);
+        Assert.Single(error.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains("The signing key was not added: the database or the secret store failed (" + failureType.Name + ")", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("db01", error, StringComparison.Ordinal);
+        Assert.DoesNotContain(" at ", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_EF_style_wrapped_database_failure_gets_the_generic_message_not_the_wrapper_text()
+    {
+        InvalidOperationException wrapped = new("An exception has been raised that is likely due to a transient failure.", new TimeoutException("Server db01.corp.example"));
+        FakeRotation rotation = new() { Failure = wrapped };
+
+        (int code, _, string error) = await RunAsync(rotation, "signing-key", "add", "k5", "--reference", "k5");
+
+        Assert.Equal(1, code);
+        Assert.Contains("the database or the secret store failed (InvalidOperationException)", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("transient", error, StringComparison.Ordinal);
     }
 
     private static async Task<(int Code, string Output, string Error)> RunAsync(FakeRotation rotation, params string[] args)
