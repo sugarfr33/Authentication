@@ -84,8 +84,8 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | MfaFailed | reason (wrong_code, wrong_recovery_code, replayed, locked, bad_challenge without user id, wrong_password, conflict) | **high** |
 | MfaRecoveryCodeUsed | none | normal |
 | SigningKeyRotated | reserved | |
-| RoleCreated | role (id), app (id), actor. An application role was created (T30). | normal |
-| RoleDeleted | role (id), app (id), revoked (refresh tokens of its holders), actor (T30) | normal |
+| RoleCreated | role (id), name, app (id), clientId, actor. An application role was created (T30). Name and client id are written only when plain (letters, digits, `.`, `_`, `-`), else `[redacted]`. | normal |
+| RoleDeleted | role (id), name, app (id), clientId, revoked (refresh tokens of its holders at that application), actor (T30) | normal |
 | SigningKeyAdded | kid (written only when it is 1-64 ASCII letters, digits, `.`, `_` or `-`; otherwise `[redacted]`), algorithm (ES256, RS256), activates (UTC). No user, no actor, never the secret reference. Written by `ISigningKeyRotation.AddKeyAsync` (the `signing-key add` command, T29) in the same save as the key. | normal |
 
 **TokenRefreshed decision:** it is kept, with no sampling. It writes about one row per 15 minutes per active session. It

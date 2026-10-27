@@ -322,7 +322,7 @@ internal sealed class RoleAssignmentService(
             IsSystem = false,
         };
         await roles.AddRoleAsync(role, cancellationToken);
-        await audits.StageAsync(AuditEvents.RoleCreated(role.Id, application.Id), audit, cancellationToken);
+        await audits.StageAsync(AuditEvents.RoleCreated(role.Id, role.Name, application.Id, application.ClientId), audit, cancellationToken);
         try
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -340,7 +340,7 @@ internal sealed class RoleAssignmentService(
     public async Task<RoleChangeOutcome> DeleteApplicationRoleAsync(Guid applicationId, Guid roleId, AuditContext audit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(audit);
-        if (await applications.GetByIdAsync(applicationId, cancellationToken) is null)
+        if (await applications.GetByIdAsync(applicationId, cancellationToken) is not ClientApplication application)
         {
             return RoleChangeOutcome.NotFound;
         }
@@ -362,24 +362,38 @@ internal sealed class RoleAssignmentService(
             return RoleChangeOutcome.SelfLockout;
         }
 
+        // T30 fix (audit L1): ending an administrator's sessions is an action on an administrator, so only an
+        // administrator may delete a role that one holds (the same ceiling as acting on an administrator's roles).
+        if (audit.ActorId is Guid manager
+            && !await IsAdministratorAsync(manager, cancellationToken)
+            && await roles.GetGlobalRoleAsync(AuthRoles.Admin.ToUpperInvariant(), cancellationToken) is Role adminRole
+            && await roles.AnyHolderHasRoleAsync(roleId, adminRole.Id, cancellationToken))
+        {
+            return RoleChangeOutcome.PrivilegeCeiling;
+        }
+
         DateTime now = clock.UtcNow;
         await using (IUnitOfWorkTransaction transaction = await unitOfWork.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken))
         {
-            // Revoke first: once the role is gone its holders can no longer be found.
-            int revoked = await refreshTokens.RevokeAllForRoleHoldersAsync(roleId, RefreshTokenRevokedReason.Admin, now, cancellationToken);
+            // Revoke first: once the role is gone its holders can no longer be found. Only this application's sessions
+            // end (T30 fix, audit L1): the role never appears in browser sessions or other applications' tokens.
+            int revoked = await refreshTokens.RevokeApplicationFamiliesForRoleHoldersAsync(roleId, applicationId, RefreshTokenRevokedReason.Admin, now, cancellationToken);
             if (await roles.DeleteRoleAsync(roleId, cancellationToken) == 0)
             {
                 // Deleted concurrently; nothing committed here.
                 return RoleChangeOutcome.Unchanged;
             }
 
-            await audits.StageAsync(AuditEvents.RoleDeleted(roleId, applicationId, revoked), audit, cancellationToken);
+            await audits.StageAsync(AuditEvents.RoleDeleted(roleId, role.Name, applicationId, application.ClientId, revoked), audit, cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
 
         liveness.InvalidateAll();
-        await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.All, SessionEndCause.AdminRevoked, null, RoleId: roleId), audit, cancellationToken);
+        await sessionsEnded.PublishAsync(
+            new SessionEnded(SessionEndScope.Application, SessionEndCause.AdminRevoked, null, ClientApplicationId: applicationId, RoleId: roleId),
+            audit,
+            cancellationToken);
         return RoleChangeOutcome.Changed;
     }
 

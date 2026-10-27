@@ -315,7 +315,8 @@ internal sealed class ClientApplicationRegistry(
         application.AllowedOrigins = JsonSerializer.Serialize(valid.AllowedOrigins);
         application.RedirectUris = JsonSerializer.Serialize(valid.RedirectUris);
         application.PostLogoutRedirectUris = JsonSerializer.Serialize(valid.PostLogoutRedirectUris);
-        application.RequireRole = valid.RequireRole;
+        // Null keeps the stored value: false for a new application, unchanged on update (never fail-open).
+        application.RequireRole = valid.RequireRole ?? application.RequireRole;
     }
 
     private static ClientApplicationResponse ToResponse(ClientApplication application) => new(

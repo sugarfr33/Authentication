@@ -62,8 +62,8 @@ public static class AuditCatalogue
         [AuditEventType.UserReactivated] = new(["actor"]),
         [AuditEventType.RolePermissionGranted] = new(["role", "permission", "actor"]),
         [AuditEventType.SigningKeyAdded] = new(["kid", "algorithm", "activates"]),
-        [AuditEventType.RoleCreated] = new(["role", "app", "actor"]),
-        [AuditEventType.RoleDeleted] = new(["role", "app", "revoked", "actor"]),
+        [AuditEventType.RoleCreated] = new(["role", "name", "app", "clientId", "actor"]),
+        [AuditEventType.RoleDeleted] = new(["role", "name", "app", "clientId", "revoked", "actor"]),
     };
 
     /// <summary>
@@ -132,12 +132,14 @@ public sealed record AuditEvent
 internal sealed record AuditField(string Key, object? Value);
 
 /// <summary>
-/// A signing key's kid (T29). Kids are public (every resource server reads them from the JWKS), so one is written as is
-/// when it is 1 to 64 ASCII letters, digits, '.', '_' or '-'; anything else is written as "[redacted]" like free text.
+/// A public identifier that is not secret: a signing key's kid (T29; every resource server reads it from the JWKS), an
+/// application role's name or an application's client id (T30). Written as is when it is 1 to
+/// <paramref name="MaxLength"/> ASCII letters, digits, '.', '_' or '-'; anything else is written as "[redacted]" like
+/// free text.
 /// </summary>
-internal sealed record AuditKeyId(string Value)
+internal sealed record AuditPlainId(string Value, int MaxLength = 64)
 {
-    public bool IsPlain => Value.Length is > 0 and <= 64 && Value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+    public bool IsPlain => Value.Length > 0 && Value.Length <= MaxLength && Value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
 }
 
 /// <summary>
@@ -204,8 +206,8 @@ internal static class AuditDetail
             case string word:
                 writer.WriteStringValue(IsSafeWord(word) ? word : Redacted);
                 break;
-            case AuditKeyId kid:
-                writer.WriteStringValue(kid.IsPlain ? kid.Value : Redacted);
+            case AuditPlainId plain:
+                writer.WriteStringValue(plain.IsPlain ? plain.Value : Redacted);
                 break;
             case IEnumerable<string> words:
                 writer.WriteStartArray();

@@ -27,7 +27,8 @@ PKCE is always required: every client is public, so there is no per-application 
 - Down drops both.
 
 **RequireRole (T30).** Set it with the application: `requireRole` in `POST` and `PUT /api/v1/admin/apps`
-(`ClientApplicationRequest`, default false). **A PUT replaces every field, so leaving it out turns it off.** It is
+(`ClientApplicationRequest`). **Omitted, it is false on create and kept unchanged on update** (T30 fix: never
+fail-open); send `false` to turn it off. It is
 returned in `ClientApplicationResponse` and audited in `AppCreated` and `AppUpdated` (`requireRole`). When it is on,
 a user who holds none of the application's roles (global roles, Admin included, do not count) is refused:
 
@@ -37,9 +38,10 @@ a user who holds none of the application's roles (global roles, Admin included, 
 | code exchange (`POST /oauth/token`) | `invalid_grant`, the same body as a bad code; the role is read from the database, so a role removed after `/authorize` counts | same |
 | refresh (`POST /oauth/token`) | `invalid_grant`; the family is revoked | `RefreshRejected {reason:"no_app_role", app}` |
 
-`/authorize` reads the cached application view (30 s, invalidated at once on the instance that made the change);
-the exchange and refresh read the row. Turning it on does not end existing sessions at once: they end at their next
-refresh, within 15 minutes ([threat-model.md](threat-model.md) R29).
+Timing: **only `/authorize` uses the cached application view**, so turning RequireRole on reaches `/authorize` at once
+on the instance that made the change and within 30 s on the others. The code exchange and refresh read the row, so
+they apply it immediately everywhere. Existing sessions are not ended at once: they end at their next refresh, within
+15 minutes ([threat-model.md](threat-model.md) R29).
 
 **Migration `ClientApplicationListNames` (T29, approved by the human).**
 

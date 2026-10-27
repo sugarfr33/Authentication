@@ -26,7 +26,10 @@ public enum SessionEndCause
     /// <summary>An application asked to end the user's sessions with it (RP-initiated logout, /oauth/logout).</summary>
     ApplicationLogout,
 
-    /// <summary>An administrator removed a role or a role's permission: every family of the affected users was revoked.</summary>
+    /// <summary>
+    /// An administrator removed a role or a role's permission (every family of the affected users was revoked, scope All),
+    /// or deleted an application role (that application's families of its holders, scope Application, T30).
+    /// </summary>
     AdminRevoked,
 
     /// <summary>An application was deactivated, or its audience changed: every family issued to it was revoked.</summary>
@@ -58,8 +61,9 @@ public enum SessionEndScope
     Browser = 1,
 
     /// <summary>
-    /// Sessions at <see cref="SessionEnded.ClientApplicationId"/>: one family, the user's sessions there, or every user's
-    /// (UserId null, deactivation). Never cascades.
+    /// Sessions at <see cref="SessionEnded.ClientApplicationId"/>: one family, the user's sessions there, every user's
+    /// (UserId null, deactivation), or every holder's of <see cref="SessionEnded.RoleId"/> (an application role deleted).
+    /// Never cascades.
     /// </summary>
     Application,
 

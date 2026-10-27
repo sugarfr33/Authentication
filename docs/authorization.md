@@ -66,11 +66,17 @@ Several applications share this server, each with its own roles. An application 
 - **Global names may not start with `app:`.** The rule is enforced in code (`RoleNames`, the seeder) and by the CHECK
   `CK_Role_GlobalName_NotApplicationPrefix` (migration `ApplicationRolesRequireRole`, which stops with error 50030 if
   such a row already exists). App tokens also drop such names defensively.
-- **Deleting** an application role revokes every holder's refresh families first (they are signed out everywhere, as for
-  a removal), then deletes the role with its assignments and grants. Audited `RoleDeleted {role, app, revoked, actor}`.
-  An administrator cannot delete a role they hold (409).
+- **Deleting** an application role first revokes its holders' refresh families **at that application** (their browser
+  session and other applications' sessions stay: the role never appears there), then deletes the role with its
+  assignments and grants. Audited `RoleDeleted {role, name, app, clientId, revoked, actor}`. An actor cannot delete a
+  role they hold (409), and a non-administrator cannot delete one an administrator holds (403: ending an
+  administrator's sessions is an action on an administrator).
 - **Creating** needs only `roles.manage`: the new role is empty. Granting it a permission, or assigning it, is limited by
-  the privilege ceiling (a non-administrator gives only what they hold). Audited `RoleCreated {role, app, actor}`.
+  the privilege ceiling (a non-administrator gives only what they hold). Audited `RoleCreated {role, name, app, clientId,
+  actor}`.
+- **Access without permissions (by design, audit L4):** an application role with no permission passes the ceiling, so
+  any `roles.manage` holder may create one and assign it. On an application with RequireRole, that alone lets the user
+  sign in to it. Give `roles.manage` only to people trusted to decide who may use the applications.
 - **Permissions** are one global catalogue. An application role's permissions appear only in that application's tokens.
   This API refuses any token with a `client_id`, so they never grant anything here.
 

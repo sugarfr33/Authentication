@@ -158,12 +158,19 @@ internal static class AuditEvents
     public static AuditEvent UserReactivated(Guid userId) => new(AuditEventType.UserReactivated, userId);
 
     /// <summary>A signing key was added (T29): kid, algorithm word and activation time; never the secret reference.</summary>
-    public static AuditEvent RoleCreated(Guid roleId, Guid applicationId) =>
-        new(AuditEventType.RoleCreated, null, new AuditField("role", roleId), new AuditField("app", applicationId));
+    /// <summary>T30 fix (audit L2): the name and client id are kept so a deleted role stays identifiable.</summary>
+    public static AuditEvent RoleCreated(Guid roleId, string name, Guid applicationId, string clientId) =>
+        new(AuditEventType.RoleCreated, null, new AuditField("role", roleId), new AuditField("name", new AuditPlainId(name)),
+            new AuditField("app", applicationId), new AuditField("clientId", new AuditPlainId(clientId, ClientIdMaxLength)));
 
-    public static AuditEvent RoleDeleted(Guid roleId, Guid applicationId, int revoked) =>
-        new(AuditEventType.RoleDeleted, null, new AuditField("role", roleId), new AuditField("app", applicationId), new AuditField("revoked", revoked));
+    /// <param name="revoked">Refresh tokens of the role's holders at this application that were revoked.</param>
+    public static AuditEvent RoleDeleted(Guid roleId, string name, Guid applicationId, string clientId, int revoked) =>
+        new(AuditEventType.RoleDeleted, null, new AuditField("role", roleId), new AuditField("name", new AuditPlainId(name)),
+            new AuditField("app", applicationId), new AuditField("clientId", new AuditPlainId(clientId, ClientIdMaxLength)), new AuditField("revoked", revoked));
+
+    /// <summary>Client ids are 3 to 100 characters (ClientApplicationValidator).</summary>
+    private const int ClientIdMaxLength = 100;
 
     public static AuditEvent SigningKeyAdded(string kid, string algorithm, DateTime activatesUtc) =>
-        new(AuditEventType.SigningKeyAdded, null, new AuditField("kid", new AuditKeyId(kid)), new AuditField("algorithm", algorithm), new AuditField("activates", activatesUtc));
+        new(AuditEventType.SigningKeyAdded, null, new AuditField("kid", new AuditPlainId(kid)), new AuditField("algorithm", algorithm), new AuditField("activates", activatesUtc));
 }

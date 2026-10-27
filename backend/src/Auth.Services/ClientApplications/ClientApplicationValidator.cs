@@ -11,7 +11,7 @@ internal sealed record ValidClientApplication(
     IReadOnlyList<string> AllowedOrigins,
     IReadOnlyList<string> RedirectUris,
     IReadOnlyList<string> PostLogoutRedirectUris,
-    bool RequireRole);
+    bool? RequireRole);
 
 /// <summary>
 /// Strict rules for client application settings. Errors name the field only, never echo the value.

@@ -60,6 +60,9 @@ public interface IRoleRepository
 
     Task<bool> UserHasRoleAsync(Guid userId, Guid roleId, CancellationToken cancellationToken);
 
+    /// <summary>Whether any holder of <paramref name="roleId"/> also holds <paramref name="otherRoleId"/> (T30 fix: an Admin among a role's holders).</summary>
+    Task<bool> AnyHolderHasRoleAsync(Guid roleId, Guid otherRoleId, CancellationToken cancellationToken);
+
     Task AddUserRoleAsync(UserRole assignment, CancellationToken cancellationToken);
 
     /// <summary>True when at least one active user with a verified email holds the role.</summary>
@@ -177,6 +180,13 @@ public interface IRefreshTokenRepository
 
     /// <summary>Revokes every not-yet-revoked token of every user holding the role, in one UPDATE. Returns the number revoked.</summary>
     Task<int> RevokeAllForRoleHoldersAsync(Guid roleId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// T30 fix (audit L1): revokes the not-yet-revoked tokens of every holder of the role, but only those of
+    /// <paramref name="clientApplicationId"/>'s families (browser sessions and other applications stay), in one UPDATE.
+    /// Returns the number revoked.
+    /// </summary>
+    Task<int> RevokeApplicationFamiliesForRoleHoldersAsync(Guid roleId, Guid clientApplicationId, string reason, DateTime revokedUtc, CancellationToken cancellationToken);
 
     /// <summary>The user's tokens that are neither revoked nor expired at <paramref name="utcNow"/>, newest first.</summary>
     Task<IReadOnlyList<RefreshToken>> GetActiveByUserAsync(Guid userId, DateTime utcNow, CancellationToken cancellationToken);

@@ -409,7 +409,10 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(writer, "POST", Admin + "/users/" + plainId + "/reactivate", null)).StatusCode);
     }
 
-    /// <summary>T30: an application's roles over HTTP: create, list, assign, grant, delete (holders' sessions end), audited.</summary>
+    /// <summary>
+    /// T30: an application's roles over HTTP: create, list, assign, grant, delete, audited with name and client id. The
+    /// delete ends the holders' sessions at that application only; their browser session stays (T30 fix, audit L1).
+    /// </summary>
     [Fact]
     public async Task Application_roles_are_created_assigned_granted_and_deleted_over_HTTP_with_audit_and_session_revocation()
     {
@@ -435,7 +438,8 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(admin, "POST", Admin + "/roles/" + role.Id + "/permissions", new AdminPermissionGrantRequest(usersRead))).StatusCode);
         Assert.True(await HasRoleAsync(targetId, role.Id));
         Assert.True(await RoleHasPermissionAsync(role.Id, usersRead));
-        Assert.Contains(await RefreshTokensAsync(targetId), t => t.RevokedUtc is null);
+        Guid appFamily = await StartAppSessionAsync(targetId, clientId);
+        Assert.All(await RefreshTokensAsync(targetId), t => Assert.Null(t.RevokedUtc));
 
         HttpResponseMessage deleted = await SendAsync(admin, "DELETE", Admin + "/apps/" + appId + "/roles/" + role.Id, null);
         HttpResponseMessage again = await SendAsync(admin, "DELETE", Admin + "/apps/" + appId + "/roles/" + role.Id, null);
@@ -443,14 +447,16 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, again.StatusCode);
         Assert.False(await QueryAsync(context => context.Role.AnyAsync(r => r.Id == role.Id)));
-        Assert.All(await RefreshTokensAsync(targetId), t => Assert.NotNull(t.RevokedUtc));
-        Assert.Equal(HttpStatusCode.Unauthorized, (await target.GetAsync(Me)).StatusCode);
+        List<RefreshToken> after = await RefreshTokensAsync(targetId);
+        Assert.All(after.Where(t => t.FamilyId == appFamily), t => Assert.NotNull(t.RevokedUtc));
+        Assert.All(after.Where(t => t.ClientApplicationId is null), t => Assert.Null(t.RevokedUtc));
+        Assert.Equal(HttpStatusCode.OK, (await target.GetAsync(Me)).StatusCode);
         string roleText = role.Id.ToString("D");
         AuditLog createdRow = Assert.Single(await RowsAsync(AuditEventType.RoleCreated, null), r => r.Detail!.Contains(roleText, StringComparison.Ordinal));
         AuditLog deletedRow = Assert.Single(await RowsAsync(AuditEventType.RoleDeleted, null), r => r.Detail!.Contains(roleText, StringComparison.Ordinal));
-        Assert.Equal("{\"role\":\"" + roleText + "\",\"app\":\"" + appId + "\",\"actor\":\"" + adminId + "\"}", createdRow.Detail);
-        Assert.StartsWith("{\"role\":\"" + roleText + "\",\"app\":\"" + appId + "\",\"revoked\":", deletedRow.Detail, StringComparison.Ordinal);
-        Assert.EndsWith(",\"actor\":\"" + adminId + "\"}", deletedRow.Detail, StringComparison.Ordinal);
+        string named = "{\"role\":\"" + roleText + "\",\"name\":\"Editor\",\"app\":\"" + appId + "\",\"clientId\":\"" + clientId + "\"";
+        Assert.Equal(named + ",\"actor\":\"" + adminId + "\"}", createdRow.Detail);
+        Assert.Equal(named + ",\"revoked\":1,\"actor\":\"" + adminId + "\"}", deletedRow.Detail);
     }
 
     /// <summary>T30: names, descriptions, unknown applications and roles that are not the application's own.</summary>
@@ -488,7 +494,8 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
 
     /// <summary>
     /// T30: a roles.manage holder who is not an administrator may create an application role, but assigning it or
-    /// granting it a permission follows the privilege ceiling; deleting a role they hold is refused.
+    /// granting it a permission follows the privilege ceiling; deleting a role they hold is refused, and so is deleting
+    /// one an administrator holds (that would end an administrator's sessions, T30 fix audit L1).
     /// </summary>
     [Fact]
     public async Task A_non_admin_role_manager_creates_application_roles_but_stays_under_the_privilege_ceiling()
@@ -516,11 +523,24 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         // Deleting a role the actor holds would take rights from their own account.
         Assert.Equal(HttpStatusCode.Conflict, (await SendAsync(manager, "DELETE", Admin + "/apps/" + appId + "/roles/" + role.Id, null)).StatusCode);
         Assert.True(await QueryAsync(context => context.Role.AnyAsync(r => r.Id == role.Id)));
+
+        AdminRoleInfo adminsRole = (await JsonAsync<AdminRoleInfo>(await SendAsync(manager, "POST", Admin + "/apps/" + appId + "/roles", new { name = "Reviewer" })))!;
+        (Guid adminId, _) = await SeedUserAsync([AuthRoles.Admin]);
+        await AddRoleAsync(adminId, adminsRole.Id);
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(manager, "DELETE", Admin + "/apps/" + appId + "/roles/" + adminsRole.Id, null)).StatusCode);
+        Assert.True(await QueryAsync(context => context.Role.AnyAsync(r => r.Id == adminsRole.Id)));
+
+        // Without an administrator among the holders the manager may delete it.
+        await QueryAsync(context => context.UserRole.Where(ur => ur.RoleId == adminsRole.Id).ExecuteDeleteAsync());
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(manager, "DELETE", Admin + "/apps/" + appId + "/roles/" + adminsRole.Id, null)).StatusCode);
     }
 
-    /// <summary>T30: RequireRole is set with the application (PUT replaces it), returned and audited.</summary>
+    /// <summary>
+    /// T30: RequireRole is set with the application, returned and audited. A PUT without the field keeps the stored
+    /// value (an older client never opens the application, T30 fix); only an explicit false turns it off.
+    /// </summary>
     [Fact]
-    public async Task RequireRole_is_set_with_the_application_returned_and_audited()
+    public async Task RequireRole_is_set_with_the_application_kept_when_omitted_returned_and_audited()
     {
         (_, string adminEmail) = await SeedUserAsync([AuthRoles.Admin]);
         using Browser admin = await SignedInAsync(adminEmail);
@@ -532,15 +552,19 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
 
         ClientApplicationResponse on = (await JsonAsync<ClientApplicationResponse>(await SendAsync(admin, "PUT", Admin + "/apps/" + appId, Body(true))))!;
         ClientApplicationResponse read = (await JsonAsync<ClientApplicationResponse>(await SendAsync(admin, "GET", Admin + "/apps/" + appId, null)))!;
-        ClientApplicationResponse off = (await JsonAsync<ClientApplicationResponse>(await SendAsync(admin, "PUT", Admin + "/apps/" + appId, Body(null))))!;
+        ClientApplicationResponse omitted = (await JsonAsync<ClientApplicationResponse>(await SendAsync(admin, "PUT", Admin + "/apps/" + appId, Body(null))))!;
+        ClientApplicationResponse off = (await JsonAsync<ClientApplicationResponse>(await SendAsync(admin, "PUT", Admin + "/apps/" + appId, Body(false))))!;
+        ClientApplicationResponse stillOff = (await JsonAsync<ClientApplicationResponse>(await SendAsync(admin, "PUT", Admin + "/apps/" + appId, Body(null))))!;
 
         Assert.True(on.RequireRole);
         Assert.True(read.RequireRole);
+        Assert.True(omitted.RequireRole);
         Assert.False(off.RequireRole);
+        Assert.False(stillOff.RequireRole);
+        Assert.True(await QueryAsync(context => context.ClientApplication.Where(a => a.Id == appId).Select(a => !a.RequireRole).SingleAsync()));
         List<AuditLog> updates = [.. (await AppRowsAsync(appId)).Where(r => r.EventType == nameof(AuditEventType.AppUpdated))];
-        Assert.Equal(2, updates.Count);
-        Assert.Contains("\"requireRole\":true", updates[0].Detail, StringComparison.Ordinal);
-        Assert.Contains("\"requireRole\":false", updates[1].Detail, StringComparison.Ordinal);
+        Assert.Equal(4, updates.Count);
+        Assert.Equal([true, true, false, false], updates.Select(u => u.Detail!.Contains("\"requireRole\":true", StringComparison.Ordinal)));
     }
 
     /// <summary>T29: the fixture adds its key through AddKeyAsync, the path the signing-key command uses.</summary>
@@ -930,6 +954,11 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
             (await registry.CreateAsync(new ClientApplicationRequest(clientId, "App " + clientId, "api://" + clientId, [origin], [origin + "/cb"], []), true, AuditContext.None, CancellationToken.None)).Application!);
         return (created.Id, clientId);
     }
+
+    /// <summary>Starts a session of the user at the application (as the OAuth code exchange does) and returns its family.</summary>
+    private Task<Guid> StartAppSessionAsync(Guid userId, string clientId) =>
+        InScopeAsync<Auth.Services.ClientApplications.IClientSessionService, Guid>(async sessions =>
+            (await sessions.StartAsync(userId, clientId, Guid.NewGuid(), new Auth.Services.Tokens.RefreshContext("203.0.113.9", "tests"), AuditContext.None, CancellationToken.None)).Value!.RefreshToken.FamilyId);
 
     private static async Task<T?> JsonAsync<T>(HttpResponseMessage response) =>
         JsonSerializer.Deserialize<T>(await response.Content.ReadAsStringAsync(), Web);

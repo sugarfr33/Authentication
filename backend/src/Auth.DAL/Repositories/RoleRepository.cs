@@ -38,6 +38,11 @@ internal sealed class RoleRepository(AuthDbContext context) : IRoleRepository
     public Task<bool> UserHasRoleAsync(Guid userId, Guid roleId, CancellationToken cancellationToken) =>
         context.UserRole.AnyAsync(ur => ur.UserId == userId && ur.RoleId == roleId, cancellationToken);
 
+    public Task<bool> AnyHolderHasRoleAsync(Guid roleId, Guid otherRoleId, CancellationToken cancellationToken) =>
+        context.UserRole.AnyAsync(
+            ur => ur.RoleId == roleId && context.UserRole.Any(other => other.UserId == ur.UserId && other.RoleId == otherRoleId),
+            cancellationToken);
+
     public async Task AddUserRoleAsync(UserRole assignment, CancellationToken cancellationToken) =>
         await context.UserRole.AddAsync(assignment, cancellationToken);
 
