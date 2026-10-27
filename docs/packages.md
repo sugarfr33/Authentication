@@ -65,6 +65,11 @@ vulnerabilities at install (2026-10-26). The four dev-only additions were approv
 | typescript | 6.0.3 | dev (approved) | Strict typing. Not 7.x: vue-tsc relies on the JavaScript compiler API that 7.x (the native port) drops. |
 | vue-tsc | 3.3.13 | dev (approved) | Type-checks `.vue` files in `npm run build` (plain tsc cannot read them). |
 | jsdom | 30.1.3 | dev (approved) | Vitest DOM environment for component, accessibility and storage tests. |
+| @playwright/test | 1.64.1 | dev (approved by the human, 2026-10-27, T-PW) | Browser end-to-end and accessibility suite in `frontend/e2e` (`npm run e2e`), separate from `npm test` and `npm run build`. Brings playwright and playwright-core 1.64.1 (Apache-2.0, no install scripts). The Chromium binary is not a package: `npx playwright install chromium` downloads it once from Microsoft's CDN into `%LOCALAPPDATA%\ms-playwright` (or `~/.cache/ms-playwright`), outside the repository. Published 2026-10-14. |
+| @axe-core/playwright | 4.14.0 | dev (approved, T-PW) | Runs axe-core (4.14.0, MPL-2.0, brought with it) inside those pages for WCAG 2.0/2.1/2.2 A and AA rules. Published 2026-10-15. |
 
-Not used: @vue/test-utils (tests mount with `createApp`), @types/node, Playwright, any UI, icon or
-validation library.
+T-PW: `npm audit` reported 0 vulnerabilities after adding the two packages above (2026-10-27); none has an install
+script (`ignore-scripts=true` stays).
+
+Not used: @vue/test-utils (tests mount with `createApp`), @types/node (the e2e suite declares the four Node
+functions it uses in `e2e/node-shim.d.ts`), any UI, icon or validation library.

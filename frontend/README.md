@@ -8,7 +8,23 @@ npm ci             # lockfile install; .npmrc sets ignore-scripts and exact vers
 npm run dev        # http://localhost:5173, /api proxied to Auth.Api (https://localhost:7090)
 npm test           # Vitest (jsdom)
 npm run build      # vue-tsc strict type-check, then a production build that fails if dev-only code ships
+npm run e2e        # Playwright + axe browser suite (below); not part of npm test or npm run build
 ```
+
+## Browser and accessibility tests (`e2e/`, T-PW)
+
+- One-time setup: `npx playwright install chromium`. It downloads a Chromium build from Microsoft's CDN into
+  `%LOCALAPPDATA%\ms-playwright` (`~/.cache/ms-playwright` elsewhere), outside the repository.
+- `npm run e2e` type-checks `e2e/`, starts its own Vite dev server on port 5179 (`E2E_PORT`; never 5173) and
+  runs Chromium against it. **No backend or database:** `e2e/support/mockApi.ts` answers `/api/v1` with the real
+  status codes and shapes (and checks the XSRF header), and any request to another origin fails the test.
+- Covered: sign-in with MFA by keyboard only, register, forgot, reset (token removed from the address bar), the MFA
+  challenge, 404 and the dev gallery. Every page is scanned with axe (WCAG 2.0/2.1/2.2 A and AA) in light and
+  dark, at 320px and 1280px, with a horizontal-overflow check. Also tab order and visible focus on every stop, and
+  reduced motion.
+- Screenshots, axe results (`e2e-axe-*.json`, `e2e-axe-summary.md`) and focus orders go to `E2E_EVIDENCE_DIR`
+  (default `test-results/e2e-evidence`, git-ignored). Each run first deletes only files starting with `e2e-` there.
+- axe finds about half of WCAG problems. Screen readers, zoom to 400% and forced colours still need a person.
 
 ## Dev setup against the API
 
