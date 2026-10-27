@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // Two live regions that exist from page load (a region added together with its content is often not
-// announced): polite for info/success, assertive for warnings and errors.
+// announced): polite for info/success, assertive for warnings and errors. The assertive one is a plain
+// aria-live region, not role="alert": an empty alert on every page is announced by some screen readers on
+// load (T31, UX review m5); aria-live="assertive" still interrupts when a toast is added.
 import { computed } from 'vue';
 import { useToast } from '@/composables/useToast';
 import { messages } from '@/i18n/messages';
@@ -13,7 +15,7 @@ const urgent = computed(() => items.value.filter((t) => t.tone === 'warning' || 
 
 <template>
   <div class="toasts">
-    <section class="toasts__region" role="alert" aria-live="assertive" :aria-label="messages.common.urgentNotifications">
+    <section class="toasts__region" aria-live="assertive" :aria-label="messages.common.urgentNotifications">
       <BaseToast
         v-for="toast in urgent"
         :key="toast.id"

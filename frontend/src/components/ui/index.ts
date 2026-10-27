@@ -8,6 +8,7 @@ export { default as BaseInput } from './BaseInput.vue';
 export { default as BaseSpinner } from './BaseSpinner.vue';
 export { default as BaseTable } from './BaseTable.vue';
 export { default as BaseToast } from './BaseToast.vue';
+export { default as FormErrorSummary } from './FormErrorSummary.vue';
 export { default as FormField } from './FormField.vue';
 export { default as IconSprite } from './IconSprite.vue';
 export { default as PasswordInput } from './PasswordInput.vue';

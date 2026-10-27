@@ -21,7 +21,7 @@ export default function globalTeardown(): void {
   }
 
   const lines = [
-    '# axe-core summary (WCAG 2.0/2.1/2.2 A and AA)',
+    '# axe-core summary (the automated subset of WCAG 2.0/2.1/2.2 A and AA; not a conformance claim, see docs/test-matrix.md)',
     '',
     `Scans: ${scans.length}. Scans with violations: ${scans.filter((s) => s.violations.length > 0).length}. Distinct rules violated: ${byRule.size}.`,
     '',

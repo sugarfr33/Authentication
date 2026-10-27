@@ -99,6 +99,26 @@ This page maps each security scenario the backend must cover to the tests that p
 | Audit reasons visible only to `audit.read`; no secrets; caps; CSRF, JSON, 413 and rate limit | `Audit_rows_and_their_reasons_are_shown_only_to_audit_readers`; `Reads_return_no_secrets_and_lists_are_capped`; `State_changes_need_the_antiforgery_token_and_a_JSON_body`; `The_admin_API_has_its_own_rate_limit` |
 | Default-deny route pin (every non-anonymous route requires authorization) | `AuthorizationApiTests.Every_endpoint_requires_authorization_unless_it_is_explicitly_anonymous` |
 
+## 8. Browser and accessibility (frontend e2e)
+
+`npm run e2e` in `frontend/` (Playwright, Chromium, stubbed API; T-PW, hardened in T31). What it covers is in
+[frontend/README.md](../frontend/README.md#browser-and-accessibility-tests-e2e-t-pw). The test names say "axe
+(automated subset)" on purpose: axe checks only part of WCAG 2.2 A/AA, and these items are **NOT TESTED** by any
+automated suite here, so they need a person (or a later task) before anyone claims conformance:
+
+| Not tested | WCAG |
+|---|---|
+| Screen readers (NVDA, JAWS, VoiceOver): live-region announcements, error association, reading the error summary | 4.1.3, 1.3.1, 3.3.1 |
+| 400% zoom and text-only zoom on a real browser (320px at 1x and 200% root text approximate it) | 1.4.4, 1.4.10 |
+| Real Windows High Contrast themes (only Chromium's forced-colours emulation is checked) | 1.4.11, 1.4.1 |
+| Reading order against visual order beyond Tab order | 1.3.2 |
+| Target size of inline links | 2.5.8 |
+| Paste into password and code fields in a real browser (vitest checks paste is not blocked) | 3.3.8 |
+| Session timeout handling | 2.2.1 |
+| Firefox, WebKit, touch devices and mobile keyboards (Chromium desktop only) | — |
+| Several API calls racing one refresh in a browser (single-flight is covered by vitest `tests/api/refresh.spec.ts`) | — |
+| Visual regressions: screenshots are archived as evidence, not compared | — |
+
 ## Running the database suites reliably
 
 The integration suites create one throwaway database per fixture and run. The name is unique (`CentralAuth_…_run<id>_Test`),

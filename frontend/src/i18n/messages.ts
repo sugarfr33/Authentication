@@ -66,6 +66,7 @@ export const messages = {
     title: 'Page not found',
     body: 'The page you asked for does not exist or has moved.',
     home: 'Go to your account',
+    signIn: 'Go to sign in',
   },
   fields: {
     email: 'Email',
@@ -83,6 +84,7 @@ export const messages = {
     emailInvalid: 'Enter an email address like name@example.com.',
     passwordRequired: 'Enter your password.',
     newPasswordRequired: 'Enter a new password.',
+    choosePasswordRequired: 'Enter a password.',
     passwordTooShort: 'Use at least {min} characters.',
     passwordTooLong: 'Use at most {max} characters.',
     passwordIsEmailName: 'Do not use the part of your email address before the @.',

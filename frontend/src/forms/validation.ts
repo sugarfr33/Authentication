@@ -46,8 +46,13 @@ export function validateCurrentPassword(value: string): string | null {
   return value.length === 0 ? messages.validation.passwordRequired : null;
 }
 
-export function validateNewPassword(value: string, email?: string): string | null {
-  if (value.length === 0) return messages.validation.newPasswordRequired;
+/** `requiredMessage`: the reset form asks for "a new password", sign-up for "a password" (T31). */
+export function validateNewPassword(
+  value: string,
+  email?: string,
+  requiredMessage: string = messages.validation.newPasswordRequired,
+): string | null {
+  if (value.length === 0) return requiredMessage;
   const length = codePoints(value.normalize('NFKC'));
   if (length < PASSWORD_MIN) return format(messages.validation.passwordTooShort, { min: PASSWORD_MIN });
   if (length > PASSWORD_MAX) return format(messages.validation.passwordTooLong, { max: PASSWORD_MAX });

@@ -303,7 +303,9 @@ describe('Toasts', () => {
 
   it('errors go to the assertive region, info to the polite one; both regions exist before any toast', async () => {
     const { root } = track(mount(ToastRegion));
-    const alertRegion = root.querySelector('[role="alert"]') as HTMLElement;
+    const alertRegion = root.querySelector('[aria-live="assertive"]') as HTMLElement;
+    // No empty role=alert on every page: some screen readers announce one on load (T31).
+    expect(root.querySelector('[role="alert"]')).toBeNull();
     const statusRegion = root.querySelector('[role="status"]') as HTMLElement;
     expect(alertRegion).not.toBeNull();
     expect(statusRegion).not.toBeNull();

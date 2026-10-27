@@ -1,4 +1,5 @@
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+/** link (T31): an action styled as an inline link, for secondary actions next to links (still a <button>). */
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'link';
 export type ButtonSize = 'sm' | 'md' | 'lg';
 export type Tone = 'info' | 'success' | 'warning' | 'danger';
 

@@ -170,9 +170,9 @@
     --color-border: var(--p-neutral-700);
     --color-border-strong: var(--p-neutral-400);
 
-    --color-primary: var(--p-brand-300);
-    --color-primary-hover: var(--p-brand-200);
-    --color-primary-active: var(--p-brand-100);
+    --color-primary: var(--p-brand-400);
+    --color-primary-hover: var(--p-brand-300);
+    --color-primary-active: var(--p-brand-200);
     --color-on-primary: var(--p-neutral-950);
     --color-primary-subtle: var(--p-brand-950);
     --color-link: var(--p-brand-300);
@@ -222,9 +222,9 @@
   --color-border: var(--p-neutral-700);
   --color-border-strong: var(--p-neutral-400);
 
-  --color-primary: var(--p-brand-300);
-  --color-primary-hover: var(--p-brand-200);
-  --color-primary-active: var(--p-brand-100);
+  --color-primary: var(--p-brand-400);
+  --color-primary-hover: var(--p-brand-300);
+  --color-primary-active: var(--p-brand-200);
   --color-on-primary: var(--p-neutral-950);
   --color-primary-subtle: var(--p-brand-950);
   --color-link: var(--p-brand-300);

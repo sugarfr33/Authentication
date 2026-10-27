@@ -132,6 +132,20 @@ function onClick(event: MouseEvent): void {
   background: var(--color-danger-hover);
 }
 
+/* Looks like the page's links; keeps the minimum target height (WCAG 2.5.8). */
+.btn--link {
+  min-height: var(--target-min);
+  padding: 0;
+  background: transparent;
+  color: var(--color-link);
+  font-weight: inherit;
+  text-decoration: underline;
+}
+
+.btn--link:hover:not(:disabled) {
+  text-decoration-thickness: var(--border-width-thick);
+}
+
 .btn:disabled {
   background: var(--color-surface-sunken);
   border-color: var(--color-border);

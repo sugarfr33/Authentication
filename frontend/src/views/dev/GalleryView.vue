@@ -32,7 +32,7 @@ function setTheme(next: Theme): void {
 }
 onBeforeUnmount(() => delete document.documentElement.dataset.theme);
 
-const variants: ButtonVariant[] = ['primary', 'secondary', 'ghost', 'danger'];
+const variants: ButtonVariant[] = ['primary', 'secondary', 'ghost', 'danger', 'link'];
 const sizes: ButtonSize[] = ['sm', 'md', 'lg'];
 const tones: Tone[] = ['info', 'success', 'warning', 'danger'];
 

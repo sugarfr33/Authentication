@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
-import { BaseAlert, BaseButton, BaseCard, BaseInput, FormField, PasswordInput } from '@/components/ui';
+import { BaseAlert, BaseButton, BaseCard, BaseInput, FormErrorSummary, FormField, PasswordInput } from '@/components/ui';
 import { useAuthForm } from '@/composables/useAuthForm';
 import { collectErrors, validateCurrentPassword, validateEmail } from '@/forms/validation';
 import { messages } from '@/i18n/messages';
@@ -14,7 +14,7 @@ const session = useSessionStore();
 
 const email = ref('');
 const password = ref('');
-const { errors, formError, submitting, run } = useAuthForm(['email', 'password'] as const);
+const { errors, formError, submitting, errorCount, run } = useAuthForm(['email', 'password'] as const);
 
 async function submit(): Promise<void> {
   await run(
@@ -47,6 +47,12 @@ async function submit(): Promise<void> {
         <div v-if="formError" ref="alertEl" tabindex="-1">
           <BaseAlert tone="danger" live="assertive">{{ formError }}</BaseAlert>
         </div>
+        <FormErrorSummary
+          v-if="errorCount >= 2"
+          ref="summaryEl"
+          :errors="errors"
+          :labels="{ email: messages.fields.email, password: messages.fields.password }"
+        />
         <FormField v-slot="field" :label="messages.fields.email" :error="errors.email" required>
           <BaseInput
             :id="field.id"

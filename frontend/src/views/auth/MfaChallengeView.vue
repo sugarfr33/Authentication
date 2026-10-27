@@ -109,7 +109,7 @@ async function submit(): Promise<void> {
         </FormField>
         <BaseButton type="submit" block :loading="submitting">{{ messages.mfaChallenge.submit }}</BaseButton>
         <div class="cluster">
-          <BaseButton variant="ghost" size="sm" @click="switchMode">
+          <BaseButton variant="link" @click="switchMode">
             {{ useRecovery ? messages.mfaChallenge.useApp : messages.mfaChallenge.useRecovery }}
           </BaseButton>
         </div>

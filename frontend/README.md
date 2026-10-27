@@ -18,13 +18,22 @@ npm run e2e        # Playwright + axe browser suite (below); not part of npm tes
 - `npm run e2e` type-checks `e2e/`, starts its own Vite dev server on port 5179 (`E2E_PORT`; never 5173) and
   runs Chromium against it. **No backend or database:** `e2e/support/mockApi.ts` answers `/api/v1` with the real
   status codes and shapes (and checks the XSRF header), and any request to another origin fails the test.
-- Covered: sign-in with MFA by keyboard only, register, forgot, reset (token removed from the address bar), the MFA
-  challenge, 404 and the dev gallery. Every page is scanned with axe (WCAG 2.0/2.1/2.2 A and AA) in light and
-  dark, at 320px and 1280px, with a horizontal-overflow check. Also tab order and visible focus on every stop, and
-  reduced motion.
+- `e2e/contract.e2e.ts` reads the backend C# source and fails when the stub's profile properties, 202 bodies,
+  request fields or problem titles drift from `Auth.Contracts` and the endpoints (T31).
+- Covered: sign-in with and without MFA by keyboard only, recovery codes, register (client and server field errors,
+  error summary), forgot, reset (token removed from the address bar, expired link), 429 with Retry-After, 500 and
+  network failure, signed-in on load through a silent refresh, the 404 page, and the dev gallery with its dialogs and
+  toasts. Axe runs on every page in light and dark at 320px and 1280px **and on every state a flow reaches** (errors,
+  successes, open dialogs, toasts, forced colours). Also: the page title of each route, tab order with a focus ring
+  of at least 3:1 that nothing covers (light and dark), focus after each success, the password toggle, reduced
+  motion (durations, dialog, spinner), WCAG 1.4.12 text spacing and 200% text without clipping, and generic wording
+  (no answer says whether an account exists).
+- A test fails on any console error, Vue warning or uncaught exception (the browser's "Failed to load resource" for
+  API answers the test asked for is expected).
 - Screenshots, axe results (`e2e-axe-*.json`, `e2e-axe-summary.md`) and focus orders go to `E2E_EVIDENCE_DIR`
   (default `test-results/e2e-evidence`, git-ignored). Each run first deletes only files starting with `e2e-` there.
-- axe finds about half of WCAG problems. Screen readers, zoom to 400% and forced colours still need a person.
+- axe checks only the automatable part of WCAG (roughly a third to a half), so "0 violations" is not conformance.
+  What this suite does not test is listed in [docs/test-matrix.md](../docs/test-matrix.md#8-browser-and-accessibility-frontend-e2e).
 
 ## Dev setup against the API
 

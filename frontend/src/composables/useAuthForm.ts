@@ -2,10 +2,12 @@
 // client checks first (no request when they fail), then the API call; the API stays authoritative.
 // - Field errors (client, or the API's ValidationProblem `errors`) show under their field as text.
 // - Anything else becomes one form-level message (an assertive BaseAlert in the page).
-// - After a failed submit, focus moves to the first invalid field (WCAG 3.3.1), to a field the page names
+// - Two or more invalid fields: the page shows a FormErrorSummary (errorCount >= 2) and focus moves to it (T31);
+//   its links take the user to each field.
+// - Otherwise, after a failed submit, focus moves to the first invalid field (WCAG 3.3.1), to a field the page names
 //   (mapError `focus`, e.g. the cleared password after a generic sign-in failure; the role=alert message is
 //   still announced once), or else to the form message.
-import { nextTick, ref, useTemplateRef, type Ref } from 'vue';
+import { computed, nextTick, ref, useTemplateRef, type ComputedRef, type Ref } from 'vue';
 import { focusFirstInvalid } from '@/components/ui';
 import { isApiError, type ApiError } from '@/api';
 import { describeError } from '@/i18n/errors';
@@ -20,21 +22,32 @@ export interface AuthForm<K extends string> {
   errors: Ref<FieldErrors<K>>;
   formError: Ref<string | null>;
   submitting: Ref<boolean>;
+  /** Number of fields with an error; the page shows a FormErrorSummary when it is 2 or more. */
+  errorCount: ComputedRef<number>;
   run(validate: () => FieldErrors<K>, action: () => Promise<void>, mapError?: ErrorMapper<K>): Promise<boolean>;
   clear(): void;
 }
 
-function hasAny(errors: Record<string, string | undefined>): boolean {
-  return Object.values(errors).some((message) => typeof message === 'string' && message.length > 0);
+function countErrors(errors: Record<string, string | undefined>): number {
+  return Object.values(errors).filter((message) => typeof message === 'string' && message.length > 0).length;
 }
+
+function hasAny(errors: Record<string, string | undefined>): boolean {
+  return countErrors(errors) > 0;
+}
+
+/** At this many invalid fields focus goes to the summary instead of the first field. */
+export const SUMMARY_THRESHOLD = 2;
 
 /**
  * Template refs (by name, so one page can hold two forms): the <form> element, so focus can move to its first
- * invalid field, and a focusable (tabindex=-1) wrapper of the form-level alert, focused when no field is invalid.
+ * invalid field, a focusable (tabindex=-1) wrapper of the form-level alert, focused when no field is invalid, and the
+ * FormErrorSummary (default ref "summaryEl").
  */
 export interface AuthFormRefs {
   form?: string;
   alert?: string;
+  summary?: string;
 }
 
 export function useAuthForm<K extends string>(fields: readonly K[], refs: AuthFormRefs = {}): AuthForm<K> {
@@ -43,6 +56,8 @@ export function useAuthForm<K extends string>(fields: readonly K[], refs: AuthFo
   const submitting = ref(false);
   const formEl = useTemplateRef<HTMLFormElement>(refs.form ?? 'formEl');
   const alertEl = useTemplateRef<HTMLElement>(refs.alert ?? 'alertEl');
+  const summaryEl = useTemplateRef<{ focus(): void }>(refs.summary ?? 'summaryEl');
+  const errorCount = computed(() => countErrors(errors.value));
 
   /** The API's field names are camelCase; match them to ours without caring about case. */
   function serverFieldErrors(error: ApiError): FieldErrors<K> {
@@ -57,6 +72,10 @@ export function useAuthForm<K extends string>(fields: readonly K[], refs: AuthFo
   /** `focusField` is a field key; the input is found by its name attribute inside the form. */
   async function moveFocus(focusField?: K): Promise<void> {
     await nextTick();
+    if (errorCount.value >= SUMMARY_THRESHOLD && summaryEl.value) {
+      summaryEl.value.focus();
+      return;
+    }
     if (formEl.value && focusFirstInvalid(formEl.value)) return;
     const named = focusField ? formEl.value?.querySelector<HTMLElement>(`[name="${focusField}"]`) : null;
     if (named) {
@@ -97,7 +116,7 @@ export function useAuthForm<K extends string>(fields: readonly K[], refs: AuthFo
     }
   }
 
-  return { errors, formError, submitting, run, clear };
+  return { errors, formError, submitting, errorCount, run, clear };
 }
 
 /**

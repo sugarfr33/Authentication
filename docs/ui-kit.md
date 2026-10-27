@@ -37,7 +37,7 @@ by its own width.
 | `--color-text-muted` on `--color-surface` | 4.5:1 | 7.58:1 | 12.02:1 |
 | `--color-text-muted` on `--color-surface-sunken` | 4.5:1 | 6.92:1 | 13.59:1 |
 | `--color-link` on `--color-surface` | 4.5:1 | 7.90:1 | 8.96:1 |
-| `--color-on-primary` on `--color-primary` | 4.5:1 | 6.29:1 | 10.12:1 |
+| `--color-on-primary` on `--color-primary` | 4.5:1 | 6.29:1 | 6.76:1 |
 | `--color-on-danger` on `--color-danger` | 4.5:1 | 6.47:1 | 10.63:1 |
 | `--color-danger-text` on `--color-surface` | 4.5:1 | 6.47:1 | 9.41:1 |
 | `--color-danger-on-bg` on `--color-danger-bg` | 4.5:1 | 7.60:1 | 11.16:1 |
@@ -59,7 +59,11 @@ offset) and a target of at least 24 by 24 px (`--target-min`). Primary controls 
 
 ### BaseButton
 - **Anatomy:** a `<button>` holding an optional spinner or icon and a label.
-- **Variants:** `primary`, `secondary`, `ghost`, `danger`. **Sizes:** `sm` 32 px, `md` 44 px, `lg` 52 px.
+- **Variants:** `primary`, `secondary`, `ghost`, `danger`, `link`. **Sizes:** `sm` 32 px, `md` 44 px, `lg` 52 px.
+  `link` (T31) is an action that looks like the page's links (underlined, link colour, normal weight) but stays a
+  `<button>` with the 44 px minimum height, e.g. "Use a recovery code instead".
+- **Dark primary (T31):** the fill is `brand-400`, saturated enough that an enabled primary never reads as the
+  disabled style (which uses the sunken surface and muted text).
   `block` gives full width.
 - **States:** default, hover, active, focus-visible, disabled, loading.
 - **A11y:** `type="button"` unless set, so it never submits by accident. While loading it stays focusable,
@@ -88,6 +92,16 @@ offset) and a target of at least 24 by 24 px (`--target-min`). Primary controls 
 - The error line is always rendered with `aria-live="polite"`, so a new error is announced. An icon
   accompanies the colour.
 - `focusFirstInvalid(form)` moves focus to the first `[aria-invalid="true"]` control on a failed submit.
+
+### FormErrorSummary (T31)
+- Shown by a form when **two or more** fields are invalid (`useAuthForm` exposes `errorCount`; bind
+  `ref="summaryEl"`). `useAuthForm` then moves focus to the summary instead of the first field; with one invalid
+  field there is no summary and focus goes to that field.
+- Props: `errors` (field name to message) and `labels` (field name to visible label, in form order). Each entry is
+  "Label: message" as a link that moves focus to the control with that `name` in the same form.
+- Not a live region: the field errors already announce themselves, and focus landing on the summary reads it once
+  (`tabindex="-1"`, labelled by its title "Fix the highlighted fields and try again."). Danger alert colours plus an
+  icon, so colour is not the only signal.
 
 ### PasswordInput
 - BaseInput plus a show/hide toggle and an optional strength hint.
@@ -147,7 +161,8 @@ offset) and a target of at least 24 by 24 px (`--target-min`). Primary controls 
 - **Toasts carry no actions and no information the user needs later.** Anything to act on (retry, undo,
   a link) goes in a `BaseAlert` on the page. Toasts confirm what already happened ("You have signed out.").
 - `ToastRegion` (mounted once in App.vue) keeps two live regions from page load: assertive
-  (`role="alert"`) for warning and danger, polite (`role="status"`) for info and success.
+  (`aria-live="assertive"`, deliberately **not** `role="alert"`: an empty alert on every page is announced on load
+  by some screen readers, T31) for warning and danger, polite (`role="status"`) for info and success.
 - Each toast has a visually hidden tone prefix and a "Dismiss notification" button.
 
 ### Icons

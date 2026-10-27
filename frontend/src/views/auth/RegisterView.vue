@@ -5,7 +5,7 @@
 import { ref } from 'vue';
 import { RouterLink } from 'vue-router';
 import { authApi } from '@/api';
-import { BaseAlert, BaseButton, BaseCard, BaseInput, FormField, PasswordInput } from '@/components/ui';
+import { BaseAlert, BaseButton, BaseCard, BaseInput, FormErrorSummary, FormField, PasswordInput } from '@/components/ui';
 import { useAuthForm, useFocusTarget } from '@/composables/useAuthForm';
 import { collectErrors, validateDisplayName, validateEmail, validateNewPassword } from '@/forms/validation';
 import { messages } from '@/i18n/messages';
@@ -14,7 +14,7 @@ const displayName = ref('');
 const email = ref('');
 const password = ref('');
 const accepted = ref(false);
-const { errors, formError, submitting, run } = useAuthForm(['displayName', 'email', 'password'] as const);
+const { errors, formError, submitting, errorCount, run } = useAuthForm(['displayName', 'email', 'password'] as const);
 const successMessage = useFocusTarget('successEl');
 
 async function submit(): Promise<void> {
@@ -23,7 +23,7 @@ async function submit(): Promise<void> {
       collectErrors({
         displayName: validateDisplayName(displayName.value),
         email: validateEmail(email.value),
-        password: validateNewPassword(password.value, email.value),
+        password: validateNewPassword(password.value, email.value, messages.validation.choosePasswordRequired),
       }),
     async () => {
       await authApi.register({ displayName: displayName.value.trim(), email: email.value.trim(), password: password.value });
@@ -47,6 +47,12 @@ async function submit(): Promise<void> {
         <div v-if="formError" ref="alertEl" tabindex="-1">
           <BaseAlert tone="danger" live="assertive">{{ formError }}</BaseAlert>
         </div>
+        <FormErrorSummary
+          v-if="errorCount >= 2"
+          ref="summaryEl"
+          :errors="errors"
+          :labels="{ displayName: messages.fields.displayName, email: messages.fields.email, password: messages.fields.password }"
+        />
         <FormField
           v-slot="field"
           :label="messages.fields.displayName"

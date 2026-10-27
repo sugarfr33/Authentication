@@ -58,14 +58,21 @@ describe('sign-in page', () => {
     expect(button(app.root, messages.login.submit).type).toBe('submit');
   });
 
-  it('checks fields before sending, announces the errors and focuses the first invalid field', async () => {
+  it('checks fields before sending, announces the errors and focuses the error summary, whose links reach each field', async () => {
     const login = vi.spyOn(authApi, 'login');
     app = await mountApp('/login');
     await submit(app.root);
     expect(login).not.toHaveBeenCalled();
     const email = input(app.root, messages.fields.email);
     expect(email.getAttribute('aria-invalid')).toBe('true');
-    expect(document.activeElement).toBe(email);
+    // Two invalid fields: focus goes to the summary (T31), which names both and links to them.
+    const summary = document.activeElement as HTMLElement;
+    expect(summary.textContent).toContain(messages.validation.formHasErrors);
+    expect(summary.textContent).toContain(messages.validation.emailRequired);
+    expect(summary.textContent).toContain(messages.validation.passwordRequired);
+    expect(summary.getAttribute('role')).toBeNull();
+    (summary.querySelectorAll('a')[1] as HTMLAnchorElement).click();
+    expect(document.activeElement).toBe(input(app.root, messages.fields.password));
     const describedBy = email.getAttribute('aria-describedby') ?? '';
     const error = describedBy.split(' ').map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
     expect(error).toContain(messages.validation.emailRequired);
@@ -164,6 +171,25 @@ describe('MFA challenge page', () => {
 });
 
 describe('register page', () => {
+  it('asks for "a password" (not "a new password") and summarises several errors (T31)', async () => {
+    app = await mountApp('/register');
+    await submit(app.root);
+    const summary = document.activeElement as HTMLElement;
+    expect(summary.textContent).toContain(messages.validation.formHasErrors);
+    expect(summary.querySelectorAll('a')).toHaveLength(3);
+    expect(app.root.textContent).toContain(messages.validation.choosePasswordRequired);
+    expect(app.root.textContent).not.toContain(messages.validation.newPasswordRequired);
+  });
+
+  it('with one invalid field there is no summary and focus goes to the field', async () => {
+    app = await mountApp('/register');
+    await type(input(app.root, messages.fields.displayName), 'Ana');
+    await type(input(app.root, messages.fields.email), 'ana@example.com');
+    await submit(app.root);
+    expect(app.root.textContent).not.toContain(messages.validation.formHasErrors);
+    expect(document.activeElement).toBe(input(app.root, messages.fields.password));
+  });
+
   it('uses new-password and shows the same confirmation as the API for any address', async () => {
     const register = vi.spyOn(authApi, 'register').mockResolvedValue(undefined);
     app = await mountApp('/register');
@@ -321,5 +347,13 @@ describe('MFA enroll page', () => {
     await submit(app.root);
     expect(app.root.textContent).toContain('KEY');
     expect(app.root.querySelector('a[href^="javascript"]')).toBeNull();
+  });
+});
+
+describe('not-found page', () => {
+  it('offers sign-in when signed out, the account when signed in (T31)', async () => {
+    app = await mountApp('/no/such/page');
+    expect(app.root.textContent).toContain(messages.notFound.signIn);
+    expect(app.root.textContent).not.toContain(messages.notFound.home);
   });
 });
