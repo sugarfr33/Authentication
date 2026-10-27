@@ -45,7 +45,7 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
         Assert.Equal((AuthError.ValidationFailed, true), (sameClientId.Error!.Value, sameClientId.Errors.ContainsKey("clientId")));
         Assert.Equal((AuthError.ValidationFailed, true), (sameAudience.Error!.Value, sameAudience.Errors.ContainsKey("audience")));
         AuditLog audit = Assert.Single(await AuditAsync(AuditEventType.AppCreated, app.Id));
-        Assert.Equal("{\"app\":\"" + app.Id.ToString("D") + "\",\"source\":\"registry\"}", audit.Detail);
+        Assert.Equal("{\"app\":\"" + app.Id.ToString("D") + "\",\"source\":\"registry\",\"requireRole\":false}", audit.Detail);
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public sealed class ClientApplicationRegistryTests : RepositoryTestBase, IAsyncD
         Assert.True(liveAfterOriginChange);
         Assert.Equal(request.Audience + "-v2", moved.Application!.Audience);
         Assert.False(await liveness.IsLiveAsync(user.Id, family, Ct));
-        Assert.Contains(await AuditAsync(AuditEventType.AppUpdated, app.Id), a => a.Detail!.EndsWith("\"revoked\":1}", StringComparison.Ordinal));
+        Assert.Contains(await AuditAsync(AuditEventType.AppUpdated, app.Id), a => a.Detail!.EndsWith("\"revoked\":1,\"requireRole\":false}", StringComparison.Ordinal));
     }
 
     /// <summary>CORS reflects exactly the registered active origins, and a change is immediate on this instance.</summary>

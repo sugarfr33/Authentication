@@ -147,7 +147,7 @@ internal sealed class ClientApplicationRegistry(
             int? revoked = audienceChanged
                 ? await refreshTokens.RevokeAllForClientApplicationAsync(application.Id, RefreshTokenRevokedReason.Admin, now, cancellationToken)
                 : null;
-            await audits.StageAsync(AuditEvents.AppUpdated(application.Id, application.IsActive, revoked), audit, cancellationToken);
+            await audits.StageAsync(AuditEvents.AppUpdated(application.Id, application.IsActive, revoked, application.RequireRole), audit, cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
@@ -282,7 +282,7 @@ internal sealed class ClientApplicationRegistry(
         Apply(application, valid);
         application.UpdatedUtc = now;
         await applications.AddAsync(application, cancellationToken);
-        await audits.StageAsync(AuditEvents.AppCreated(application.Id, source), audit, cancellationToken);
+        await audits.StageAsync(AuditEvents.AppCreated(application.Id, source, application.RequireRole), audit, cancellationToken);
         try
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -315,6 +315,7 @@ internal sealed class ClientApplicationRegistry(
         application.AllowedOrigins = JsonSerializer.Serialize(valid.AllowedOrigins);
         application.RedirectUris = JsonSerializer.Serialize(valid.RedirectUris);
         application.PostLogoutRedirectUris = JsonSerializer.Serialize(valid.PostLogoutRedirectUris);
+        application.RequireRole = valid.RequireRole;
     }
 
     private static ClientApplicationResponse ToResponse(ClientApplication application) => new(
@@ -325,5 +326,6 @@ internal sealed class ClientApplicationRegistry(
         ClientApplicationLists.Read(application.AllowedOrigins),
         ClientApplicationLists.Read(application.RedirectUris),
         ClientApplicationLists.Read(application.PostLogoutRedirectUris),
-        application.IsActive);
+        application.IsActive,
+        application.RequireRole);
 }

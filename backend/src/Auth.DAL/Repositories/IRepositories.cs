@@ -97,6 +97,18 @@ public interface IRoleRepository
     /// changes that check "how many holders are left" run one at a time. Call it first inside the transaction.
     /// </summary>
     Task LockRoleAsync(Guid roleId, CancellationToken cancellationToken);
+
+    /// <summary>T30: true when the user holds at least one role of the application (global roles do not count).</summary>
+    Task<bool> UserHasApplicationRoleAsync(Guid userId, Guid clientApplicationId, CancellationToken cancellationToken);
+
+    /// <summary>T30: the application's roles with their permissions, not tracked (admin read model).</summary>
+    Task<IReadOnlyList<Role>> ListApplicationRolesWithPermissionsAsync(Guid clientApplicationId, CancellationToken cancellationToken);
+
+    /// <summary>T30: the application's role with this normalized name, or null.</summary>
+    Task<Role?> GetApplicationRoleAsync(Guid clientApplicationId, string normalizedName, CancellationToken cancellationToken);
+
+    /// <summary>T30: deletes the role in one DELETE (its assignments and grants cascade). Returns the rows deleted (0 or 1).</summary>
+    Task<int> DeleteRoleAsync(Guid roleId, CancellationToken cancellationToken);
 }
 
 /// <summary>

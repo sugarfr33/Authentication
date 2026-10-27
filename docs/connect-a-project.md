@@ -188,10 +188,20 @@ builder.Services.AddAuthorizationBuilder()
   - expired;
   - a forged key with the same kid, `alg=none`, HS256 with the public key;
   - a tampered payload, a stripped signature.
-- The app's roles arrive as `app:my-app:<role>` claims.
-  - There is **no admin endpoint that creates roles yet**. An app-scoped role is a row in `auth.Role` with
-    `ClientApplicationId` set, created by a database administrator.
-  - Users are then given it with `POST /api/v1/admin/users/{id}/roles` ([authorization.md](authorization.md)).
+- The app's roles arrive as `app:my-app:<role>` claims (T30).
+  - Create them with `POST /api/v1/admin/apps/{appId}/roles` `{"name":"Editor"}` (`roles.manage`), and give them to
+    users with `POST /api/v1/admin/users/{id}/roles` ([admin-api.md](admin-api.md), [authorization.md](authorization.md)).
+  - Check them in the app's API by the full claim value, for example a policy requiring role `app:my-app:Editor`.
+    Never check the bare name: a global role could have it.
+  - They are minted only into this app's tokens: other apps and the Central Auth SPA never see them.
+- **Only some users may use the app?** Set `requireRole: true` on the application (`PUT /api/v1/admin/apps/{id}`,
+  `apps.manage`). A user without one of the app's roles then gets `error=access_denied` from `/oauth/authorize`, and
+  `invalid_grant` at the code exchange or refresh. Global roles, Admin included, do not count. Turning it on ends
+  existing sessions of such users at their next refresh, within 15 minutes (their current access token stays valid
+  until it expires).
+- **Keep the app's own user data in the app's database, keyed by the token's `sub`** (the stable user id). Central
+  Auth holds identity, sign-in and roles only: no per-app profile fields. Read email and name from the token when
+  needed; do not copy credentials or roles into the app's tables (roles change centrally and arrive in the next token).
 - Working example: `backend/samples/Auth.SampleApi` (`/api/me`, a `Reader` policy, fallback policy for writes).
   - Run it locally against the dev API with `CentralAuth:JwksUri=http://localhost:5094/.well-known/jwks.json` and
     `CentralAuth:RequireHttpsMetadata=false`. The .NET client does not trust the dev certificate. **Local only.**

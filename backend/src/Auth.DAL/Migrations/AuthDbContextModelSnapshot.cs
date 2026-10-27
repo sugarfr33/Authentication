@@ -183,6 +183,11 @@ namespace Auth.DAL.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<bool>("RequireRole")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false, "DF_ClientApplication_RequireRole");
+
                     b.Property<DateTime>("UpdatedUtc")
                         .HasPrecision(7)
                         .HasColumnType("datetime2(7)");
@@ -486,7 +491,10 @@ namespace Auth.DAL.Migrations
                         .IsUnique()
                         .HasDatabaseName("UQ_Role_ClientApplicationId_NormalizedName");
 
-                    b.ToTable("Role", "auth");
+                    b.ToTable("Role", "auth", t =>
+                        {
+                            t.HasCheckConstraint("CK_Role_GlobalName_NotApplicationPrefix", "[ClientApplicationId] IS NOT NULL OR (UPPER(LTRIM([Name])) NOT LIKE N'APP:%' AND UPPER(LTRIM([NormalizedName])) NOT LIKE N'APP:%')");
+                        });
                 });
 
             modelBuilder.Entity("Auth.Entities.RolePermission", b =>

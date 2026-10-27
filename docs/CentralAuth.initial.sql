@@ -712,3 +712,48 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261027021901_ApplicationRolesRequireRole'
+)
+BEGIN
+    SET XACT_ABORT ON;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261027021901_ApplicationRolesRequireRole'
+)
+BEGIN
+    IF EXISTS (SELECT 1 FROM [auth].[Role] WHERE NOT ([ClientApplicationId] IS NOT NULL OR (UPPER(LTRIM([Name])) NOT LIKE N'APP:%' AND UPPER(LTRIM([NormalizedName])) NOT LIKE N'APP:%'))) THROW 50030, 'A global role is named app:...; rename it before applying ApplicationRolesRequireRole (see docs/authorization.md).', 1;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261027021901_ApplicationRolesRequireRole'
+)
+BEGIN
+    ALTER TABLE [auth].[ClientApplication] ADD [RequireRole] bit NOT NULL CONSTRAINT [DF_ClientApplication_RequireRole] DEFAULT CAST(0 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261027021901_ApplicationRolesRequireRole'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [auth].[Role] ADD CONSTRAINT [CK_Role_GlobalName_NotApplicationPrefix] CHECK ([ClientApplicationId] IS NOT NULL OR (UPPER(LTRIM([Name])) NOT LIKE N''APP:%'' AND UPPER(LTRIM([NormalizedName])) NOT LIKE N''APP:%''))');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [auth].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261027021901_ApplicationRolesRequireRole'
+)
+BEGIN
+    INSERT INTO [auth].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261027021901_ApplicationRolesRequireRole', N'10.0.13');
+END;
+
+COMMIT;
+GO
+

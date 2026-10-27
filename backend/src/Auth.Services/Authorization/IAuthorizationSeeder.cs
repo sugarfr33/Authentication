@@ -4,6 +4,7 @@ using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
 using Auth.Services.Audit;
+using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 
 namespace Auth.Services.Authorization;
@@ -142,6 +143,12 @@ internal sealed class AuthorizationSeeder(
 
     private async Task<(Role Role, bool Added)> EnsureRoleAsync(string name, string description, CancellationToken cancellationToken)
     {
+        // T30: global role names never start with app: (also a CHECK constraint on auth.Role).
+        if (RoleNames.IsReservedForApplications(name))
+        {
+            throw new InvalidOperationException("Global role names may not start with " + RoleNames.ApplicationPrefix);
+        }
+
         Role? existing = await roles.GetGlobalRoleAsync(name.ToUpperInvariant(), cancellationToken);
         if (existing is not null)
         {

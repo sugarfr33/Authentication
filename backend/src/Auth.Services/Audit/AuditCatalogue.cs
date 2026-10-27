@@ -51,8 +51,8 @@ public static class AuditCatalogue
         [AuditEventType.RoleRemoved] = new(["role", "actor"]),
         [AuditEventType.RolePermissionRemoved] = new(["role", "permission", "actor"]),
         [AuditEventType.RegistrationDuplicate] = new([], AuditVolume.High),
-        [AuditEventType.AppCreated] = new(["app", "source", "actor"]),
-        [AuditEventType.AppUpdated] = new(["app", "active", "revoked", "actor"]),
+        [AuditEventType.AppCreated] = new(["app", "source", "requireRole", "actor"]),
+        [AuditEventType.AppUpdated] = new(["app", "active", "revoked", "requireRole", "actor"]),
         [AuditEventType.AppDeactivated] = new(["app", "revoked", "actor"]),
         [AuditEventType.AuthorizationCodeRejected] = new(["app", "reason"], AuditVolume.High),
         [AuditEventType.SingleLogout] = new(["cause", "revoked", "app"]),
@@ -62,6 +62,8 @@ public static class AuditCatalogue
         [AuditEventType.UserReactivated] = new(["actor"]),
         [AuditEventType.RolePermissionGranted] = new(["role", "permission", "actor"]),
         [AuditEventType.SigningKeyAdded] = new(["kid", "algorithm", "activates"]),
+        [AuditEventType.RoleCreated] = new(["role", "app", "actor"]),
+        [AuditEventType.RoleDeleted] = new(["role", "app", "revoked", "actor"]),
     };
 
     /// <summary>
@@ -89,6 +91,9 @@ public static class AuditCatalogue
         // OAuth code exchange (T19)
         "unknown_or_expired", "replayed", "client_mismatch", "redirect_mismatch", "pkce_mismatch", "inactive_client",
         "inactive_user", "invalid_request",
+
+        // Per-application access (T30): authorize, exchange or refresh refused for a user without a role of the app
+        "no_app_role",
 
         // Session end causes (SessionEndCause, T20)
         "logout", "logout_all", "session_revoked", "token_reuse", "password_change", "application_logout", "admin_revoked",

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Auth.Contracts;
 using Auth.Contracts.Requests;
+using Auth.Contracts.Responses;
 using Auth.DAL;
 using Auth.Entities;
 using Auth.Services.Admin;
@@ -48,6 +49,9 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         ("DELETE", Admin + "/users/" + Guid.NewGuid() + "/roles/" + Guid.NewGuid(), AuthPolicies.RolesManage, null),
         ("POST", Admin + "/roles/" + Guid.NewGuid() + "/permissions", AuthPolicies.RolesManage, new AdminPermissionGrantRequest(Guid.NewGuid())),
         ("DELETE", Admin + "/roles/" + Guid.NewGuid() + "/permissions/" + Guid.NewGuid(), AuthPolicies.RolesManage, null),
+        ("GET", Admin + "/apps/" + Guid.NewGuid() + "/roles", AuthPolicies.RolesManage, null),
+        ("POST", Admin + "/apps/" + Guid.NewGuid() + "/roles", AuthPolicies.RolesManage, new { name = "Editor" }),
+        ("DELETE", Admin + "/apps/" + Guid.NewGuid() + "/roles/" + Guid.NewGuid(), AuthPolicies.RolesManage, null),
         ("GET", Admin + "/apps", AuthPolicies.AppsManage, null),
         ("GET", Admin + "/apps/" + Guid.NewGuid(), AuthPolicies.AppsManage, null),
         ("POST", Admin + "/apps", AuthPolicies.AppsManage, new { clientId = "" }),
@@ -251,7 +255,7 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(admin, "PUT", Admin + "/apps/" + Guid.NewGuid(), request)).StatusCode);
 
         List<AuditLog> rows = await AppRowsAsync(appId);
-        Assert.Equal($"{{\"app\":\"{appId}\",\"source\":\"registry\",\"actor\":\"{adminId}\"}}", Assert.Single(rows, r => r.EventType == nameof(AuditEventType.AppCreated)).Detail);
+        Assert.Equal($"{{\"app\":\"{appId}\",\"source\":\"registry\",\"requireRole\":false,\"actor\":\"{adminId}\"}}", Assert.Single(rows, r => r.EventType == nameof(AuditEventType.AppCreated)).Detail);
         Assert.Equal($"{{\"app\":\"{appId}\",\"revoked\":0,\"actor\":\"{adminId}\"}}", Assert.Single(rows, r => r.EventType == nameof(AuditEventType.AppDeactivated)).Detail);
         Assert.Equal(2, rows.Count(r => r.EventType == nameof(AuditEventType.AppUpdated) && r.Detail!.EndsWith($"\"actor\":\"{adminId}\"}}", StringComparison.Ordinal)));
     }
@@ -403,6 +407,140 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         // Other accounts are fine.
         Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(writer, "POST", Admin + "/users/" + plainId + "/deactivate", null)).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(writer, "POST", Admin + "/users/" + plainId + "/reactivate", null)).StatusCode);
+    }
+
+    /// <summary>T30: an application's roles over HTTP: create, list, assign, grant, delete (holders' sessions end), audited.</summary>
+    [Fact]
+    public async Task Application_roles_are_created_assigned_granted_and_deleted_over_HTTP_with_audit_and_session_revocation()
+    {
+        (Guid adminId, string adminEmail) = await SeedUserAsync([AuthRoles.Admin]);
+        using Browser admin = await SignedInAsync(adminEmail);
+        (Guid appId, string clientId) = await CreateApplicationAsync();
+        (Guid targetId, string targetEmail) = await SeedUserAsync([]);
+        using Browser target = await SignedInAsync(targetEmail);
+
+        HttpResponseMessage created = await SendAsync(admin, "POST", Admin + "/apps/" + appId + "/roles", new { name = "Editor", description = "Edits documents" });
+        AdminRoleInfo role = (await JsonAsync<AdminRoleInfo>(created))!;
+        HttpResponseMessage duplicate = await SendAsync(admin, "POST", Admin + "/apps/" + appId + "/roles", new { name = "EDITOR" });
+        List<AdminRoleInfo> listed = (await JsonAsync<List<AdminRoleInfo>>(await SendAsync(admin, "GET", Admin + "/apps/" + appId + "/roles", null)))!;
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal("/api/v1/admin/apps/" + appId + "/roles/" + role.Id, created.Headers.Location!.OriginalString);
+        Assert.Equal(("Editor", clientId, false, "Edits documents"), (role.Name, role.ClientId, role.IsSystem, role.Description));
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+        Assert.Equal([role.Id], listed.Select(r => r.Id));
+
+        Guid usersRead = await PermissionIdAsync(AuthPermissions.UsersRead);
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(admin, "POST", Admin + "/users/" + targetId + "/roles", new AdminRoleAssignmentRequest(role.Id))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(admin, "POST", Admin + "/roles/" + role.Id + "/permissions", new AdminPermissionGrantRequest(usersRead))).StatusCode);
+        Assert.True(await HasRoleAsync(targetId, role.Id));
+        Assert.True(await RoleHasPermissionAsync(role.Id, usersRead));
+        Assert.Contains(await RefreshTokensAsync(targetId), t => t.RevokedUtc is null);
+
+        HttpResponseMessage deleted = await SendAsync(admin, "DELETE", Admin + "/apps/" + appId + "/roles/" + role.Id, null);
+        HttpResponseMessage again = await SendAsync(admin, "DELETE", Admin + "/apps/" + appId + "/roles/" + role.Id, null);
+
+        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, again.StatusCode);
+        Assert.False(await QueryAsync(context => context.Role.AnyAsync(r => r.Id == role.Id)));
+        Assert.All(await RefreshTokensAsync(targetId), t => Assert.NotNull(t.RevokedUtc));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await target.GetAsync(Me)).StatusCode);
+        string roleText = role.Id.ToString("D");
+        AuditLog createdRow = Assert.Single(await RowsAsync(AuditEventType.RoleCreated, null), r => r.Detail!.Contains(roleText, StringComparison.Ordinal));
+        AuditLog deletedRow = Assert.Single(await RowsAsync(AuditEventType.RoleDeleted, null), r => r.Detail!.Contains(roleText, StringComparison.Ordinal));
+        Assert.Equal("{\"role\":\"" + roleText + "\",\"app\":\"" + appId + "\",\"actor\":\"" + adminId + "\"}", createdRow.Detail);
+        Assert.StartsWith("{\"role\":\"" + roleText + "\",\"app\":\"" + appId + "\",\"revoked\":", deletedRow.Detail, StringComparison.Ordinal);
+        Assert.EndsWith(",\"actor\":\"" + adminId + "\"}", deletedRow.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>T30: names, descriptions, unknown applications and roles that are not the application's own.</summary>
+    [Fact]
+    public async Task Application_role_requests_are_validated_and_never_touch_global_or_other_applications_roles()
+    {
+        (_, string adminEmail) = await SeedUserAsync([AuthRoles.Admin]);
+        using Browser admin = await SignedInAsync(adminEmail);
+        (Guid appId, _) = await CreateApplicationAsync();
+        (Guid otherAppId, _) = await CreateApplicationAsync();
+        string roles = Admin + "/apps/" + appId + "/roles";
+
+        foreach (object body in new object[]
+        {
+            new { name = "app:editor" }, new { name = "" }, new { name = "has space" }, new { name = new string('x', 65) },
+            new { name = "Ünicode" }, new { name = "ok", description = new string('d', 257) },
+        })
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, (await SendAsync(admin, "POST", roles, body)).StatusCode);
+        }
+
+        Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(admin, "POST", Admin + "/apps/" + Guid.NewGuid() + "/roles", new { name = "Editor" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(admin, "GET", Admin + "/apps/" + Guid.NewGuid() + "/roles", null)).StatusCode);
+
+        AdminRoleInfo foreign = (await JsonAsync<AdminRoleInfo>(await SendAsync(admin, "POST", Admin + "/apps/" + otherAppId + "/roles", new { name = "Editor" })))!;
+        Guid globalUser = await RoleIdAsync(AuthRoles.User);
+        Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(admin, "DELETE", roles + "/" + foreign.Id, null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(admin, "DELETE", roles + "/" + globalUser, null)).StatusCode);
+        Assert.True(await QueryAsync(context => context.Role.AnyAsync(r => r.Id == foreign.Id)));
+        Assert.Empty(await JsonAsync<List<AdminRoleInfo>>(await SendAsync(admin, "GET", roles, null)) ?? []);
+
+        // The database refuses a global role that looks like an application role (CHECK, T30), whatever the case or spaces.
+        await Assert.ThrowsAsync<DbUpdateException>(() => CreateRoleAsync(" App:sneaky", []));
+    }
+
+    /// <summary>
+    /// T30: a roles.manage holder who is not an administrator may create an application role, but assigning it or
+    /// granting it a permission follows the privilege ceiling; deleting a role they hold is refused.
+    /// </summary>
+    [Fact]
+    public async Task A_non_admin_role_manager_creates_application_roles_but_stays_under_the_privilege_ceiling()
+    {
+        (Guid managerId, string managerEmail) = await SeedUserAsync([RoleFor(AuthPermissions.RolesManage)]);
+        using Browser manager = await SignedInAsync(managerEmail);
+        (Guid otherId, _) = await SeedUserAsync([]);
+        (Guid appId, _) = await CreateApplicationAsync();
+
+        HttpResponseMessage created = await SendAsync(manager, "POST", Admin + "/apps/" + appId + "/roles", new { name = "Viewer" });
+        AdminRoleInfo role = (await JsonAsync<AdminRoleInfo>(created))!;
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        // Not held: neither the role nor users.write may be given away.
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(manager, "POST", Admin + "/users/" + otherId + "/roles", new AdminRoleAssignmentRequest(role.Id))).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(manager, "POST", Admin + "/roles/" + role.Id + "/permissions", new AdminPermissionGrantRequest(await PermissionIdAsync(AuthPermissions.UsersWrite)))).StatusCode);
+        Assert.False(await HasRoleAsync(otherId, role.Id));
+
+        // Held: roles.manage may be granted, and once the manager holds the role they may assign it.
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(manager, "POST", Admin + "/roles/" + role.Id + "/permissions", new AdminPermissionGrantRequest(await PermissionIdAsync(AuthPermissions.RolesManage)))).StatusCode);
+        await AddRoleAsync(managerId, role.Id);
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(manager, "POST", Admin + "/users/" + otherId + "/roles", new AdminRoleAssignmentRequest(role.Id))).StatusCode);
+        Assert.True(await HasRoleAsync(otherId, role.Id));
+
+        // Deleting a role the actor holds would take rights from their own account.
+        Assert.Equal(HttpStatusCode.Conflict, (await SendAsync(manager, "DELETE", Admin + "/apps/" + appId + "/roles/" + role.Id, null)).StatusCode);
+        Assert.True(await QueryAsync(context => context.Role.AnyAsync(r => r.Id == role.Id)));
+    }
+
+    /// <summary>T30: RequireRole is set with the application (PUT replaces it), returned and audited.</summary>
+    [Fact]
+    public async Task RequireRole_is_set_with_the_application_returned_and_audited()
+    {
+        (_, string adminEmail) = await SeedUserAsync([AuthRoles.Admin]);
+        using Browser admin = await SignedInAsync(adminEmail);
+        (Guid appId, string clientId) = await CreateApplicationAsync();
+        string origin = "https://" + clientId + ".example.test";
+        object Body(bool? requireRole) => requireRole is bool flag
+            ? new { clientId, name = "App " + clientId, audience = "api://" + clientId, allowedOrigins = new[] { origin }, redirectUris = new[] { origin + "/cb" }, postLogoutRedirectUris = Array.Empty<string>(), requireRole = flag }
+            : new { clientId, name = "App " + clientId, audience = "api://" + clientId, allowedOrigins = new[] { origin }, redirectUris = new[] { origin + "/cb" }, postLogoutRedirectUris = Array.Empty<string>() };
+
+        ClientApplicationResponse on = (await JsonAsync<ClientApplicationResponse>(await SendAsync(admin, "PUT", Admin + "/apps/" + appId, Body(true))))!;
+        ClientApplicationResponse read = (await JsonAsync<ClientApplicationResponse>(await SendAsync(admin, "GET", Admin + "/apps/" + appId, null)))!;
+        ClientApplicationResponse off = (await JsonAsync<ClientApplicationResponse>(await SendAsync(admin, "PUT", Admin + "/apps/" + appId, Body(null))))!;
+
+        Assert.True(on.RequireRole);
+        Assert.True(read.RequireRole);
+        Assert.False(off.RequireRole);
+        List<AuditLog> updates = [.. (await AppRowsAsync(appId)).Where(r => r.EventType == nameof(AuditEventType.AppUpdated))];
+        Assert.Equal(2, updates.Count);
+        Assert.Contains("\"requireRole\":true", updates[0].Detail, StringComparison.Ordinal);
+        Assert.Contains("\"requireRole\":false", updates[1].Detail, StringComparison.Ordinal);
     }
 
     /// <summary>T29: the fixture adds its key through AddKeyAsync, the path the signing-key command uses.</summary>
@@ -783,6 +921,18 @@ public sealed class AdminApiTests(ApiFixture api) : IAsyncLifetime
         await context.SaveChangesAsync();
         return (user.Id, email);
     }
+
+    private async Task<(Guid Id, string ClientId)> CreateApplicationAsync()
+    {
+        string clientId = "roles-" + Guid.NewGuid().ToString("N")[..10];
+        string origin = "https://" + clientId + ".example.test";
+        ClientApplicationResponse created = await InScopeAsync<Auth.Services.ClientApplications.IClientApplicationRegistry, ClientApplicationResponse>(async registry =>
+            (await registry.CreateAsync(new ClientApplicationRequest(clientId, "App " + clientId, "api://" + clientId, [origin], [origin + "/cb"], []), true, AuditContext.None, CancellationToken.None)).Application!);
+        return (created.Id, clientId);
+    }
+
+    private static async Task<T?> JsonAsync<T>(HttpResponseMessage response) =>
+        JsonSerializer.Deserialize<T>(await response.Content.ReadAsStringAsync(), Web);
 
     private async Task<T> QueryAsync<T>(Func<AuthDbContext, Task<T>> query)
     {

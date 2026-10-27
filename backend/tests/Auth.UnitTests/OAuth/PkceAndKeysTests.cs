@@ -32,6 +32,23 @@ public class PkceAndKeysTests
         Assert.Equal(reserved, RoleNames.IsReservedForApplications(name));
 
     [Theory]
+    [InlineData("Editor", true)]
+    [InlineData("orders.read_all-2", true)]
+    [InlineData("a", true)]
+    [InlineData("app:editor", false)]
+    [InlineData("has space", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    [InlineData("Ünicode", false)]
+    [InlineData("tab\tname", false)]
+    public void Application_role_names_are_short_plain_ASCII_without_a_colon(string? name, bool valid)
+    {
+        Assert.Equal(valid, RoleNames.ApplicationRoleNameProblem(name) is null);
+        Assert.Null(RoleNames.ApplicationRoleNameProblem(new string('x', RoleNames.MaxApplicationRoleNameLength)));
+        Assert.NotNull(RoleNames.ApplicationRoleNameProblem(new string('x', RoleNames.MaxApplicationRoleNameLength + 1)));
+    }
+
+    [Theory]
     [InlineData("orders-spa")]
     [InlineData("Orders-SPA")]
     [InlineData("ORDERS-SPA")]

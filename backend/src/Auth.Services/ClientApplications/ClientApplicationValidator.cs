@@ -10,7 +10,8 @@ internal sealed record ValidClientApplication(
     string Audience,
     IReadOnlyList<string> AllowedOrigins,
     IReadOnlyList<string> RedirectUris,
-    IReadOnlyList<string> PostLogoutRedirectUris);
+    IReadOnlyList<string> PostLogoutRedirectUris,
+    bool RequireRole);
 
 /// <summary>
 /// Strict rules for client application settings. Errors name the field only, never echo the value.
@@ -67,7 +68,7 @@ internal sealed partial class ClientApplicationValidator(bool requireHttps, stri
 
         return errors.Count > 0
             ? (null, errors)
-            : (new ValidClientApplication(clientId, name, audience, origins, redirects, postLogout), errors);
+            : (new ValidClientApplication(clientId, name, audience, origins, redirects, postLogout, request.RequireRole), errors);
     }
 
     private static List<string> ValidateList(IReadOnlyList<string>? values, string field, Dictionary<string, string[]> errors, Func<string, string?> normalize)

@@ -8,10 +8,11 @@ namespace Auth.Services.ClientApplications;
 
 /// <summary>
 /// The cached read model of one ACTIVE client application: canonical client id (as stored), normalized origins and
-/// exact redirect URIs. Origins that are not allowed (plain http outside Development) are left out.
+/// exact redirect URIs. Origins that are not allowed (plain http outside Development) are left out. RequireRole (T30):
+/// only holders of one of the application's roles may sign in to it.
 /// </summary>
 public sealed record ClientApplicationView(
-    Guid Id, string ClientId, IReadOnlySet<string> Origins, IReadOnlyList<string> RedirectUris, IReadOnlyList<string> PostLogoutRedirectUris);
+    Guid Id, string ClientId, IReadOnlySet<string> Origins, IReadOnlyList<string> RedirectUris, IReadOnlyList<string> PostLogoutRedirectUris, bool RequireRole = false);
 
 /// <summary>
 /// Browser origins allowed to call the API with credentials (the AllowedOrigins entries of active client applications),
@@ -117,7 +118,7 @@ internal sealed class ClientApplicationOriginProvider(
 
                 origins.UnionWith(own);
                 applications[application.ClientId] = new ClientApplicationView(
-                    application.Id, application.ClientId, own, ClientApplicationLists.Read(application.RedirectUris), ClientApplicationLists.Read(application.PostLogoutRedirectUris));
+                    application.Id, application.ClientId, own, ClientApplicationLists.Read(application.RedirectUris), ClientApplicationLists.Read(application.PostLogoutRedirectUris), application.RequireRole);
             }
 
             Snapshot loaded = new(clock.UtcNow, origins, applications);

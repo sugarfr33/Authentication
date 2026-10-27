@@ -6,7 +6,7 @@
   `auth.UserRole`.
 - A role is **global** (`ClientApplicationId` null) or **scoped to one client application**. The API's own sessions
   (cookie login) use global roles only. Application roles reach a token only when one is minted for that application
-  (OAuth, later task); the repository already filters "global plus this application".
+  (the OAuth code flow, T19), as `app:{clientId}:{name}`. See "Application roles (T30)" below.
 - There is no active/inactive flag on roles or permissions. To "deactivate" one, remove its grants or assignments
   through `IRoleAssignmentService` (below). Adding such a flag would be a schema change to agree first.
 
@@ -49,6 +49,33 @@ and restart; the seeder gives it the Admin role and writes a `RoleAssigned` audi
 - If the email matches no active, verified account, nothing is assigned and a warning is logged.
 - **Recovery when no administrator is left** (all deactivated or demoted): set the email of a verified account and
   restart; the rule above makes it apply again (tested). Remove the setting once more afterwards.
+
+## Application roles (T30)
+
+Several applications share this server, each with its own roles. An application role is an `auth.Role` row with
+`ClientApplicationId` set.
+
+- **Admin API** (`roles.manage`): `GET`, `POST` and `DELETE /api/v1/admin/apps/{appId}/roles[/{roleId}]`
+  ([admin-api.md](admin-api.md)). Assigning one to a user and granting it permissions use the existing endpoints
+  (`POST /admin/users/{id}/roles`, `POST /admin/roles/{id}/permissions`), with the same privilege ceiling, audit and
+  revocation on removal as global roles.
+- **Names:** 1 to 64 ASCII letters, digits, `.`, `_` or `-`; unique per application, ignoring case. No colon, so
+  the claim `app:{clientId}:{name}` always parses back.
+- **Where they appear:** only in access tokens minted for that application (its audience and `client_id`), prefixed
+  `app:{clientId}:`. Never in this API's cookie tokens, never in another application's tokens (tested).
+- **Global names may not start with `app:`.** The rule is enforced in code (`RoleNames`, the seeder) and by the CHECK
+  `CK_Role_GlobalName_NotApplicationPrefix` (migration `ApplicationRolesRequireRole`, which stops with error 50030 if
+  such a row already exists). App tokens also drop such names defensively.
+- **Deleting** an application role revokes every holder's refresh families first (they are signed out everywhere, as for
+  a removal), then deletes the role with its assignments and grants. Audited `RoleDeleted {role, app, revoked, actor}`.
+  An administrator cannot delete a role they hold (409).
+- **Creating** needs only `roles.manage`: the new role is empty. Granting it a permission, or assigning it, is limited by
+  the privilege ceiling (a non-administrator gives only what they hold). Audited `RoleCreated {role, app, actor}`.
+- **Permissions** are one global catalogue. An application role's permissions appear only in that application's tokens.
+  This API refuses any token with a `client_id`, so they never grant anything here.
+
+**RequireRole** (per application, default off; [client-applications.md](client-applications.md)): when on, a user must
+hold at least one of the application's own roles to sign in to it. Global roles, Admin included, do not count.
 
 ## Tokens
 

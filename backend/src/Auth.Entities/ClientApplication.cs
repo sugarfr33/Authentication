@@ -20,6 +20,12 @@ public class ClientApplication
     /// <summary>JSON array of post-logout redirect URIs, matched exactly.</summary>
     public string PostLogoutRedirectUris { get; set; } = "[]";
 
+    /// <summary>
+    /// T30: when true, only users holding at least one of this application's own roles may sign in to it (authorize,
+    /// code exchange and refresh). Global roles, Admin included, do not count. Default false.
+    /// </summary>
+    public bool RequireRole { get; set; }
+
 
     public bool IsActive { get; set; }
 

@@ -62,7 +62,7 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | Logout, LogoutAll | revoked (count) | normal |
 | TokenRefreshed | none | **high** |
 | TokenReuse | revoked (count) | normal |
-| RefreshRejected | reason | **high** |
+| RefreshRejected | reason (`no_app_role` since T30) | **high** |
 | SessionRevoked | session, reason (session_cap when the server ended it) | normal |
 | PasswordResetRequested | outcome | **high** (anyone can cause it, also for unknown emails) |
 | PasswordReset, PasswordChanged | none | normal |
@@ -70,12 +70,12 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | RoleAssigned | role, source (bootstrap, backfill) | normal |
 | RoleRemoved | role (id) | normal |
 | RolePermissionRemoved | role, permission (ids) | normal |
-| AppCreated | app (id), source (registry, bootstrap) | normal |
-| AppUpdated | app (id), active, revoked (count, when an audience change ended its sessions) | normal |
+| AppCreated | app (id), source (registry, bootstrap), requireRole (T30) | normal |
+| AppUpdated | app (id), active, revoked (count, when an audience change ended its sessions), requireRole (after a settings change, T30) | normal |
 | AppDeactivated | app (id), revoked (count) | normal |
 | AuthorizationCodeIssued | app (id) | normal |
 | AuthorizationCodeRedeemed | app (id), session (id) | normal |
-| AuthorizationCodeRejected | app (id, when known), reason | **high** |
+| AuthorizationCodeRejected | app (id, when known), reason (`no_app_role` since T30: RequireRole refused the user at authorize or exchange) | **high** |
 | SingleLogout | cause (logout, logout_all, session_revoked, token_reuse, password_change, application_logout), revoked (count), app (id, RP-initiated only) | normal |
 | MfaEnrollmentStarted | none | normal |
 | MfaEnabled | action (enrolled, regenerated) | normal |
@@ -84,6 +84,8 @@ correlation id) and no captured log line holds any planted secret: passwords, li
 | MfaFailed | reason (wrong_code, wrong_recovery_code, replayed, locked, bad_challenge without user id, wrong_password, conflict) | **high** |
 | MfaRecoveryCodeUsed | none | normal |
 | SigningKeyRotated | reserved | |
+| RoleCreated | role (id), app (id), actor. An application role was created (T30). | normal |
+| RoleDeleted | role (id), app (id), revoked (refresh tokens of its holders), actor (T30) | normal |
 | SigningKeyAdded | kid (written only when it is 1-64 ASCII letters, digits, `.`, `_` or `-`; otherwise `[redacted]`), algorithm (ES256, RS256), activates (UTC). No user, no actor, never the secret reference. Written by `ISigningKeyRotation.AddKeyAsync` (the `signing-key add` command, T29) in the same save as the key. | normal |
 
 **TokenRefreshed decision:** it is kept, with no sampling. It writes about one row per 15 minutes per active session. It

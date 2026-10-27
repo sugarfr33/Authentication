@@ -50,6 +50,7 @@ public class OAuthExchangeTests
             Stubs.Create<IClientApplicationOriginProvider>().Instance,
             applications,
             Stubs.Create<IUserRepository>().Instance,
+            Stubs.Create<IRoleRepository>().Instance,
             codes,
             refresh,
             sessions,

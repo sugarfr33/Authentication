@@ -112,6 +112,19 @@ public static class RoleNames
     public static bool IsReservedForApplications(string name) =>
         name.TrimStart().StartsWith(ApplicationPrefix, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Longest application role name (the Role.Name column).</summary>
+    public const int MaxApplicationRoleNameLength = 64;
+
+    /// <summary>
+    /// T30: why <paramref name="name"/> cannot be an application role name, or null when it can: 1 to 64 ASCII letters,
+    /// digits, '.', '_' or '-'. No colon or space, so the claim app:{clientId}:{name} always parses back.
+    /// </summary>
+    public static string? ApplicationRoleNameProblem(string? name) =>
+        string.IsNullOrEmpty(name) ? "A name is required."
+        : name.Length > MaxApplicationRoleNameLength ? "At most " + MaxApplicationRoleNameLength + " characters."
+        : !name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-') ? "Use only ASCII letters, digits, '.', '_' or '-'."
+        : null;
+
     /// <summary>The claim value of an application-scoped role: <c>app:{clientId}:{name}</c>.</summary>
     public static string AppRole(string clientId, string roleName) => AuthRoles.ApplicationRole(clientId, roleName);
 }
