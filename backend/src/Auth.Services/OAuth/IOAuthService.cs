@@ -115,6 +115,7 @@ internal sealed partial class OAuthService(
     IClientApplicationOriginProvider clients,
     IClientApplicationRepository applications,
     IUserRepository users,
+    IRoleRepository roles,
     IAuthorizationCodeRepository codes,
     IRefreshTokenRepository refreshRows,
     IClientSessionService sessions,
@@ -129,6 +130,9 @@ internal sealed partial class OAuthService(
     IClock clock) : IOAuthService
 {
     private const int MaxStateLength = 512;
+
+    /// <summary>Audit reason when RequireRole refuses a user without a role of the application (T30).</summary>
+    internal const string NoApplicationRole = "no_app_role";
     private const int MaxScopeLength = 256;
 
     private static readonly Meter OAuthMeter = new("Auth.OAuth");
@@ -184,7 +188,15 @@ internal sealed partial class OAuthService(
             return ErrorRedirect(redirectUri, OAuthErrorCodes.AccessDenied, state);
         }
 
-        // 5. Consent (first-party applications: auto-approved), then issue the code.
+        // 5. Per-application access (T30): with RequireRole, only holders of one of the application's own roles. The
+        //    answer is the same as for an inactive account, so it does not reveal who belongs to which application.
+        if (application.RequireRole && !await roles.UserHasApplicationRoleAsync(user.Id, application.Id, cancellationToken))
+        {
+            await audits.TryWriteAsync(AuditEvents.AuthorizationCodeRejected(user.Id, application.Id, NoApplicationRole), audit, cancellationToken);
+            return ErrorRedirect(redirectUri, OAuthErrorCodes.AccessDenied, state);
+        }
+
+        // 6. Consent (first-party applications: auto-approved), then issue the code.
         if (!await consent.IsApprovedAsync(user.Id, application, request.Scope, cancellationToken))
         {
             return ErrorRedirect(redirectUri, OAuthErrorCodes.AccessDenied, state);
@@ -365,9 +377,15 @@ internal sealed partial class OAuthService(
             return (new Rejection("redirect_mismatch", OAuthErrorCodes.InvalidGrant, application.Id), null);
         }
 
-        return VerifierMatches(request.CodeVerifier, code.CodeChallenge)
-            ? (null, application)
-            : (new Rejection("pkce_mismatch", OAuthErrorCodes.InvalidGrant, application.Id), null);
+        if (!VerifierMatches(request.CodeVerifier, code.CodeChallenge))
+        {
+            return (new Rejection("pkce_mismatch", OAuthErrorCodes.InvalidGrant, application.Id), null);
+        }
+
+        // T30: read from the row, not the 30 s cache, so a role removed or RequireRole turned on since /authorize applies.
+        return application.RequireRole && !await roles.UserHasApplicationRoleAsync(code.UserId, application.Id, cancellationToken)
+            ? (new Rejection(NoApplicationRole, OAuthErrorCodes.InvalidGrant, application.Id), null)
+            : (null, application);
     }
 
     /// <summary>

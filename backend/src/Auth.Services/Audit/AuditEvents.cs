@@ -68,13 +68,21 @@ internal static class AuditEvents
     public static AuditEvent RoleRemoved(Guid userId, Guid roleId) => new(AuditEventType.RoleRemoved, userId, new AuditField("role", roleId));
 
     /// <summary>A client application was registered (<paramref name="source"/>: registry or bootstrap).</summary>
-    public static AuditEvent AppCreated(Guid applicationId, string source) =>
-        new(AuditEventType.AppCreated, null, new AuditField("app", applicationId), new AuditField("source", source));
+    public static AuditEvent AppCreated(Guid applicationId, string source, bool requireRole = false) =>
+        new(AuditEventType.AppCreated, null, new AuditField("app", applicationId), new AuditField("source", source), new AuditField("requireRole", requireRole));
 
     /// <summary>Settings changed or activated; <paramref name="revoked"/> is set when an audience change ended its sessions.</summary>
-    public static AuditEvent AppUpdated(Guid applicationId, bool active, int? revoked = null) => revoked is int count
-        ? new(AuditEventType.AppUpdated, null, new AuditField("app", applicationId), new AuditField("active", active), new AuditField("revoked", count))
-        : new(AuditEventType.AppUpdated, null, new AuditField("app", applicationId), new AuditField("active", active));
+    /// <param name="requireRole">The RequireRole setting after a settings change (T30); null for an activation.</param>
+    public static AuditEvent AppUpdated(Guid applicationId, bool active, int? revoked = null, bool? requireRole = null) =>
+        new(
+            AuditEventType.AppUpdated,
+            null,
+            [
+                new AuditField("app", applicationId),
+                new AuditField("active", active),
+                .. revoked is int count ? [new AuditField("revoked", count)] : Array.Empty<AuditField>(),
+                .. requireRole is bool flag ? [new AuditField("requireRole", flag)] : Array.Empty<AuditField>(),
+            ]);
 
     public static AuditEvent AppDeactivated(Guid applicationId, int revoked) =>
         new(AuditEventType.AppDeactivated, null, new AuditField("app", applicationId), new AuditField("revoked", revoked));
@@ -150,6 +158,19 @@ internal static class AuditEvents
     public static AuditEvent UserReactivated(Guid userId) => new(AuditEventType.UserReactivated, userId);
 
     /// <summary>A signing key was added (T29): kid, algorithm word and activation time; never the secret reference.</summary>
+    /// <summary>T30 fix (audit L2): the name and client id are kept so a deleted role stays identifiable.</summary>
+    public static AuditEvent RoleCreated(Guid roleId, string name, Guid applicationId, string clientId) =>
+        new(AuditEventType.RoleCreated, null, new AuditField("role", roleId), new AuditField("name", new AuditPlainId(name)),
+            new AuditField("app", applicationId), new AuditField("clientId", new AuditPlainId(clientId, ClientIdMaxLength)));
+
+    /// <param name="revoked">Refresh tokens of the role's holders at this application that were revoked.</param>
+    public static AuditEvent RoleDeleted(Guid roleId, string name, Guid applicationId, string clientId, int revoked) =>
+        new(AuditEventType.RoleDeleted, null, new AuditField("role", roleId), new AuditField("name", new AuditPlainId(name)),
+            new AuditField("app", applicationId), new AuditField("clientId", new AuditPlainId(clientId, ClientIdMaxLength)), new AuditField("revoked", revoked));
+
+    /// <summary>Client ids are 3 to 100 characters (ClientApplicationValidator).</summary>
+    private const int ClientIdMaxLength = 100;
+
     public static AuditEvent SigningKeyAdded(string kid, string algorithm, DateTime activatesUtc) =>
-        new(AuditEventType.SigningKeyAdded, null, new AuditField("kid", new AuditKeyId(kid)), new AuditField("algorithm", algorithm), new AuditField("activates", activatesUtc));
+        new(AuditEventType.SigningKeyAdded, null, new AuditField("kid", new AuditPlainId(kid)), new AuditField("algorithm", algorithm), new AuditField("activates", activatesUtc));
 }

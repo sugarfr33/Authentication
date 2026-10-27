@@ -102,4 +102,13 @@ public enum AuditEventType
     /// command runs with the host's configuration, outside any session. Never holds the secret reference or key material.
     /// </summary>
     SigningKeyAdded,
+
+    /// <summary>An administrator created an application role (T30): role id, application id, actor.</summary>
+    RoleCreated,
+
+    /// <summary>
+    /// An administrator deleted an application role (T30): role id, application id, the number of refresh tokens revoked
+    /// (every holder's sessions end), actor.
+    /// </summary>
+    RoleDeleted,
 }

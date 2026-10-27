@@ -34,6 +34,7 @@ internal interface ISessionRefresher
 internal sealed class SessionRefresher(
     IUserRepository users,
     IClientApplicationRepository applications,
+    IRoleRepository roles,
     IRefreshTokenService refreshTokens,
     IAccessProfileBuilder profiles,
     ITokenService tokens,
@@ -78,6 +79,15 @@ internal sealed class SessionRefresher(
                     application?.Id),
                 audit,
                 cancellationToken);
+            return new RefreshOutcome(RotationStatus.Invalid, null);
+        }
+
+        // T30: an application with RequireRole refreshes only for holders of one of its roles. RequireRole turned on, or
+        // the last role gone without a revocation, ends the session here (role removals revoke at once anyway).
+        if (application is { RequireRole: true } && !await roles.UserHasApplicationRoleAsync(user.Id, application.Id, cancellationToken))
+        {
+            await refreshTokens.RevokeFamilyForUserAsync(session.FamilyId, session.UserId, RefreshTokenRevokedReason.Admin, cancellationToken);
+            await audits.TryWriteAsync(AuditEvents.RefreshRejected(user.Id, "no_app_role", application.Id), audit, cancellationToken);
             return new RefreshOutcome(RotationStatus.Invalid, null);
         }
 

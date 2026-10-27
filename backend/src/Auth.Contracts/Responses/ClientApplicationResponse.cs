@@ -9,4 +9,5 @@ public sealed record ClientApplicationResponse(
     IReadOnlyList<string> AllowedOrigins,
     IReadOnlyList<string> RedirectUris,
     IReadOnlyList<string> PostLogoutRedirectUris,
-    bool IsActive);
+    bool IsActive,
+    bool RequireRole);

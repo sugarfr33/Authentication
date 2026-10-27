@@ -3,7 +3,7 @@
  *   1. primitive  (--p-*)  raw values; NEVER referenced by components or pages
  *   2. semantic            purpose aliases (--color-text, --space-3 ...); dark mode is redefined here only
  *   3. component           scoped to one kit component (--button-*, --input-*), built from semantic tokens
- * Contrast of the semantic colour pairs is verified by tests/styles/contrast.spec.ts (light and dark).
+ * Contrast of the semantic colour pairs is verified by tests/styles/tokens.spec.ts (light and dark).
  * Breakpoints cannot be used inside @media as variables; the kit uses the em values documented here.
  */
 

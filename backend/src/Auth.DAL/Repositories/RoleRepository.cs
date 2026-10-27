@@ -38,6 +38,11 @@ internal sealed class RoleRepository(AuthDbContext context) : IRoleRepository
     public Task<bool> UserHasRoleAsync(Guid userId, Guid roleId, CancellationToken cancellationToken) =>
         context.UserRole.AnyAsync(ur => ur.UserId == userId && ur.RoleId == roleId, cancellationToken);
 
+    public Task<bool> AnyHolderHasRoleAsync(Guid roleId, Guid otherRoleId, CancellationToken cancellationToken) =>
+        context.UserRole.AnyAsync(
+            ur => ur.RoleId == roleId && context.UserRole.Any(other => other.UserId == ur.UserId && other.RoleId == otherRoleId),
+            cancellationToken);
+
     public async Task AddUserRoleAsync(UserRole assignment, CancellationToken cancellationToken) =>
         await context.UserRole.AddAsync(assignment, cancellationToken);
 
@@ -93,6 +98,25 @@ internal sealed class RoleRepository(AuthDbContext context) : IRoleRepository
 
     public Task LockRoleAsync(Guid roleId, CancellationToken cancellationToken) =>
         context.Role.Where(r => r.Id == roleId).ExecuteUpdateAsync(s => s.SetProperty(r => r.NormalizedName, r => r.NormalizedName), cancellationToken);
+
+    public Task<bool> UserHasApplicationRoleAsync(Guid userId, Guid clientApplicationId, CancellationToken cancellationToken) =>
+        context.UserRole.AnyAsync(ur => ur.UserId == userId && ur.Role.ClientApplicationId == clientApplicationId, cancellationToken);
+
+    public async Task<IReadOnlyList<Role>> ListApplicationRolesWithPermissionsAsync(Guid clientApplicationId, CancellationToken cancellationToken) =>
+        await context.Role
+            .AsNoTracking()
+            .Where(r => r.ClientApplicationId == clientApplicationId)
+            .Include(r => r.ClientApplication)
+            .Include(r => r.RolePermissions).ThenInclude(rp => rp.Permission)
+            .OrderBy(r => r.NormalizedName)
+            .AsSplitQuery()
+            .ToListAsync(cancellationToken);
+
+    public Task<Role?> GetApplicationRoleAsync(Guid clientApplicationId, string normalizedName, CancellationToken cancellationToken) =>
+        context.Role.FirstOrDefaultAsync(r => r.ClientApplicationId == clientApplicationId && r.NormalizedName == normalizedName, cancellationToken);
+
+    public Task<int> DeleteRoleAsync(Guid roleId, CancellationToken cancellationToken) =>
+        context.Role.Where(r => r.Id == roleId).ExecuteDeleteAsync(cancellationToken);
 
     private IQueryable<Role> RolesForUser(Guid userId, Guid? clientApplicationId) =>
         context.Role.Where(r =>

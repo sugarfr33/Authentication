@@ -24,6 +24,7 @@ internal sealed class ClientApplicationConfiguration : IEntityTypeConfiguration<
         builder.Property(c => c.AllowedOrigins).HasColumnType("nvarchar(max)");
         builder.Property(c => c.RedirectUris).HasColumnType("nvarchar(max)");
         builder.Property(c => c.PostLogoutRedirectUris).HasColumnType("nvarchar(max)");
+        builder.Property(c => c.RequireRole).HasDefaultValue(false, "DF_ClientApplication_RequireRole");
 
         builder.HasIndex(c => c.ClientId).IsUnique().HasDatabaseName("UQ_ClientApplication_ClientId");
 

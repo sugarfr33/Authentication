@@ -47,7 +47,7 @@ PowerShell: `$env:CENTRALAUTH_CONNECTION = 'Server=.\SQLEXPRESS;...'`.
 - `--startup-project` must be **Auth.DAL**. With Auth.Api as the startup project the tool fails with "doesn't
   reference Microsoft.EntityFrameworkCore.Design". This is by design, so the design package never reaches the host.
 - Without `CENTRALAUTH_CONNECTION` the tool uses the local default above (database `CentralAuth`).
-- Expected: five migrations applied (`InitialCreate` up to `ClientApplicationListNames`), and 14 tables in schema `auth`
+- Expected: six migrations applied (`InitialCreate` up to `ApplicationRolesRequireRole`), and 14 tables in schema `auth`
   (13 plus `__EFMigrationsHistory`).
 - Without the EF tool: `sqlcmd -S '.\SQLEXPRESS' -E -d CentralAuth -b -i ../docs/CentralAuth.initial.sql` applies the
   same migrations as an idempotent script. Create the empty database first (`CREATE DATABASE CentralAuth`).
@@ -258,7 +258,7 @@ Run on 2026-10-26 from a fresh `git clone` of `main` 94fd63c, with database `Cen
 | Step | Result |
 |---|---|
 | `dotnet build Auth.sln` | 0 warnings, 0 errors |
-| `dotnet ef database update` (DAL as startup) | 4 migrations (a fifth, `ClientApplicationListNames`, came in T29), 14 tables (13 plus history) |
+| `dotnet ef database update` (DAL as startup) | 4 migrations (a fifth, `ClientApplicationListNames`, came in T29, a sixth, `ApplicationRolesRequireRole`, in T30), 14 tables (13 plus history) |
 | key recipe and `sqlcmd -i` | 1 row, `Active`; JWKS lists `proofkey1` |
 | API `https` profile | `/health` 200, `/health/ready` 200 |
 | `npm ci`, `npm run build` | 138 packages; "19 files in dist/: no dev-only code" |

@@ -34,6 +34,22 @@ public class AuditDetailTests
         Assert.StartsWith("{\"kid\":\"" + written + "\",\"algorithm\":\"ES256\"", detail, StringComparison.Ordinal);
     }
 
+    /// <summary>T30 fix (audit L2): application role events name the role and client id, but only plain identifiers.</summary>
+    [Fact]
+    public void Application_role_events_write_plain_names_and_client_ids_and_redact_anything_else()
+    {
+        Guid role = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        Guid app = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        string longClientId = "c" + new string('x', 99);
+
+        Assert.Equal(
+            "{\"role\":\"" + role + "\",\"name\":\"Editor\",\"app\":\"" + app + "\",\"clientId\":\"" + longClientId + "\"}",
+            AuditDetail.Render(AuditEvents.RoleCreated(role, "Editor", app, longClientId)));
+        Assert.Equal(
+            "{\"role\":\"" + role + "\",\"name\":\"[redacted]\",\"app\":\"" + app + "\",\"clientId\":\"[redacted]\",\"revoked\":3}",
+            AuditDetail.Render(AuditEvents.RoleDeleted(role, "has space", app, longClientId + "x", 3)));
+    }
+
     [Theory]
     [InlineData("hunter2-Violet-7319")]
     [InlineData("q2V7nYx0Rk3sJ9bT4uLmW8cZ1aP6dE5fG0hI2jK7lMn")]

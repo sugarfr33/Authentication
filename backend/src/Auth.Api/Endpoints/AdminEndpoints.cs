@@ -73,6 +73,17 @@ internal sealed class AdminEndpoints : IEndpointModule
         admin.MapDelete("/roles/{id:guid}/permissions/{permissionId:guid}", RemovePermissionAsync).RequireAuthorization(AuthPolicies.RolesManage)
             .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status409Conflict);
 
+        // Application roles (T30): roles scoped to one client application, minted only into its tokens as
+        // app:{clientId}:{name}. Assignments and grants use the role endpoints above.
+        admin.MapGet("/apps/{appId:guid}/roles", ListApplicationRolesAsync).RequireAuthorization(AuthPolicies.RolesManage)
+            .Produces<IReadOnlyList<AdminRoleInfo>>().ProducesProblem(StatusCodes.Status404NotFound);
+        admin.MapPost("/apps/{appId:guid}/roles", CreateApplicationRoleAsync).RequireAuthorization(AuthPolicies.RolesManage)
+            .Accepts<ApplicationRoleRequest>("application/json")
+            .Produces<AdminRoleInfo>(StatusCodes.Status201Created).ProducesValidationProblem()
+            .ProducesProblem(StatusCodes.Status404NotFound).ProducesProblem(StatusCodes.Status409Conflict);
+        admin.MapDelete("/apps/{appId:guid}/roles/{roleId:guid}", DeleteApplicationRoleAsync).RequireAuthorization(AuthPolicies.RolesManage)
+            .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status404NotFound).ProducesProblem(StatusCodes.Status409Conflict);
+
         // Client applications (the registry: validation, audit, CORS cache invalidation, session revocation)
         admin.MapGet("/apps", ListAppsAsync).RequireAuthorization(AuthPolicies.AppsManage).Produces<IReadOnlyList<ClientApplicationResponse>>();
         admin.MapGet("/apps/{id:guid}", GetAppAsync).RequireAuthorization(AuthPolicies.AppsManage)
@@ -169,6 +180,29 @@ internal sealed class AdminEndpoints : IEndpointModule
 
     private static async Task<IResult> RemovePermissionAsync(Guid id, Guid permissionId, IRoleAssignmentService roles, HttpContext http, CancellationToken cancellationToken) =>
         Answer(await roles.RemoveRolePermissionAsync(id, permissionId, ActorAudit(http), cancellationToken));
+
+    private static async Task<IResult> ListApplicationRolesAsync(Guid appId, IRoleAssignmentService roles, CancellationToken cancellationToken) =>
+        await roles.ListApplicationRolesAsync(appId, cancellationToken) is IReadOnlyList<AdminRoleInfo> list ? TypedResults.Ok(list) : NotFound();
+
+    private static async Task<IResult> CreateApplicationRoleAsync(
+        Guid appId,
+        [FromBody] ApplicationRoleRequest request,
+        IRoleAssignmentService roles,
+        HttpContext http,
+        CancellationToken cancellationToken)
+    {
+        ApplicationRoleResult result = await roles.CreateApplicationRoleAsync(appId, request, ActorAudit(http), cancellationToken);
+        return result switch
+        {
+            { Outcome: RoleChangeOutcome.Changed, Role: AdminRoleInfo created } =>
+                TypedResults.Created("/api/v1/admin/apps/" + appId.ToString("D") + "/roles/" + created.Id.ToString("D"), created),
+            { Outcome: RoleChangeOutcome.Invalid, Errors: { } errors } => TypedResults.ValidationProblem(errors.ToDictionary(e => e.Key, e => e.Value)),
+            _ => Answer(result.Outcome),
+        };
+    }
+
+    private static async Task<IResult> DeleteApplicationRoleAsync(Guid appId, Guid roleId, IRoleAssignmentService roles, HttpContext http, CancellationToken cancellationToken) =>
+        Answer(await roles.DeleteApplicationRoleAsync(appId, roleId, ActorAudit(http), cancellationToken));
 
     private static async Task<IResult> ListAppsAsync(IClientApplicationRegistry registry, CancellationToken cancellationToken) =>
         TypedResults.Ok(await registry.ListAsync(cancellationToken));
@@ -274,6 +308,7 @@ internal sealed class AdminEndpoints : IEndpointModule
         RoleChangeOutcome.LastAdministrator => LastAdministrator(),
         RoleChangeOutcome.SystemRole => TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: "The Admin role always holds every permission."),
         RoleChangeOutcome.PrivilegeCeiling => TypedResults.Problem(statusCode: StatusCodes.Status403Forbidden, title: "You can only give a role or permission that you hold yourself."),
+        RoleChangeOutcome.Duplicate => TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: "The application already has a role with this name."),
         _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unmapped outcome."),
     };
 

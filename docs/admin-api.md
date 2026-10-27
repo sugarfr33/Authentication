@@ -74,6 +74,9 @@ Nothing is written or audited on a refusal.
 | `DELETE /admin/users/{id}/roles/{roleId}` | `roles.manage` | 204, 409 |
 | `POST /admin/roles/{id}/permissions` body `{"permissionId":"…"}` | `roles.manage` | 204, 404 |
 | `DELETE /admin/roles/{id}/permissions/{permissionId}` | `roles.manage` | 204, 409 |
+| `GET /admin/apps/{appId}/roles` | `roles.manage` | 200 the application's roles with their permissions, 404 |
+| `POST /admin/apps/{appId}/roles` body `{"name":"Editor","description":"…"}` | `roles.manage` | 201 `AdminRoleInfo` with `Location`, 400 validation, 404, 409 duplicate name |
+| `DELETE /admin/apps/{appId}/roles/{roleId}` | `roles.manage` | 204 (also when already gone), 403 (an administrator holds it and you are not one), 404 (unknown application, or a global or other application's role), 409 (you hold it) |
 | `GET /admin/apps` | `apps.manage` | 200 applications |
 | `GET /admin/apps/{id}` | `apps.manage` | 200, 404 |
 | `POST /admin/apps` body `ClientApplicationRequest` | `apps.manage` | 201 with `Location`, 400 validation |
@@ -108,7 +111,8 @@ assignment being added refers to a missing role. Removing an assignment that doe
 
 | Title | When |
 |---|---|
-| "Administrators cannot make this change to their own account." | The actor deactivates themselves, resets their own MFA, removes one of their own roles, or removes a permission from a role they hold. |
+| "Administrators cannot make this change to their own account." | The actor deactivates themselves, resets their own MFA, removes one of their own roles, removes a permission from a role they hold, or deletes an application role they hold. |
+| "The application already has a role with this name." | Creating an application role whose name another role of that application already has (ignoring case). |
 | "At least one active administrator must remain." | The target is the last active, verified holder of the Admin role (removing the role or deactivating the account). |
 | "The Admin role always holds every permission." | A permission is removed from the system Admin role. |
 | "Two-step verification is not on for this account." | MFA reset on an account with no factor and no pending enrollment. |
@@ -139,6 +143,8 @@ such a stale account is therefore never refused as "last administrator", because
 | Deactivate user | Sets `IsActive=false`, issues a new security stamp, revokes every family, invalidates liveness and publishes single logout. Sign-in is refused afterwards. | `UserDeactivated {revoked, actor}` |
 | Reactivate user | Sets `IsActive=true` and clears the lockout (failed count, lockout end and level). The user signs in again with their password. | `UserReactivated {actor}` |
 | MFA reset | Runs `IMfaService.ResetAsync`: the factor, recovery codes and pending enrollment are removed, a new security stamp is issued and every session ends. | `MfaDisabled {action:"reset", actor}` |
+| Create application role (T30) | Adds an empty `Role` with the application's id. Name rules: [authorization.md](authorization.md). | `RoleCreated {role, name, app, clientId, actor}` |
+| Delete application role (T30) | Revokes the holders' sessions **at that application only** (their browser and other applications' sessions stay), then deletes the role with its assignments and grants. Refused with 403 when an administrator holds it and the actor is not one. | `RoleDeleted {role, name, app, clientId, revoked, actor}` |
 | App create, update, deactivate | Runs through the registry: validation, the CORS origin cache is invalidated, and deactivation revokes the application's sessions. | `AppCreated` / `AppUpdated` / `AppDeactivated` (each with `actor`) |
 
 **Audit reasons.**
@@ -171,6 +177,12 @@ Use this when a user has lost their authenticator device and every recovery code
 The SQL runbook in docs/mfa-admin-recovery.md remains only for when the API is unavailable.
 
 ## Changes
+
+- **T30:** application roles over HTTP (`/admin/apps/{appId}/roles`); the existing assignment and grant endpoints work
+  for them unchanged. Applications gain `requireRole` (request and response). Omitted, it is false on create and **kept
+  unchanged on update** (T30 fix: an older client can never open an application by leaving it out); send `false` to
+  turn it off. `AppCreated` and `AppUpdated` audit rows gain `requireRole`. `RoleCreated` and `RoleDeleted` name the
+  role and the client id; deleting an application role ends sessions at that application only.
 
 - **T29:** application responses (`ClientApplicationResponse`, `GET/POST/PUT /admin/apps`) no longer have
   `requirePkce`. PKCE was always required and the column is dropped. The list fields are `allowedOrigins`,

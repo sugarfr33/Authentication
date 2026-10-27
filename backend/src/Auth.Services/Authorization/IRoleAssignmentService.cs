@@ -1,9 +1,12 @@
 using System.Data;
 using Auth.Contracts;
+using Auth.Contracts.Requests;
+using Auth.Contracts.Responses;
 using Auth.DAL;
 using Auth.DAL.Repositories;
 using Auth.Entities;
 using Auth.Services.Audit;
+using Auth.Services.ClientApplications;
 using Auth.Services.Common;
 using Auth.Services.Security;
 
@@ -35,7 +38,16 @@ public enum RoleChangeOutcome
     /// refused otherwise, so roles.manage cannot be used to escalate to Admin.
     /// </summary>
     PrivilegeCeiling,
+
+    /// <summary>T30: the application already has a role with this name (ignoring case); nothing written.</summary>
+    Duplicate,
+
+    /// <summary>T30: the request is invalid (see <see cref="ApplicationRoleResult.Errors"/>); nothing written.</summary>
+    Invalid,
 }
+
+/// <summary>T30: what creating an application role did, with the role on success and the field errors when invalid.</summary>
+public sealed record ApplicationRoleResult(RoleChangeOutcome Outcome, AdminRoleInfo? Role = null, IReadOnlyDictionary<string, string[]>? Errors = null);
 
 /// <summary>
 /// Giving and taking rights; the only way to change role assignments and grants (every admin endpoint uses it).
@@ -71,11 +83,30 @@ public interface IRoleAssignmentService
     /// audited as RolePermissionRemoved. Unchanged when the role did not have the permission.
     /// </summary>
     Task<RoleChangeOutcome> RemoveRolePermissionAsync(Guid roleId, Guid permissionId, AuditContext audit, CancellationToken cancellationToken);
+
+    /// <summary>T30: the application's roles with their permissions, or null when the application does not exist.</summary>
+    Task<IReadOnlyList<AdminRoleInfo>?> ListApplicationRolesAsync(Guid applicationId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// T30: creates an empty role of the application, audited as RoleCreated. Any roles.manage holder may create one;
+    /// granting permissions to it and assigning it then go through the privilege ceiling as for any role.
+    /// </summary>
+    /// <returns>Changed with the role; Invalid with field errors; NotFound for an unknown application; Duplicate.</returns>
+    Task<ApplicationRoleResult> CreateApplicationRoleAsync(Guid applicationId, ApplicationRoleRequest request, AuditContext audit, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// T30: deletes a role of the application in one transaction: every holder's refresh families are revoked (their
+    /// sessions end, as for a removal), the role and its assignments and grants are deleted, audited as RoleDeleted.
+    /// </summary>
+    /// <returns>Changed; Unchanged when the role is already gone; NotFound for an unknown application or a role of
+    /// another application (or a global role); SelfLockout when the acting administrator holds the role.</returns>
+    Task<RoleChangeOutcome> DeleteApplicationRoleAsync(Guid applicationId, Guid roleId, AuditContext audit, CancellationToken cancellationToken);
 }
 
 internal sealed class RoleAssignmentService(
     IRoleRepository roles,
     IUserRepository users,
+    IClientApplicationRepository applications,
     IRefreshTokenRepository refreshTokens,
     IAuditService audits,
     IUnitOfWork unitOfWork,
@@ -235,6 +266,141 @@ internal sealed class RoleAssignmentService(
         await sessionsEnded.PublishAsync(new SessionEnded(SessionEndScope.All, SessionEndCause.AdminRevoked, null, RoleId: roleId), audit, cancellationToken);
         return RoleChangeOutcome.Changed;
     }
+
+    public async Task<IReadOnlyList<AdminRoleInfo>?> ListApplicationRolesAsync(Guid applicationId, CancellationToken cancellationToken)
+    {
+        if (await applications.GetByIdAsync(applicationId, cancellationToken) is not ClientApplication application)
+        {
+            return null;
+        }
+
+        return [.. (await roles.ListApplicationRolesWithPermissionsAsync(application.Id, cancellationToken)).Select(r => Info(
+            r,
+            application.ClientId,
+            [.. r.RolePermissions.Select(rp => new AdminPermissionInfo(rp.Permission.Id, rp.Permission.Code, rp.Permission.Description)).OrderBy(p => p.Code, StringComparer.Ordinal)]))];
+    }
+
+    public async Task<ApplicationRoleResult> CreateApplicationRoleAsync(Guid applicationId, ApplicationRoleRequest request, AuditContext audit, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(audit);
+        string name = request?.Name?.Trim() ?? string.Empty;
+        string? description = string.IsNullOrWhiteSpace(request?.Description) ? null : request.Description.Trim();
+        Dictionary<string, string[]> errors = new(StringComparer.Ordinal);
+        if (RoleNames.ApplicationRoleNameProblem(name) is string problem)
+        {
+            errors["name"] = [problem];
+        }
+
+        if (description is { Length: > MaxDescriptionLength })
+        {
+            errors["description"] = ["At most " + MaxDescriptionLength + " characters."];
+        }
+
+        if (errors.Count > 0)
+        {
+            return new ApplicationRoleResult(RoleChangeOutcome.Invalid, Errors: errors);
+        }
+
+        if (await applications.GetByIdAsync(applicationId, cancellationToken) is not ClientApplication application)
+        {
+            return new ApplicationRoleResult(RoleChangeOutcome.NotFound);
+        }
+
+        string normalized = name.ToUpperInvariant();
+        if (await roles.GetApplicationRoleAsync(application.Id, normalized, cancellationToken) is not null)
+        {
+            return new ApplicationRoleResult(RoleChangeOutcome.Duplicate);
+        }
+
+        Role role = new()
+        {
+            Id = Guid.NewGuid(),
+            ClientApplicationId = application.Id,
+            Name = name,
+            NormalizedName = normalized,
+            Description = description,
+            IsSystem = false,
+        };
+        await roles.AddRoleAsync(role, cancellationToken);
+        await audits.StageAsync(AuditEvents.RoleCreated(role.Id, role.Name, application.Id, application.ClientId), audit, cancellationToken);
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (UniqueConstraintViolationException)
+        {
+            // A concurrent create of the same name won.
+            unitOfWork.ClearChanges();
+            return new ApplicationRoleResult(RoleChangeOutcome.Duplicate);
+        }
+
+        return new ApplicationRoleResult(RoleChangeOutcome.Changed, Info(role, application.ClientId, []));
+    }
+
+    public async Task<RoleChangeOutcome> DeleteApplicationRoleAsync(Guid applicationId, Guid roleId, AuditContext audit, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(audit);
+        if (await applications.GetByIdAsync(applicationId, cancellationToken) is not ClientApplication application)
+        {
+            return RoleChangeOutcome.NotFound;
+        }
+
+        Role? role = await roles.GetByIdAsync(roleId, cancellationToken);
+        if (role is null)
+        {
+            return RoleChangeOutcome.Unchanged;
+        }
+
+        if (role.ClientApplicationId != applicationId || role.IsSystem)
+        {
+            // A global role, or a role of another application, is never deleted through this path.
+            return RoleChangeOutcome.NotFound;
+        }
+
+        if (audit.ActorId is Guid actor && await roles.UserHasRoleAsync(actor, roleId, cancellationToken))
+        {
+            return RoleChangeOutcome.SelfLockout;
+        }
+
+        // T30 fix (audit L1): ending an administrator's sessions is an action on an administrator, so only an
+        // administrator may delete a role that one holds (the same ceiling as acting on an administrator's roles).
+        if (audit.ActorId is Guid manager
+            && !await IsAdministratorAsync(manager, cancellationToken)
+            && await roles.GetGlobalRoleAsync(AuthRoles.Admin.ToUpperInvariant(), cancellationToken) is Role adminRole
+            && await roles.AnyHolderHasRoleAsync(roleId, adminRole.Id, cancellationToken))
+        {
+            return RoleChangeOutcome.PrivilegeCeiling;
+        }
+
+        DateTime now = clock.UtcNow;
+        await using (IUnitOfWorkTransaction transaction = await unitOfWork.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken))
+        {
+            // Revoke first: once the role is gone its holders can no longer be found. Only this application's sessions
+            // end (T30 fix, audit L1): the role never appears in browser sessions or other applications' tokens.
+            int revoked = await refreshTokens.RevokeApplicationFamiliesForRoleHoldersAsync(roleId, applicationId, RefreshTokenRevokedReason.Admin, now, cancellationToken);
+            if (await roles.DeleteRoleAsync(roleId, cancellationToken) == 0)
+            {
+                // Deleted concurrently; nothing committed here.
+                return RoleChangeOutcome.Unchanged;
+            }
+
+            await audits.StageAsync(AuditEvents.RoleDeleted(roleId, role.Name, applicationId, application.ClientId, revoked), audit, cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        liveness.InvalidateAll();
+        await sessionsEnded.PublishAsync(
+            new SessionEnded(SessionEndScope.Application, SessionEndCause.AdminRevoked, null, ClientApplicationId: applicationId, RoleId: roleId),
+            audit,
+            cancellationToken);
+        return RoleChangeOutcome.Changed;
+    }
+
+    private const int MaxDescriptionLength = 256;
+
+    private static AdminRoleInfo Info(Role role, string clientId, IReadOnlyList<AdminPermissionInfo> permissions) =>
+        new(role.Id, role.Name, clientId, role.IsSystem, role.Description, permissions);
 
     /// <summary>Whether the user holds the global Admin role (read from the database, not from the token).</summary>
     private async Task<bool> IsAdministratorAsync(Guid userId, CancellationToken cancellationToken) =>

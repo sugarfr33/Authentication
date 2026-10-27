@@ -574,6 +574,86 @@ public sealed class OAuthApiTests(ApiFixture api) : IAsyncLifetime
         Assert.Empty(await RejectionsAsync(spa));
     }
 
+    /// <summary>
+    /// T30 end to end: with RequireRole, a user without a role of the application is refused at /authorize
+    /// (access_denied), at the code exchange (invalid_grant: the role went away after /authorize) and at refresh
+    /// (RequireRole turned on for an existing session), and allowed again once a role is assigned. The application role
+    /// appears only in that application's token, never in another application's token or the browser session.
+    /// </summary>
+    [Fact]
+    public async Task RequireRole_refuses_authorize_exchange_and_refresh_without_an_app_role_and_allows_them_with_one()
+    {
+        Spa spa = await RegisterSpaAsync();
+        Spa other = await RegisterSpaAsync();
+        (Guid userId, Browser browser) = await SignedInAsync();
+        Guid member = await InScopeAsync<Auth.Services.Authorization.IRoleAssignmentService, Guid>(async roles =>
+            (await roles.CreateApplicationRoleAsync(spa.Id, new ApplicationRoleRequest("Member", null), AuditContext.None, CancellationToken.None)).Role!.Id);
+
+        // RequireRole off (the default): any signed-in user gets a session.
+        OAuthTokenResponse before = await SessionAsync(browser, spa);
+
+        // On: the existing session ends at its next refresh, and /authorize refuses with the generic answer.
+        await SetRequireRoleAsync(spa, true);
+        HttpResponseMessage refreshRefused = await TokenAsync(spa.Origin, Form(("grant_type", "refresh_token"), ("refresh_token", before.RefreshToken), ("client_id", spa.ClientId)));
+        HttpResponseMessage authorizeRefused = await browser.GetAsync(AuthorizeUrl(spa, Pkce.Create()));
+
+        Assert.Equal("invalid_grant", await ErrorAsync(refreshRefused));
+        Assert.Equal(HttpStatusCode.Redirect, authorizeRefused.StatusCode);
+        Assert.Equal("access_denied", Query(authorizeRefused.Headers.Location!)["error"]);
+        Assert.False(Query(authorizeRefused.Headers.Location!).ContainsKey("code"));
+
+        // A code issued while the user held the role is refused at the exchange once the role is gone.
+        await AssignAsync(userId, member);
+        Pkce pkce = Pkce.Create();
+        string code = await CodeAsync(browser, spa, pkce);
+        await QueryAsync(context => context.UserRole.Where(ur => ur.UserId == userId && ur.RoleId == member).ExecuteDeleteAsync());
+        HttpResponseMessage exchangeRefused = await TokenAsync(spa.Origin, Form(("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", pkce.Verifier)));
+        Assert.Equal("invalid_grant", await ErrorAsync(exchangeRefused));
+
+        // With the role: authorize, exchange and refresh all work, and the role is in this application's token only.
+        await AssignAsync(userId, member);
+        OAuthTokenResponse granted = await SessionAsync(browser, spa);
+        HttpResponseMessage refreshed = await TokenAsync(spa.Origin, Form(("grant_type", "refresh_token"), ("refresh_token", granted.RefreshToken), ("client_id", spa.ClientId)));
+        OAuthTokenResponse elsewhere = await SessionAsync(browser, other);
+        string appRole = AuthRoles.ApplicationRole(spa.ClientId, "Member");
+
+        Assert.Equal(HttpStatusCode.OK, refreshed.StatusCode);
+        Assert.Contains(new JsonWebToken(granted.AccessToken).Claims, c => c.Type == AuthClaimTypes.Role && c.Value == appRole);
+        Assert.DoesNotContain(new JsonWebToken(elsewhere.AccessToken).Claims, c => c.Type == AuthClaimTypes.Role && c.Value.StartsWith(AuthRoles.ApplicationPrefix, StringComparison.Ordinal));
+        JsonNode me = JsonNode.Parse(await (await browser.GetAsync("/api/v1/auth/me")).Content.ReadAsStringAsync())!;
+        Assert.DoesNotContain(me["roles"]!.AsArray(), r => r!.GetValue<string>().StartsWith(AuthRoles.ApplicationPrefix, StringComparison.Ordinal));
+
+        // Audited with the reason only: authorize and exchange as AuthorizationCodeRejected, refresh as RefreshRejected.
+        List<AuditLog> rows = await QueryAsync(c => c.AuditLog.AsNoTracking().Where(a => a.UserId == userId && a.Detail!.Contains("no_app_role")).ToListAsync());
+        Assert.Equal(2, rows.Count(r => r.EventType == nameof(AuditEventType.AuthorizationCodeRejected)));
+        Assert.Single(rows, r => r.EventType == nameof(AuditEventType.RefreshRejected));
+    }
+
+    private async Task<OAuthTokenResponse> SessionAsync(Browser browser, Spa spa)
+    {
+        Pkce pkce = Pkce.Create();
+        string code = await CodeAsync(browser, spa, pkce);
+        HttpResponseMessage exchange = await TokenAsync(spa.Origin, Form(("grant_type", "authorization_code"), ("code", code), ("redirect_uri", spa.RedirectUri), ("client_id", spa.ClientId), ("code_verifier", pkce.Verifier)));
+        Assert.Equal(HttpStatusCode.OK, exchange.StatusCode);
+        return (await exchange.Content.ReadFromJsonAsync<OAuthTokenResponse>())!;
+    }
+
+    private Task<ClientApplicationResult> SetRequireRoleAsync(Spa spa, bool requireRole) => InScopeAsync<IClientApplicationRegistry, ClientApplicationResult>(registry => registry.UpdateAsync(
+        spa.Id,
+        new ClientApplicationRequest(spa.ClientId, "Spa " + spa.ClientId, spa.Audience, [spa.Origin], [spa.RedirectUri, spa.SecondRedirectUri], [], requireRole),
+        AuditContext.None,
+        CancellationToken.None));
+
+    private Task<Auth.Services.Authorization.RoleChangeOutcome> AssignAsync(Guid userId, Guid roleId) => InScopeAsync<Auth.Services.Authorization.IRoleAssignmentService, Auth.Services.Authorization.RoleChangeOutcome>(roles =>
+        roles.AssignUserRoleAsync(userId, roleId, AuditContext.None, CancellationToken.None));
+
+    private async Task<T> InScopeAsync<TService, T>(Func<TService, Task<T>> action)
+        where TService : notnull
+    {
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        return await action(scope.ServiceProvider.GetRequiredService<TService>());
+    }
+
     private WebApplicationFactory<Program> WithSettings(Dictionary<string, string?> settings) => api.Factory.WithWebHostBuilder(builder =>
     {
         foreach (KeyValuePair<string, string?> setting in settings)

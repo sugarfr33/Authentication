@@ -8,7 +8,9 @@ internal sealed class RoleConfiguration : IEntityTypeConfiguration<Role>
 {
     public void Configure(EntityTypeBuilder<Role> builder)
     {
-        builder.ToTable(nameof(Role), AuthDbContext.Schema);
+        // T30: a global role may never look like an application role claim (app:{clientId}:{name}).
+        builder.ToTable(nameof(Role), AuthDbContext.Schema, t =>
+            t.HasCheckConstraint("CK_Role_GlobalName_NotApplicationPrefix", GlobalNameNotApplicationPrefix));
 
         builder.HasKey(r => r.Id).HasName("PK_Role");
 
@@ -29,4 +31,8 @@ internal sealed class RoleConfiguration : IEntityTypeConfiguration<Role>
             .HasDatabaseName("UQ_Role_ClientApplicationId_NormalizedName");
         builder.HasIndex(r => r.ClientApplicationId).HasDatabaseName("IX_Role_ClientApplicationId");
     }
+
+    /// <summary>The CHECK expression (also used by the T30 migration's guard): app-scoped, or a name not starting with app:.</summary>
+    internal const string GlobalNameNotApplicationPrefix =
+        "[ClientApplicationId] IS NOT NULL OR (UPPER(LTRIM([Name])) NOT LIKE N'APP:%' AND UPPER(LTRIM([NormalizedName])) NOT LIKE N'APP:%')";
 }

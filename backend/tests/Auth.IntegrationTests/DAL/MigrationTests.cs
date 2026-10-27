@@ -16,7 +16,7 @@ namespace Auth.IntegrationTests.DAL;
 [Collection(SqlServerTestGroup.Name)]
 public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncLifetime
 {
-    private static readonly string[] AllMigrations = ["20261024081023_InitialCreate", "20261024120957_EmailVerificationPendingRegistration", "20261025040727_RetentionAndAudienceIndexes", "20261025043218_AuthorizationCodes", "20261026095636_ClientApplicationListNames"];
+    private static readonly string[] AllMigrations = ["20261024081023_InitialCreate", "20261024120957_EmailVerificationPendingRegistration", "20261025040727_RetentionAndAudienceIndexes", "20261025043218_AuthorizationCodes", "20261026095636_ClientApplicationListNames", "20261027021901_ApplicationRolesRequireRole"];
 
     private static readonly string[] Tables =
     [
@@ -151,6 +151,51 @@ public partial class MigrationTests(SqlServerDatabaseFixture database) : IAsyncL
         Assert.Single(await QueryAsync("SELECT c.name FROM sys.columns c WHERE c.object_id = OBJECT_ID(N'auth.ClientApplication') AND c.name = N'AllowedOrigin'"));
 
         await context.Database.ExecuteSqlAsync($"UPDATE [auth].[ClientApplication] SET [AllowedOrigin] = N'[\"https://odd.example.test\"]' WHERE [ClientId] = N'odd-app'");
+        await migrator.MigrateAsync();
+
+        Assert.Empty(await context.Database.GetPendingMigrationsAsync());
+    }
+
+    /// <summary>T30: existing applications get RequireRole = 0, and global role names are checked by the new CHECK.</summary>
+    [Fact]
+    public async Task The_require_role_migration_keeps_applications_open_and_refuses_global_app_names_afterwards()
+    {
+        await using AuthDbContext context = await FreshContextAsync(createEmptyDatabase: false);
+        IMigrator migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261026095636_ClientApplicationListNames");
+        DateTime now = DateTime.UtcNow;
+        await context.Database.ExecuteSqlAsync($"""
+            INSERT INTO [auth].[ClientApplication] ([Id], [ClientId], [Name], [Audience], [AllowedOrigins], [RedirectUris], [PostLogoutRedirectUris], [IsActive], [CreatedUtc], [UpdatedUtc])
+            VALUES ({Guid.NewGuid()}, N'kept-app', N'Kept', N'api://kept', N'[]', N'[]', N'[]', 1, {now}, {now})
+            """);
+
+        await migrator.MigrateAsync();
+
+        Assert.Equal(["0"], await QueryAsync("SELECT CONVERT(nvarchar(1), [RequireRole]) FROM [auth].[ClientApplication] WHERE [ClientId] = N'kept-app'"));
+        await Assert.ThrowsAsync<SqlException>(() => context.Database.ExecuteSqlAsync($"""
+            INSERT INTO [auth].[Role] ([Id], [ClientApplicationId], [Name], [NormalizedName], [IsSystem])
+            VALUES ({Guid.NewGuid()}, NULL, N' App:Editor', N' APP:EDITOR', 0)
+            """));
+    }
+
+    /// <summary>T30: a global role already named app:... stops the migration with a clear error, before any change.</summary>
+    [Fact]
+    public async Task The_require_role_migration_stops_on_a_global_app_role_and_applies_once_it_is_renamed()
+    {
+        await using AuthDbContext context = await FreshContextAsync(createEmptyDatabase: false);
+        IMigrator migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261026095636_ClientApplicationListNames");
+        Guid roleId = Guid.NewGuid();
+        await context.Database.ExecuteSqlAsync($"""
+            INSERT INTO [auth].[Role] ([Id], [ClientApplicationId], [Name], [NormalizedName], [IsSystem])
+            VALUES ({roleId}, NULL, N'app:legacy', N'APP:LEGACY', 0)
+            """);
+
+        SqlException refused = await Assert.ThrowsAsync<SqlException>(() => migrator.MigrateAsync());
+        Assert.Contains("A global role is named app:", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(await QueryAsync("SELECT c.name FROM sys.columns c WHERE c.object_id = OBJECT_ID(N'auth.ClientApplication') AND c.name = N'RequireRole'"));
+
+        await context.Database.ExecuteSqlAsync($"UPDATE [auth].[Role] SET [Name] = N'legacy', [NormalizedName] = N'LEGACY' WHERE [Id] = {roleId}");
         await migrator.MigrateAsync();
 
         Assert.Empty(await context.Database.GetPendingMigrationsAsync());

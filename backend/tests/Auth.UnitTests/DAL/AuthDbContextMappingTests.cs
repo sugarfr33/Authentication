@@ -44,7 +44,7 @@ public class AuthDbContextMappingTests
         [
             "Id uniqueidentifier", "ClientId nvarchar(100)", "Name nvarchar(128)", "Audience nvarchar(256)",
             "AllowedOrigins nvarchar(max)", "RedirectUris nvarchar(max)", "PostLogoutRedirectUris nvarchar(max)",
-            "IsActive bit", "CreatedUtc datetime2(7)", "UpdatedUtc datetime2(7)",
+            "RequireRole bit", "IsActive bit", "CreatedUtc datetime2(7)", "UpdatedUtc datetime2(7)",
         ],
         ["RefreshToken"] =
         [
@@ -191,7 +191,10 @@ public class AuthDbContextMappingTests
     private static readonly Dictionary<string, string[]> ExpectedCheckConstraints = new()
     {
         ["User"] = [],
-        ["Role"] = [],
+        ["Role"] =
+        [
+            "CK_Role_GlobalName_NotApplicationPrefix: [ClientApplicationId] IS NOT NULL OR (UPPER(LTRIM([Name])) NOT LIKE N'APP:%' AND UPPER(LTRIM([NormalizedName])) NOT LIKE N'APP:%')",
+        ],
         ["UserRole"] = [],
         ["Permission"] = [],
         ["RolePermission"] = [],
@@ -225,6 +228,7 @@ public class AuthDbContextMappingTests
 
     private static readonly string[] ExpectedDefaults =
     [
+        "DF_ClientApplication_RequireRole False",
         "DF_User_CreatedUtc sysutcdatetime()",
     ];
 

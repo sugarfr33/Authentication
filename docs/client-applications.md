@@ -11,11 +11,37 @@
 | `Audience` | one per application, unique (`UQ_ClientApplication_Audience`, T18 fix) |
 | `AllowedOrigins`, `RedirectUris`, `PostLogoutRedirectUris` | JSON arrays (`CK_ClientApplication_*_IsJsonArray`: valid JSON starting with `[`) |
 | `IsActive` | active flag |
+| `RequireRole` | T30, bit, default 0 (`DF_ClientApplication_RequireRole`): only holders of one of the application's own roles may sign in to it |
 
 There is **no client secret** column: applications are public clients (SPAs, PKCE). Confidential clients with hashed
 secrets would need a schema change; ask first.
 
 PKCE is always required: every client is public, so there is no per-application switch.
+
+**Migration `ApplicationRolesRequireRole` (T30, approved by the human).**
+
+- It adds `RequireRole` bit NOT NULL with default 0: existing applications keep today's behaviour (tested on a
+  database with an application).
+- It adds `CK_Role_GlobalName_NotApplicationPrefix` on `auth.Role`: a global role may not be named `app:...`.
+  If such a row exists, it stops with error 50030 before changing anything. Rename the role, then apply it again (tested).
+- Down drops both.
+
+**RequireRole (T30).** Set it with the application: `requireRole` in `POST` and `PUT /api/v1/admin/apps`
+(`ClientApplicationRequest`). **Omitted, it is false on create and kept unchanged on update** (T30 fix: never
+fail-open); send `false` to turn it off. It is
+returned in `ClientApplicationResponse` and audited in `AppCreated` and `AppUpdated` (`requireRole`). When it is on,
+a user who holds none of the application's roles (global roles, Admin included, do not count) is refused:
+
+| Where | Answer | Audit |
+|---|---|---|
+| `GET /oauth/authorize` | redirect with `error=access_denied`, the same answer as an inactive account | `AuthorizationCodeRejected {app, reason:"no_app_role"}` |
+| code exchange (`POST /oauth/token`) | `invalid_grant`, the same body as a bad code; the role is read from the database, so a role removed after `/authorize` counts | same |
+| refresh (`POST /oauth/token`) | `invalid_grant`; the family is revoked | `RefreshRejected {reason:"no_app_role", app}` |
+
+Timing: **only `/authorize` uses the cached application view**, so turning RequireRole on reaches `/authorize` at once
+on the instance that made the change and within 30 s on the others. The code exchange and refresh read the row, so
+they apply it immediately everywhere. Existing sessions are not ended at once: they end at their next refresh, within
+15 minutes ([threat-model.md](threat-model.md) R29).
 
 **Migration `ClientApplicationListNames` (T29, approved by the human).**
 
