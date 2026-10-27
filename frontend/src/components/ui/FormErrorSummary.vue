@@ -2,7 +2,7 @@
 // Error summary for a form with several invalid fields (T31, WCAG 3.3.1 / 2.4.3). It is not a live region: the
 // field errors are announced where they are, and useAuthForm moves focus here, so the summary is read once. Each
 // entry is a link that moves focus to its field (found by its name attribute inside the same form).
-import { computed, ref } from 'vue';
+import { computed, ref, useId } from 'vue';
 import { messages } from '@/i18n/messages';
 import BaseIcon from './BaseIcon.vue';
 
@@ -14,7 +14,8 @@ const props = defineProps<{
 }>();
 
 const root = ref<HTMLElement | null>(null);
-const titleId = `error-summary-${Math.random().toString(36).slice(2, 10)}`;
+// useId: stable across server and client renders and unique per instance (no Math.random).
+const titleId = `error-summary-${useId()}`;
 
 const entries = computed(() =>
   Object.entries(props.labels)
@@ -35,7 +36,8 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="root" class="error-summary" tabindex="-1" :aria-labelledby="titleId">
+  <!-- role=group so aria-labelledby is allowed and the title names the summary when focus lands on it. -->
+  <div ref="root" class="error-summary" role="group" tabindex="-1" :aria-labelledby="titleId">
     <BaseIcon class="error-summary__icon" name="danger" />
     <div>
       <p :id="titleId" class="error-summary__title">{{ messages.validation.formHasErrors }}</p>

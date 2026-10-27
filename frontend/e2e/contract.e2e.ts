@@ -1,5 +1,9 @@
 // T31 (UX review M3): the stub answers with the API's real shapes and wording. Reads the backend C# source (no build,
 // no browser) so a renamed field, a changed status title or a new profile property fails here, not silently in the UI.
+// Limits (T31-FIX): this is text matching, not a C# parser. recordProperties is a regex over positional records and
+// the titles are exact substrings, so a harmless reformat (a title moved to a constant, a record split over a body,
+// a generic record type, a nested parenthesis in a default value) fails it too: update the test then, it is not a
+// product bug. It also assumes the frontend and backend folders sit side by side in one checkout.
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

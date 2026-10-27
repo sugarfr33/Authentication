@@ -70,7 +70,9 @@ describe('sign-in page', () => {
     expect(summary.textContent).toContain(messages.validation.formHasErrors);
     expect(summary.textContent).toContain(messages.validation.emailRequired);
     expect(summary.textContent).toContain(messages.validation.passwordRequired);
-    expect(summary.getAttribute('role')).toBeNull();
+    // A named group (not a live region): the title labels it when focus lands there.
+    expect(summary.getAttribute('role')).toBe('group');
+    expect(document.getElementById(summary.getAttribute('aria-labelledby') ?? '')?.textContent).toBe(messages.validation.formHasErrors);
     (summary.querySelectorAll('a')[1] as HTMLAnchorElement).click();
     expect(document.activeElement).toBe(input(app.root, messages.fields.password));
     const describedBy = email.getAttribute('aria-describedby') ?? '';

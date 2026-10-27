@@ -36,6 +36,11 @@ for (const p of pages) {
           await expect(page.getByRole('heading', { level: 1, name: p.heading })).toBeVisible();
           // WCAG 2.4.2: every route names itself in the tab title (the title is the page heading).
           await expect(page).toHaveTitle(`${p.heading} · Central Auth`);
+          // UX review m5 (T31-FIX): no empty role=alert on the page; some screen readers announce one on load.
+          const emptyAlerts = await page.evaluate(
+            () => [...document.querySelectorAll('[role="alert"]')].filter((el) => (el.textContent ?? '').trim() === '').length,
+          );
+          expect(emptyAlerts, 'empty role=alert regions').toBe(0);
 
           const overflow = await horizontalOverflow(page);
           const scan = `${p.name}-${theme}-${width}`;

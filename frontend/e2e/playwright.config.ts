@@ -18,6 +18,9 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: true,
   retries: 0,
+  // One worker by default (T31-FIX): two Chromiums plus Vite on a busy machine hit ERR_INSUFFICIENT_RESOURCES.
+  // Retries stay 0 so a flake shows. E2E_WORKERS=2 runs faster on a quiet machine.
+  workers: Number(process.env.E2E_WORKERS ?? '1'),
   reporter: [['list']],
   globalSetup: './global-setup.ts',
   globalTeardown: './global-teardown.ts',

@@ -50,8 +50,26 @@ export interface AxeSummary {
   readonly passes: number;
 }
 
+/**
+ * Waits until the page is still (T31-FIX): <main> is visible, web fonts are loaded, no CSS animation or transition is
+ * running, and two frames have painted. Under load a lazily loaded route (the gallery) could otherwise be scanned
+ * half-rendered or mid-transition, where colours are between two states.
+ */
+export async function settle(page: Page): Promise<void> {
+  await page.locator('main').first().waitFor({ state: 'visible' });
+  await page.waitForLoadState('load');
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    // Finite ones only: a spinner turns forever by design.
+    const finite = document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity);
+    await Promise.all(finite.map((a) => a.finished.catch(() => undefined)));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
+}
+
 /** Runs axe on the current page, saves the result as evidence and returns it. */
 export async function scanAxe(page: Page, scan: string): Promise<AxeSummary> {
+  await settle(page);
   const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
   const summary: AxeSummary = {
     scan,
