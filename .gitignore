@@ -480,3 +480,20 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Secrets and local data (never commit)
+.env.local
+.env.production
+*.pem
+*.key
+*.pfx
+*.p12
+keys/
+centralauth-keys/
+secrets.json
+appsettings.Production.json
+appsettings.Staging.json
+*.bak
+*.mdf
+*.ldf
+*.log
