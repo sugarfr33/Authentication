@@ -156,6 +156,8 @@ becomes part of an environment variable name.
 - **A hyphen breaks `export` in bash.** `export Secrets__signing-key-1=...` fails with "not a valid identifier", so
   the key is "not found". This happened in the T26 verification.
 - A colon is refused outright (it is the configuration separator).
+- The SMTP password's secret is `SmtpPassword` (`Smtp:PasswordSecret`): letters only, so `Secrets__SmtpPassword`
+  works in bash too ([registration-and-email-verification.md](registration-and-email-verification.md)).
 - **Names fixed by the code still contain a hyphen:** the MFA keys `MfaEncryptionKey-<id>` ([mfa-totp.md](mfa-totp.md)).
   Supply those through a source that allows the hyphen:
   - User Secrets or JSON: `dotnet user-secrets set "Secrets:MfaEncryptionKey-k1" "<base64>"`;

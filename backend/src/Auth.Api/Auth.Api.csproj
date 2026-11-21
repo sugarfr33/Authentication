@@ -10,6 +10,7 @@
   -->
   <ItemGroup>
     <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="MailKit" />
   </ItemGroup>
 
   <ItemGroup>

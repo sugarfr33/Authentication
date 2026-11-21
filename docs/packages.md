@@ -12,6 +12,7 @@ Add new packages only through the task that needs them, and add a line here when
 | Konscious.Security.Cryptography.Argon2 | 1.3.1 | Auth.Services | Argon2id password hashing (plan A9: m=64 MiB, t=3, p=1), managed code, MIT. Pulls Konscious.Security.Cryptography.Blake2 1.1.1 (same author, MIT). Output checked against the RFC 9106 Argon2id test vector in the unit tests. |
 | Microsoft.Extensions.Configuration.Abstractions | 10.0.13 | Auth.Services | `IConfiguration` for `AddAuthServices` to read the connection string and options. |
 | Microsoft.IdentityModel.JsonWebTokens | 8.23.0 | Auth.Services, Auth.Client | Access-token creation and validation (T07, approved): JsonWebTokenHandler with ES256/RS256, pinned algorithms, kid-based key resolution. Brings Microsoft.IdentityModel.Tokens/Logging/Abstractions 8.23.0. ShowPII stays off. |
+| MailKit | 4.18.2 | Auth.Api | SMTP account emails (`SmtpEmailSender`): STARTTLS or TLS on connect, real cancellation and timeouts, proper header encoding. Microsoft's docs advise against `System.Net.Mail.SmtpClient` for new code, and it cannot do port 465. Brings MimeKit 4.18.2 and BouncyCastle.Cryptography 2.7.0 (MIT). `dotnet list package --vulnerable`: none at 4.18.2. |
 | Serilog.AspNetCore | 10.0.0 | Auth.Api | Structured logging with the RedactionEnricher (T09, on the allowed list). Brings Serilog 4.3, Settings.Configuration, Sinks.Console/Debug/File, Formatting.Compact. |
 
 ## Design time

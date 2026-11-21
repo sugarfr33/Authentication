@@ -75,16 +75,8 @@ builder.Services.AddSingleton(builder.Configuration.GetSection(AccountEmailOptio
 builder.Services.AddSingleton<Auth.Services.Audit.IAuditFailureReporter, AuditFailureLog>();
 builder.Services.AddAuthServices(builder.Configuration);
 
-// Account emails (T12): a local pickup folder in Development; elsewhere a real provider must replace the refusing sender.
-if (builder.Environment.IsDevelopment())
-{
-    builder.Services.AddSingleton(builder.Configuration.GetSection(DevelopmentEmailOptions.SectionName).Get<DevelopmentEmailOptions>() ?? new DevelopmentEmailOptions());
-    builder.Services.AddSingleton<IEmailSender, PickupDirectoryEmailSender>();
-}
-else
-{
-    builder.Services.AddSingleton<IEmailSender, UnconfiguredEmailSender>();
-}
+// Account emails (T12): a local pickup folder in Development; elsewhere SMTP when Smtp:Host is set, else the refusing sender.
+builder.Services.AddAccountEmailSender(builder.Configuration, builder.Environment);
 
 builder.Services.AddSingleton<IEndpointModule, AccountEndpoints>();
 builder.Services.AddSingleton<IEndpointModule, SessionEndpoints>();

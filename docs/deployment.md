@@ -19,7 +19,7 @@ listed in `backend/src/Auth.Api/appsettings.Example.json`. Header and host basic
 | 7 | SPA URLs | `AccountEmail:VerifyEmailUrl`, `AccountEmail:ResetPasswordUrl` and `OAuth:LoginUrl` (`<spa>/login`), all https. |
 | 8 | SPA client app | `ClientApplications:Bootstrap` with the SPA's https origin in `AllowedOrigins`. |
 | 9 | SPA headers | The host that serves the SPA must send a CSP (below), and serve `index.html` for unknown paths. |
-| 10 | Email | Register a real `IEmailSender` (a code change). Outside Development the shipped sender refuses to send (`UnconfiguredEmailSender`), so registration and password reset fail until then. |
+| 10 | Email | Set `Smtp:Host`, `Port`, `UseStartTls`, `UserName` and `FromAddress`, and the secret `SmtpPassword` (`Secrets__SmtpPassword` or `SecretFiles__SmtpPassword`), [registration-and-email-verification.md](registration-and-email-verification.md). Without `Smtp:Host` the refusing sender stays (`UnconfiguredEmailSender`), so registration and password reset fail. |
 | 11 | First admin | `Authorization:BootstrapAdminEmail` once, restart, then remove it ([authorization.md](authorization.md)). |
 | 12 | MFA | `Mfa:Enabled`, with the secrets `MfaEncryptionKey-<id>` and `MfaRecoveryPepper` in the secret store ([mfa-totp.md](mfa-totp.md)). The fixed names contain a hyphen; see [setup.md](setup.md), "Naming rule for secrets". |
 | 13 | Cookie mode | `AuthCookies:Domain` empty (host-only), or the shared parent domain ([connect-a-project.md](connect-a-project.md)). |

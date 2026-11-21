@@ -68,9 +68,30 @@ too (tested by counting, not by timing):
 - **Development:** `PickupDirectoryEmailSender` writes each message as a `.eml` file to
   `DevelopmentEmail:PickupDirectory` (default `%TEMP%/centralauth-mail`). The log line names only the subject and the
   file: never the recipient, the body or the token.
-- **Other environments:** until a real provider is registered, `UnconfiguredEmailSender` logs an error and refuses
-  (the request fails with 500). New and duplicate sign-ups both send exactly one email, so this fails them alike and
-  reveals nothing. **Deployment requirement:** register a real `IEmailSender` before going live.
+- **Other environments, `Smtp:Host` set:** `SmtpEmailSender` (Auth.Api, MailKit) sends a plain-text UTF-8 message.
+  - **Settings** (section `Smtp`, validated at startup; a bad value stops the host and the message names the setting
+    only): `Host`, `Port` (587), `UseStartTls` (true = STARTTLS on 587, false = TLS on connect for 465; there is no
+    plaintext mode, and 587/465 with the other mode is refused), `UserName` (1 to 254 characters, no spaces: usually
+    the sender's address, or a fixed word such as SendGrid's `apikey`), `FromAddress` (exactly one bare address), `FromName` ("Central Auth"), `PasswordSecret` ("SmtpPassword"), `Timeout` (30 s, 1 s to 5 min).
+  - **Password:** the secret `SmtpPassword` through the secret store (`Secrets:SmtpPassword` or
+    `SecretFiles:SmtpPassword`), read at each send, so a new password needs no restart. Never a setting in a JSON file.
+    It is trimmed (a secret file usually ends with a line break). Inner spaces are removed only when it has the Gmail
+    app-password shape (four groups of four letters); any other password is used as written. If it is missing, the
+    sender refuses before connecting.
+  - **Headers:** recipient, subject and sender are refused when they hold a line break, and each address must be
+    exactly one bare mailbox (no display name, list or group). The message has one To and no Cc, Bcc or extra headers.
+  - **One connection per message:** connect with TLS, authenticate, send, disconnect. The server certificate is checked
+    as usual. `Timeout` bounds each network step; the whole send has a deadline of twice `Timeout` (60 s by default),
+    because it runs inside the sign-up or reset request. A deadline hit is the generic error.
+  - **Message-Id** is generated with the `FromAddress` domain, so recipients never see this machine's host name.
+  - **Not yet:** no circuit breaker. A revoked password makes every send try to sign in again, and a provider can lock
+    the sender account after many failures: watch event 5203.
+  - **Log:** event 5202 (sent: subject only), 5203 (failed: exception type and SMTP status code only), 5204 (refused
+    before sending), 5205 (no password). Never the recipient, the body (it holds the one-time link) or the password.
+    The server's reply text can name the recipient, so it is neither logged nor chained: the caller gets the same
+    generic error as from the refusing sender.
+- **Other environments, no `Smtp:Host`:** `UnconfiguredEmailSender` logs an error and refuses (the request fails
+  with 500). New and duplicate sign-ups both send exactly one email, so this fails them alike and reveals nothing.
 - Registration sends the email after the save. If sending fails, the account exists without a delivered link;
   registering again sends a fresh one.
 

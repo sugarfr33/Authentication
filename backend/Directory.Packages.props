@@ -10,6 +10,8 @@
     <PackageVersion Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.23.0" />
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.13" />
+    <!-- SMTP account emails (Auth.Api SmtpEmailSender): STARTTLS and TLS on connect; pulls MimeKit and BouncyCastle. -->
+    <PackageVersion Include="MailKit" Version="4.18.2" />
   </ItemGroup>
   <ItemGroup Label="Design time">
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.13" />
