@@ -44,6 +44,13 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/auth/ForgotPasswordView.vue'),
     meta: { title: messages.forgot.title, guestOnly: true },
   },
+  // RP-initiated logout (docs/single-logout-and-shared-domain.md): works signed in or not, so no guard meta.
+  {
+    path: '/logout',
+    name: 'logout',
+    component: () => import('@/views/auth/LogoutView.vue'),
+    meta: { title: messages.logout.title },
+  },
   // Reset and verify work signed in or not: the link itself is the credential.
   {
     path: '/reset-password',

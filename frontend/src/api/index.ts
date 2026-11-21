@@ -20,4 +20,4 @@ export function onSessionExpired(handler: (() => void) | null): void {
 
 export { ApiError, isApiError } from './errors';
 export type { AuthApi } from './auth';
-export type { ActiveSession, LoginResult, MfaEnrollment, RegisterInput, UserProfile } from './types';
+export type { ActiveSession, LoginResult, LogoutParams, LogoutTarget, MfaEnrollment, RegisterInput, UserProfile } from './types';

@@ -160,7 +160,10 @@ router.beforeEach(createCentralAuthGuard(auth));
   Refresh uses `grant_type=refresh_token`.
 - Tokens stay in memory. After a reload the guard starts `/authorize` again, which is a quick redirect while the
   Central Auth session lives.
-- Sign out with `/api/v1/oauth/logout` (RP-initiated), and a registered `postLogoutRedirectUris` entry.
+- Sign out: forget the tokens, then send the browser to the auth UI's `/logout?client_id=...&post_logout_redirect_uri=...&state=...`
+  with a registered `postLogoutRedirectUris` entry. The page confirms, ends the app's sessions (`/api/v1/oauth/logout`)
+  and the Central Auth browser session, then returns to that URI
+  ([single-logout-and-shared-domain.md](single-logout-and-shared-domain.md), "The auth UI sign-out page").
 - **Send a CSP** from the app's host. Tokens in memory are only as safe as the page's scripts
   ([deployment.md](deployment.md), recommended CSP).
 

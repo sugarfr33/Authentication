@@ -13,7 +13,7 @@ export type ReturnTarget = { readonly kind: 'app'; readonly path: string } | { r
 export const OAUTH_RESUME_PREFIX = `${OAUTH_AUTHORIZE_PATH}?`;
 const MAX_LENGTH = 4096;
 /** Pages that make no sense as a destination after signing in (and could loop). */
-const NOT_A_DESTINATION = ['/login', '/register', '/forgot-password', '/reset-password', '/verify-email'];
+const NOT_A_DESTINATION = ['/login', '/register', '/forgot-password', '/reset-password', '/verify-email', '/logout'];
 
 function currentOrigin(): string {
   return window.location.origin;
@@ -51,6 +51,24 @@ export function parseReturnTo(raw: unknown, appOrigin: string = currentOrigin(),
   if (url.pathname.startsWith('/api/')) return null;
   if (NOT_A_DESTINATION.some((page) => url.pathname === page || url.pathname.startsWith(`${page}/`))) return null;
   return { kind: 'app', path: `${url.pathname}${url.search}${url.hash}` };
+}
+
+/**
+ * Where /logout may send the browser: the server-built redirect_to (already matched character for character against
+ * the application's registered post-logout URIs). Checked again here as defence in depth: an absolute https URL
+ * without credentials (http only for loopback, for local development); anything else keeps the user on this site.
+ */
+export function safePostLogoutTarget(raw: string | null): string | null {
+  if (raw === null) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+  if (url.username || url.password) return null;
+  return url.protocol === 'https:' || (url.protocol === 'http:' && loopback) ? url.href : null;
 }
 
 /** Keeps a valid returnTo when moving between sign-in pages (login -> MFA). */

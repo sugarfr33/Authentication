@@ -100,7 +100,7 @@ JSON body).
 
 - **`GET`, anonymous:** validates and describes; it **never changes state and never redirects**.
   - Answer: `200 {"client_id": "...", "redirect_to": "...or null"}`.
-  - The auth UI shows a confirmation, then POSTs.
+  - The auth UI page `/logout` (T32, below) shows a confirmation, then POSTs.
 - **`POST`, JSON:**
   - needs the **browser session cookie** (`RequireAuthorization`), the Origin check and the antiforgery token, like
     every state-changing request;
@@ -130,6 +130,40 @@ JSON body).
   - There is no per-user limit: the POST needs a signed-in session and only ends that user's own sessions.
   - The registry refuses fragments in post-logout URIs, as it does for redirect URIs, so the `state` appended to a
     target never lands inside a fragment (validator tests).
+
+### The auth UI sign-out page: `/logout` (T32)
+
+An application signs its user out by forgetting its own tokens, then sending the browser (a full navigation) to
+`<auth UI>/logout?client_id=...&post_logout_redirect_uri=...&state=...`. Frontend only, no API change
+(`LogoutView.vue`, tests `tests/views/logout-page.spec.ts`).
+
+- **Checks first:** a missing `client_id` or a repeated parameter is "not valid" without a request. Otherwise
+  `GET /oauth/logout` validates the request; a 400 (unknown or inactive client) is "not valid" and offers no button.
+- **Never on page load:** nothing ends until the user presses "Sign out". A link alone, or a link scanner, cannot sign
+  anyone out (the POSTs also need the session cookie, the Origin check and the antiforgery token).
+- **Signed in, on confirm:**
+  1. `POST /oauth/logout` ends the user's sessions at that application. A 401 (the browser session already ended,
+     which already ended every application session) goes on to step 2. Any other failure stops here, changes nothing
+     else, and lets the user retry.
+  2. `POST /auth/logout` ends the Central Auth browser session (and, by the Browser-scope cascade, the user's other
+     application sessions). The next sign-in anywhere asks for the password. This is deliberate: the user asked to
+     sign out, and offering "only this app" would leave the silent `/authorize` bounce in place.
+  3. The browser goes to `redirect_to` from the POST answer.
+- **Not signed in:** "You are signed out", with a link to `redirect_to` and no POST.
+- **Where it goes:** only the server-built `redirect_to` (registered URI, ordinal match, state appended). The page
+  checks it again (`safePostLogoutTarget`: absolute `https`, or `http` on loopback for development, no user info) and
+  otherwise stays on this site with a link to sign in. `/logout` is never a `returnTo` after sign-in.
+- **"Stay signed in"** goes to the account page and changes nothing.
+- **Framing:** the page is a state-changing confirmation, so the deployed auth UI site must send
+  `frame-ancestors 'none'` (deployment.md, recommended CSP). The Vite dev server sends no CSP.
+- **Limits (Phyllis T32 LOW-1, accepted):**
+  - When the browser session has already ended (expired or signed out elsewhere), the page cannot POST (it needs the
+    session cookie), so it revokes nothing. A sign-out from Central Auth already cascaded to every application
+    session; after a plain expiry, an application refresh token copied earlier (for example by XSS) stays usable until
+    its own family ends: 14 days sliding, 30 days absolute (authorization-code-pkce.md, "Lifetimes"). The application
+    itself has already dropped its tokens. A later fix is an RFC 7009 revocation endpoint the application calls first.
+  - An application access token already issued stays valid until it expires (at most 15 minutes, see above): a stolen
+    copy works until then.
 
 ## 2. Cookie modes
 

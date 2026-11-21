@@ -2,7 +2,7 @@
 // API might add (now or by mistake) leaks into the app or the store.
 
 import type { HttpClient } from './http';
-import type { ActiveSession, LoginResult, MfaEnrollment, RegisterInput, UserProfile } from './types';
+import type { ActiveSession, LoginResult, LogoutParams, LogoutTarget, MfaEnrollment, RegisterInput, UserProfile } from './types';
 
 function fail(what: string): never {
   throw new Error(`Unexpected ${what} response from the API.`);
@@ -57,6 +57,21 @@ export function toSession(body: unknown): ActiveSession {
   };
 }
 
+export function toLogoutTarget(body: unknown): LogoutTarget {
+  const r = asRecord(body, 'logout');
+  const redirectTo = r['redirect_to'];
+  if (redirectTo !== null && typeof redirectTo !== 'string') fail('logout');
+  return { clientId: str(r, 'client_id', 'logout'), redirectTo };
+}
+
+/** The wire names of /oauth/logout (query for GET, JSON for POST); absent values are left out. */
+function logoutFields(params: LogoutParams): Record<string, string> {
+  const fields: Record<string, string> = { client_id: params.clientId };
+  if (params.postLogoutRedirectUri !== undefined) fields['post_logout_redirect_uri'] = params.postLogoutRedirectUri;
+  if (params.state !== undefined) fields['state'] = params.state;
+  return fields;
+}
+
 function isMfaRequired(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as Record<string, unknown>)['mfa_required'] === true;
 }
@@ -95,6 +110,17 @@ export function createAuthApi(http: HttpClient) {
 
     async logoutAll(): Promise<void> {
       await http.request<void>('/auth/logout-all', { method: 'POST' });
+    },
+
+    /** GET /oauth/logout: validates the application's request and says where to go afterwards. Changes nothing. */
+    async describeLogout(params: LogoutParams): Promise<LogoutTarget> {
+      const query = new URLSearchParams(logoutFields(params)).toString();
+      return toLogoutTarget(await http.request<unknown>(`/oauth/logout?${query}`, { auth: 'anonymous' }));
+    },
+
+    /** POST /oauth/logout: ends the signed-in user's sessions at that application (the browser session stays). */
+    async confirmLogout(params: LogoutParams): Promise<LogoutTarget> {
+      return toLogoutTarget(await http.request<unknown>('/oauth/logout', { method: 'POST', body: logoutFields(params) }));
     },
 
     async listSessions(): Promise<ActiveSession[]> {

@@ -22,6 +22,20 @@ export interface ActiveSession {
   readonly isCurrent: boolean;
 }
 
+/** RP-initiated logout (/oauth/logout): the application, and where to send the browser afterwards (null: stay here). */
+export interface LogoutTarget {
+  readonly clientId: string;
+  /** Built by the server from the application's registered post-logout URIs, with the state appended. */
+  readonly redirectTo: string | null;
+}
+
+/** The parameters of an RP-initiated logout, as the application sent them in the /logout link. */
+export interface LogoutParams {
+  readonly clientId: string;
+  readonly postLogoutRedirectUri?: string;
+  readonly state?: string;
+}
+
 export type LoginResult =
   | { readonly kind: 'signed-in'; readonly profile: UserProfile }
   | { readonly kind: 'mfa-required' };

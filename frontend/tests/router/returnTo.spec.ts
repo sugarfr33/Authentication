@@ -1,6 +1,6 @@
 // T24: the return URL after sign-in is a same-origin path only (no open redirect).
 import { describe, expect, it } from 'vitest';
-import { parseReturnTo, returnToQuery } from '@/router/returnTo';
+import { parseReturnTo, returnToQuery, safePostLogoutTarget } from '@/router/returnTo';
 
 const APP = 'https://login.example.com';
 const API = 'https://login.example.com';
@@ -69,5 +69,22 @@ describe('parseReturnTo', () => {
     expect(returnToQuery('/account/mfa')).toEqual({ returnTo: '/account/mfa' });
     expect(returnToQuery('//evil.example')).toEqual({});
     expect(returnToQuery(undefined)).toEqual({});
+  });
+});
+
+describe('safePostLogoutTarget (T32)', () => {
+  it.each(['https://192.168.0.109/signed-out?state=s', 'http://localhost:5175/signed-out', 'http://127.0.0.1:5175/x'])('allows %s', (raw) => {
+    expect(safePostLogoutTarget(raw)).toBe(new URL(raw).href);
+  });
+
+  it.each([null, 'javascript:alert(1)', 'data:text/html,x', 'http://evil.example/', 'https://u:p@evil.example/', '/signed-out', 'not a url'])(
+    'refuses %s',
+    (raw) => {
+      expect(safePostLogoutTarget(raw)).toBeNull();
+    },
+  );
+
+  it('is never a destination after sign-in', () => {
+    expect(parseReturnTo('/logout?client_id=x', APP, API)).toBeNull();
   });
 });
